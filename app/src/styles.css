@@ -2166,6 +2166,7 @@ textarea:focus-visible {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 9px;
 }
