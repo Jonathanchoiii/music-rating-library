@@ -12,12 +12,14 @@
     "build:desktop": "npm run build:desktop:web && electron-builder --mac dmg --arm64",
     "open:desktop": "open desktop-release/mac-arm64/RecordShelf.app",
     "enrich:covers": "node scripts/enrich-cover-art.mjs",
+    "enrich:covers:remote-only": "node scripts/enrich-cover-art.mjs --no-cache-local",
     "enrich:titles": "node scripts/enrich-canonical-titles.mjs",
     "enrich:titles:promote-editions": "node scripts/enrich-canonical-titles.mjs --promote-stored-platform-titles",
     "enrich:types": "node scripts/enrich-release-types.mjs",
     "enrich:dates": "node scripts/enrich-release-dates.mjs",
     "enrich:neodb-urls": "node scripts/enrich-neodb-canonical-urls.mjs",
     "import:neodb": "node scripts/import-neodb-csv.mjs",
+    "import:neodb:skip-covers": "node scripts/import-neodb-csv.mjs --skip-covers",
     "repair:neodb-identities": "node scripts/split-merged-neodb-identities.mjs",
     "preview": "vite preview",
     "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs",
@@ -49,10 +51,21 @@
     "files": [
       "electron/**/*",
       "shared-state/**/*",
+      "scripts/private-covers-http.mjs",
+      "scripts/enrich-cover-art.mjs",
       "src/lib/sharedStorageKeys.js",
       "dist/desktop-client/**/*",
       "worker/index.js",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".private/covers",
+        "to": "covers",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
       "category": "public.app-category.music",

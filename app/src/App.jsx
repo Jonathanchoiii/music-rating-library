@@ -37,6 +37,7 @@ import {
   reconcileCanonicalExternalLinkOverride,
   reconcileCanonicalTitleOverride,
   releaseMatchesPrimarySearch,
+  upsertConfirmedExternalLink,
 } from "./lib/music.js";
 import {
   ArtistGroups,
@@ -773,6 +774,38 @@ function LibraryApp() {
     );
   }
 
+  function updateReleasePlatformLink(releaseId, provider, url) {
+    const providerLabels = {
+      NEODB: "NeoDB",
+      APPLE_MUSIC: "Apple Music",
+      SPOTIFY: "Spotify",
+    };
+    const currentRelease = releases.find(
+      (release) => release.id === releaseId,
+    );
+    if (!currentRelease) return "未找到发行记录";
+    const result = upsertConfirmedExternalLink(
+      currentRelease,
+      url,
+      provider,
+    );
+    if (result.error) {
+      setToast(result.error);
+      return result.error;
+    }
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId ? result.release : release,
+      ),
+    );
+    setToast(
+      `已为《${currentRelease.title}》保存 ${
+        providerLabels[provider] ?? provider
+      } 链接`,
+    );
+    return true;
+  }
+
   function findMergeCandidate(releaseId, inputUrl) {
     return findReleaseByReferenceUrl(
       releases,
@@ -1370,6 +1403,7 @@ function LibraryApp() {
         onClose={() => navigate(`${activeBasePath}?view=${view}`)}
         onAddListening={(releaseId) => setListeningReleaseId(releaseId)}
         onChangeType={updateReleaseType}
+        onUpdatePlatformLink={updateReleasePlatformLink}
         onFindMergeCandidate={findMergeCandidate}
         onMergeRelease={mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}

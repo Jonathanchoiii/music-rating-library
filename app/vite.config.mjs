@@ -7,6 +7,10 @@ import {
   verifyReleaseTypes,
 } from "./worker/index.js";
 import { handleSharedStateRequest } from "./shared-state/index.mjs";
+import {
+  handleLocalCoverEnrichRequest,
+  handlePrivateCoverStatic,
+} from "./scripts/private-covers-http.mjs";
 
 const VIRTUAL_LIBRARY_ID = "virtual:recordshelf-library";
 const RESOLVED_VIRTUAL_LIBRARY_ID = `\0${VIRTUAL_LIBRARY_ID}`;
@@ -88,6 +92,8 @@ function neoDbCanonicalizeDevApi() {
     name: "recordshelf-read-only-metadata-api",
     configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
+        if (await handlePrivateCoverStatic(request, response)) return;
+        if (await handleLocalCoverEnrichRequest(request, response)) return;
         if (await handleSharedStateRequest(request, response)) return;
         next();
       });
