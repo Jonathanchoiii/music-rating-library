@@ -45,6 +45,7 @@ export function SettingsDialog({
   duplicateGroupCount,
   duplicateReleaseCount,
   onOpenDuplicateManager,
+  onOpenSync,
   onBack,
   onClose,
   onExport,
@@ -84,6 +85,7 @@ export function SettingsDialog({
             duplicateGroupCount={duplicateGroupCount}
             duplicateReleaseCount={duplicateReleaseCount}
             onOpenDuplicateManager={onOpenDuplicateManager}
+            onOpenSync={onOpenSync}
             onClose={onClose}
             onExport={onExport}
             backupText={backupText}
@@ -103,6 +105,7 @@ function SettingsHome({
   duplicateGroupCount,
   duplicateReleaseCount,
   onOpenDuplicateManager,
+  onOpenSync,
   onClose,
   onExport,
   backupText,
@@ -184,6 +187,22 @@ function SettingsHome({
 
       <div className="settings-section">
         <p className="settings-section-label">数据</p>
+        <button
+          type="button"
+          className="settings-entry"
+          onClick={onOpenSync}
+        >
+          <span className="settings-entry-icon">
+            <ArrowsClockwise weight="fill" aria-hidden="true" />
+          </span>
+          <span>
+            <strong>NeoDB 同步</strong>
+            <small>同步新增与变化、完整校对及待移除复核</small>
+          </span>
+          <span className="settings-entry-arrow" aria-hidden="true">
+            →
+          </span>
+        </button>
         <button type="button" className="settings-entry" onClick={onExport}>
           <span className="settings-entry-icon">
             <DownloadSimple aria-hidden="true" />

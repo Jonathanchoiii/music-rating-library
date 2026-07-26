@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
-  ArrowsClockwise,
   DownloadSimple,
   Funnel,
   GearSix,
@@ -107,7 +106,6 @@ const navItems = [
   { href: "/artists", label: "艺人", Icon: UsersThree },
   { href: "/admin/add", label: "添加", Icon: Plus },
   { href: "/?focus=search", label: "搜索", Icon: MagnifyingGlass },
-  { href: "/sync", label: "同步", Icon: ArrowsClockwise },
   { href: "/settings", label: "设置", Icon: GearSix },
 ];
 
@@ -923,10 +921,10 @@ function LibraryApp() {
     if (href === "/artists") {
       return isArtistRoute || detailReturnTarget === "artists";
     }
-    if (href === "/sync") return isSyncRoute;
     if (href === "/settings") {
       return (
         isSettingsRoute ||
+        isSyncRoute ||
         isDuplicateRoute ||
         detailReturnTarget === "duplicates"
       );
@@ -1345,7 +1343,7 @@ function LibraryApp() {
         <NeoDbSyncDialog
           releases={releases}
           identityReleases={seedReleases}
-          onClose={() => navigate(`/?view=${view}`)}
+          onClose={() => navigate(`/settings?view=${view}`)}
           onApply={setReleases}
           onReviewDuplicates={() =>
             navigate(`/settings/duplicates?view=${view}`)
@@ -1367,6 +1365,7 @@ function LibraryApp() {
           onOpenDuplicateManager={() =>
             navigate(`/settings/duplicates?view=${view}`)
           }
+          onOpenSync={() => navigate(`/sync?view=${view}`)}
           onBack={() => navigate(`/settings?view=${view}`)}
           onClose={() => navigate(`/?view=${view}`)}
           onExport={exportJson}

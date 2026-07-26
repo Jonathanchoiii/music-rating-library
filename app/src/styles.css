@@ -3876,7 +3876,7 @@ button.settings-entry:hover {
     background: rgba(250, 250, 248, 0.96);
     backdrop-filter: blur(18px);
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(5, 1fr);
   }
 
   .mobile-nav a {
