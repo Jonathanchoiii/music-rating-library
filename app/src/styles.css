@@ -4236,6 +4236,7 @@ button.settings-entry:hover {
     grid-template-columns: 112px 1fr;
     gap: 16px;
     align-items: center;
+    margin-bottom: 10px;
   }
 
   .detail-summary h2 {
