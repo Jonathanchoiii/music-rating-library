@@ -128,7 +128,7 @@ export function ReleaseMergePanel({
           <div>
             <span>数据整理</span>
             <h3 id="release-merge-title">发现这是另一条记录的重复内容？</h3>
-            <p>输入同平台的另一条唱片链接，对比后选择保留其中一条。</p>
+            <p>粘贴另一条发行详情或同平台唱片链接，再选择保留项。</p>
           </div>
           <button
             type="button"
@@ -145,7 +145,10 @@ export function ReleaseMergePanel({
             <div>
               <span>手动合并</span>
               <h3 id="release-merge-title">找到需要合并的另一条记录</h3>
-              <p>支持 NeoDB、Apple Music 和 Spotify 的唱片链接。</p>
+              <p>
+                支持 RecordShelf 发行详情、NeoDB、Apple Music 和 Spotify
+                唱片链接。
+              </p>
             </div>
             <button
               type="button"
@@ -158,7 +161,7 @@ export function ReleaseMergePanel({
           </header>
           <form onSubmit={findCandidate}>
             <label htmlFor={`merge-url-${release.id}`}>
-              另一条记录的同平台链接
+              另一条记录的链接
             </label>
             <div>
               <input
@@ -170,7 +173,7 @@ export function ReleaseMergePanel({
                   setLookupResult(null);
                   setKeepReleaseId("");
                 }}
-                placeholder="https://neodb.social/album/..."
+                placeholder="http://127.0.0.1:4173/releases/..."
                 required
               />
               <button

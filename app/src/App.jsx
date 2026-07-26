@@ -32,7 +32,7 @@ import {
   getReleaseContextMatches,
   getLatestListenedAt,
   getNextVisibleLimit,
-  findReleaseByPlatformUrl,
+  findReleaseByReferenceUrl,
   normalizeText,
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
@@ -762,14 +762,18 @@ function LibraryApp() {
   }
 
   function findMergeCandidate(releaseId, inputUrl) {
-    return findReleaseByPlatformUrl(releases, releaseId, inputUrl);
+    return findReleaseByReferenceUrl(
+      releases,
+      releaseId,
+      inputUrl,
+      window.location.origin,
+    );
   }
 
   function mergeReleaseSelection({
     currentReleaseId,
     candidateReleaseId,
     keepReleaseId,
-    provider,
   }) {
     const currentRelease = releases.find(
       (release) => release.id === currentReleaseId,
@@ -792,7 +796,6 @@ function LibraryApp() {
     const mergeResult = mergeSelectedReleases(
       keptRelease,
       removedRelease,
-      provider,
     );
     setReleases((library) =>
       library

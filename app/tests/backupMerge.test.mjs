@@ -60,7 +60,7 @@ test("manual detail merge preserves the chosen record and absorbs unique history
     url: "https://music.apple.com/cn/album/example/123",
   });
 
-  const result = mergeSelectedReleases(kept, removed, "NEODB");
+  const result = mergeSelectedReleases(kept, removed);
 
   assert.equal(result.keptReleaseId, "keep");
   assert.equal(result.removedReleaseId, "remove");
@@ -76,6 +76,12 @@ test("manual detail merge preserves the chosen record and absorbs unique history
       .filter((link) => link.provider === "NEODB")
       .map((link) => link.url),
     ["https://neodb.social/album/example"],
+  );
+  assert.deepEqual(
+    result.release.externalLinks
+      .filter((link) => link.provider === "SPOTIFY")
+      .map((link) => link.url),
+    ["https://open.spotify.com/album/keep"],
   );
   assert.equal(
     result.release.externalLinks.some(

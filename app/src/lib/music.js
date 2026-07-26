@@ -419,6 +419,29 @@ export function normalizeSupportedReleaseUrl(value = "") {
   }
 }
 
+export function getRecordShelfReleaseId(value = "", currentOrigin = "") {
+  const rawValue = String(value).trim();
+  if (!rawValue) return null;
+  try {
+    const isAbsolute = /^[a-z][a-z\d+.-]*:/i.test(rawValue);
+    const parsed = new URL(
+      rawValue,
+      currentOrigin || "http://recordshelf.local",
+    );
+    const isCurrentOrigin =
+      currentOrigin && parsed.origin === new URL(currentOrigin).origin;
+    const isLocalHost = ["127.0.0.1", "localhost", "[::1]"].includes(
+      parsed.hostname.toLocaleLowerCase(),
+    );
+    if (isAbsolute && !isCurrentOrigin && !isLocalHost) return null;
+    const match = parsed.pathname.match(/^\/releases\/([^/]+)\/?$/);
+    if (!match) return null;
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 export function getReleasePlatformUrls(release, provider) {
   const values = [
     ...(release?.externalLinks ?? [])
@@ -442,16 +465,47 @@ export function getReleasePlatformUrls(release, provider) {
   ];
 }
 
-export function findReleaseByPlatformUrl(
+export function findReleaseByReferenceUrl(
   releases,
   currentReleaseId,
   inputUrl,
+  currentOrigin = "",
 ) {
+  const internalReleaseId = getRecordShelfReleaseId(inputUrl, currentOrigin);
+  if (internalReleaseId) {
+    if (internalReleaseId === currentReleaseId) {
+      return {
+        status: "CURRENT_URL",
+        provider: "RECORDSHELF",
+        providerLabel: "RecordShelf",
+        message: "这个链接指向当前发行，请输入另一个条目的链接。",
+      };
+    }
+    const candidate = releases.find(
+      (release) => release.id === internalReleaseId,
+    );
+    if (!candidate) {
+      return {
+        status: "NOT_FOUND",
+        provider: "RECORDSHELF",
+        providerLabel: "RecordShelf",
+        message: "该 RecordShelf 链接对应的发行不在当前音乐库中。",
+      };
+    }
+    return {
+      status: "FOUND",
+      provider: "RECORDSHELF",
+      providerLabel: "RecordShelf",
+      normalizedUrl: `/releases/${encodeURIComponent(internalReleaseId)}`,
+      candidate,
+    };
+  }
   const platform = normalizeSupportedReleaseUrl(inputUrl);
   if (!platform) {
     return {
       status: "UNSUPPORTED_URL",
-      message: "请输入 NeoDB、Apple Music 或 Spotify 的唱片链接。",
+      message:
+        "请输入 RecordShelf 发行详情、NeoDB、Apple Music 或 Spotify 的唱片链接。",
     };
   }
   const currentRelease = releases.find(

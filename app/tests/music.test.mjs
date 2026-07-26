@@ -7,11 +7,12 @@ import {
   csvRowToRelease,
   detectHeaderMap,
   findExactNeoDbDuplicateGroups,
-  findReleaseByPlatformUrl,
+  findReleaseByReferenceUrl,
   getCurrentRating,
   getDatePrecision,
   getLatestMarkedAt,
   getNextVisibleLimit,
+  getRecordShelfReleaseId,
   getReleaseContextMatches,
   getReleaseKindLabel,
   groupReleasesByArtist,
@@ -64,6 +65,30 @@ test("supported release links normalize only exact album platforms", () => {
   );
 });
 
+test("RecordShelf detail links resolve an exact local release id", () => {
+  assert.equal(
+    getRecordShelfReleaseId(
+      "http://127.0.0.1:4173/releases/release-import-neodb-1uu7721?view=grid&from=library",
+      "http://127.0.0.1:4173",
+    ),
+    "release-import-neodb-1uu7721",
+  );
+  assert.equal(
+    getRecordShelfReleaseId(
+      "/releases/release-local-demo?view=list",
+      "https://records.example",
+    ),
+    "release-local-demo",
+  );
+  assert.equal(
+    getRecordShelfReleaseId(
+      "https://unrelated.example/releases/release-local-demo",
+      "http://127.0.0.1:4173",
+    ),
+    null,
+  );
+});
+
 test("detail merge lookup requires another record on the same exact platform", () => {
   const releases = [
     {
@@ -92,7 +117,7 @@ test("detail merge lookup requires another record on the same exact platform", (
     },
   ];
 
-  const found = findReleaseByPlatformUrl(
+  const found = findReleaseByReferenceUrl(
     releases,
     "current",
     "https://neodb.social/album/candidate?ref=share",
@@ -102,7 +127,7 @@ test("detail merge lookup requires another record on the same exact platform", (
   assert.equal(found.provider, "NEODB");
 
   assert.equal(
-    findReleaseByPlatformUrl(
+    findReleaseByReferenceUrl(
       releases,
       "current",
       "https://music.apple.com/cn/album/example/123",
@@ -110,10 +135,37 @@ test("detail merge lookup requires another record on the same exact platform", (
     "PLATFORM_MISMATCH",
   );
   assert.equal(
-    findReleaseByPlatformUrl(
+    findReleaseByReferenceUrl(
       releases,
       "current",
       "https://neodb.social/album/current",
+    ).status,
+    "CURRENT_URL",
+  );
+});
+
+test("detail merge lookup accepts another RecordShelf release URL", () => {
+  const releases = [
+    { id: "current", externalLinks: [], listeningEntries: [] },
+    { id: "candidate", externalLinks: [], listeningEntries: [] },
+  ];
+
+  const found = findReleaseByReferenceUrl(
+    releases,
+    "current",
+    "http://127.0.0.1:4173/releases/candidate?view=grid&from=library",
+    "http://127.0.0.1:4173",
+  );
+  assert.equal(found.status, "FOUND");
+  assert.equal(found.provider, "RECORDSHELF");
+  assert.equal(found.candidate.id, "candidate");
+
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "current",
+      "http://localhost:5173/releases/current?view=grid",
+      "http://127.0.0.1:4173",
     ).status,
     "CURRENT_URL",
   );

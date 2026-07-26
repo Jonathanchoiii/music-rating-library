@@ -141,15 +141,19 @@ function mergeRelease(primary, incoming) {
 export function mergeSelectedReleases(
   keptRelease,
   removedRelease,
-  matchedProvider,
 ) {
   if (!keptRelease || !removedRelease || keptRelease.id === removedRelease.id) {
     throw new Error("需要两个不同的发行才能合并");
   }
+  const keptLinkProviders = new Set(
+    (keptRelease.externalLinks ?? [])
+      .map((link) => link.provider)
+      .filter(Boolean),
+  );
   const incoming = {
     ...removedRelease,
     externalLinks: (removedRelease.externalLinks ?? []).filter(
-      (link) => link.provider !== matchedProvider,
+      (link) => !keptLinkProviders.has(link.provider),
     ),
   };
   const merged = mergeRelease(keptRelease, incoming);
