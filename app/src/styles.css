@@ -2041,14 +2041,16 @@ html.is-desktop-shell .desktop-sidebar {
 
 .detail-hero {
   display: grid;
-  grid-template-columns: minmax(210px, 38%) minmax(0, 1fr);
-  gap: 18px 24px;
+  grid-template-columns: minmax(220px, 34%) minmax(0, 1fr);
+  gap: 16px 24px;
   align-items: start;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 }
 
 .detail-hero > img,
 .detail-cover-placeholder {
+  grid-column: 1;
+  grid-row: 1;
   width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
@@ -2070,6 +2072,8 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .detail-summary {
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   align-self: end;
 }
@@ -2123,17 +2127,20 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .detail-facts {
-  grid-column: 2;
-  margin-top: 0;
-  display: grid;
-  gap: 8px;
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
   color: var(--muted-dark);
   font-size: 12px;
 }
 
 .detail-type-editor {
-  grid-column: 2;
-  margin-top: 0;
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
   display: grid;
   gap: 7px;
 }
@@ -4486,14 +4493,17 @@ button.settings-entry:hover {
     grid-template-columns: 148px minmax(0, 1fr);
     gap: 12px 14px;
     align-items: start;
+    margin-bottom: 10px;
   }
 
   .detail-hero > img,
   .detail-cover-placeholder {
+    grid-column: 1;
     grid-row: 1;
   }
 
   .detail-summary {
+    grid-column: 2;
     grid-row: 1;
     align-self: start;
   }
@@ -4527,6 +4537,7 @@ button.settings-entry:hover {
   .detail-type-editor {
     grid-column: 1 / -1;
     margin-top: 2px;
+    padding-top: 12px;
   }
 
   .timeline-header {
