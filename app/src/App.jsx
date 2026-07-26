@@ -48,6 +48,10 @@ import { AddReleaseDialog } from "./components/AddReleaseDialog.jsx";
 import { ImportDialog } from "./components/ImportDialog.jsx";
 import { NeoDbSyncDialog } from "./components/NeoDbSyncDialog.jsx";
 import {
+  NEODB_ACCESS_TOKEN_KEY,
+  NEODB_OAUTH_CLIENT_KEY,
+  NEODB_OAUTH_PENDING_KEY,
+  NEODB_SYNC_STATE_KEY,
   dedupeEquivalentListeningEntries,
   getReleaseMetadataFields,
 } from "./lib/neodbSync.js";
@@ -59,15 +63,21 @@ import {
   FilterDrawer,
 } from "./components/FilterDrawer.jsx";
 import {
+  ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
+  ARTIST_IDENTITY_STORAGE_KEY,
+  DEFAULT_ARTIST_IDENTITY_STATE,
   getReleaseArtistTargets,
   groupReleasesByArtistIdentity,
   loadArtistIdentityState,
   releaseMatchesMappedArtistQuery,
   saveArtistIdentityState,
+  sanitizeArtistIdentityState,
   sortArtistGroups,
 } from "./lib/artists.js";
 import {
   activeFilterCount,
+  EMPTY_LIBRARY_FILTERS,
+  LIBRARY_FILTER_STORAGE_KEY,
   loadLibraryFilters,
   releaseMatchesLibraryFilters,
   saveLibraryFilters,
@@ -911,6 +921,46 @@ function LibraryApp() {
     );
   }
 
+  function restoreFactorySettings() {
+    const acknowledged = window.confirm(
+      "恢复出厂设置会清除这个浏览器中的手动添加、编辑、删除、艺人映射、筛选条件和 NeoDB 同步状态，并恢复初始音乐库。\n\n是否继续？",
+    );
+    if (!acknowledged) return;
+    const finallyConfirmed = window.confirm(
+      "最后确认：恢复出厂设置后，本地修改无法撤销。建议先导出完整 JSON 备份。\n\n确定恢复出厂设置？",
+    );
+    if (!finallyConfirmed) return;
+
+    [
+      USER_STATE_KEY,
+      LEGACY_USER_STATE_KEY,
+      ...LEGACY_FULL_LIBRARY_KEYS,
+      ARTIST_IDENTITY_STORAGE_KEY,
+      ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
+      LIBRARY_FILTER_STORAGE_KEY,
+      NEODB_SYNC_STATE_KEY,
+      NEODB_OAUTH_CLIENT_KEY,
+    ].forEach((key) => window.localStorage.removeItem(key));
+    [NEODB_ACCESS_TOKEN_KEY, NEODB_OAUTH_PENDING_KEY].forEach((key) =>
+      window.sessionStorage.removeItem(key),
+    );
+
+    setReleases(seedReleases);
+    setArtistIdentityState(
+      sanitizeArtistIdentityState(DEFAULT_ARTIST_IDENTITY_STATE),
+    );
+    setReleaseTypeOverrides({});
+    setFilters(sanitizeLibraryFilters(EMPTY_LIBRARY_FILTERS));
+    setSearch("");
+    setSort("listened_desc");
+    setArtistSort("average_desc");
+    setView("grid");
+    setVisibleLimit(PAGE_SIZE);
+    setShowFilters(false);
+    setToast("已恢复出厂设置");
+    navigate("/?view=grid");
+  }
+
   const detailReturnTarget = new URLSearchParams(location.search).get("from");
   const activeBasePath = isDuplicateRoute || detailReturnTarget === "duplicates"
     ? "/settings/duplicates"
@@ -1371,13 +1421,7 @@ function LibraryApp() {
           onExport={exportJson}
           backupText={serializedLibraryExport()}
           onMergeBackup={mergeJsonBackup}
-          onRestore={() => {
-            if (window.confirm("恢复演示数据？当前本地修改会被覆盖。")) {
-              setReleases(seedReleases);
-              setToast("已恢复演示数据");
-              navigate("/");
-            }
-          }}
+          onRestore={restoreFactorySettings}
           onToast={setToast}
         />
       ) : null}

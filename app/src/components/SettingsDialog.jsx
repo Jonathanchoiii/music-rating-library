@@ -255,10 +255,14 @@ function SettingsHome({
         />
       </div>
 
-      <div className="settings-danger-zone">
-        <p>当前为本地 MVP，资料保存在这个浏览器中。</p>
-        <button type="button" className="danger-button" onClick={onRestore}>
-          恢复演示数据
+      <div className="settings-reset-zone">
+        <p>高级操作 · 清除这个浏览器中的本地修改与同步状态</p>
+        <button
+          type="button"
+          className="settings-reset-button"
+          onClick={onRestore}
+        >
+          恢复出厂设置
         </button>
       </div>
     </>

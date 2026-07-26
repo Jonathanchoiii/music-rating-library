@@ -2896,16 +2896,37 @@ button.settings-entry:hover {
   font-size: 10px;
 }
 
-.settings-danger-zone {
-  margin-top: 32px;
-  padding-top: 22px;
+.settings-reset-zone {
+  margin-top: 42px;
+  padding-top: 18px;
   border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.settings-danger-zone p {
-  margin: 0 0 12px;
+.settings-reset-zone p {
+  margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.settings-reset-button {
+  padding: 3px 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.settings-reset-button:hover {
+  color: var(--danger);
+  text-decoration-color: currentColor;
 }
 
 .settings-title-with-back {
@@ -4290,6 +4311,12 @@ button.settings-entry:hover {
 
   .release-merge-choice > .rating {
     display: none;
+  }
+
+  .settings-reset-zone {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .form-dialog,
