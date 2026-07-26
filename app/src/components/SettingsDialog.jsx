@@ -8,6 +8,7 @@ import {
   Database,
   DownloadSimple,
   IdentificationCard,
+  LinkSimple,
   Plus,
   SpinnerGap,
   Trash,
@@ -26,6 +27,7 @@ import {
   getArtistAliasIndex,
   getRawArtistCreditCounts,
   groupReleasesByArtistIdentity,
+  mergePossibleDuplicateArtists,
 } from "../lib/artists.js";
 import { normalizeText } from "../lib/music.js";
 
@@ -288,6 +290,12 @@ function ArtistManager({
   const [auditRunning, setAuditRunning] = useState(false);
   const [auditProgress, setAuditProgress] = useState({ done: 0, total: 0 });
   const [auditSummary, setAuditSummary] = useState("");
+  const [duplicateScanRunning, setDuplicateScanRunning] = useState(false);
+  const [duplicateScanCompleted, setDuplicateScanCompleted] = useState(false);
+  const [duplicateCandidates, setDuplicateCandidates] = useState([]);
+  const [duplicateSelections, setDuplicateSelections] = useState({});
+  const [showBroadDuplicateCandidates, setShowBroadDuplicateCandidates] =
+    useState(false);
   const scriptReconciledRef = useRef(false);
   const automaticAuditStartedRef = useRef(false);
 
@@ -346,6 +354,27 @@ function ArtistManager({
       ).length,
     };
   }, [identityState]);
+  const primaryDuplicateCandidates = useMemo(
+    () =>
+      duplicateCandidates.filter((candidate) =>
+        candidate.evidence.some(
+          (evidence) => evidence.type !== "SHARED_CHARACTERS",
+        ),
+      ),
+    [duplicateCandidates],
+  );
+  const broadDuplicateCandidates = useMemo(
+    () =>
+      duplicateCandidates.filter((candidate) =>
+        candidate.evidence.every(
+          (evidence) => evidence.type === "SHARED_CHARACTERS",
+        ),
+      ),
+    [duplicateCandidates],
+  );
+  const visibleDuplicateCandidates = showBroadDuplicateCandidates
+    ? duplicateCandidates
+    : primaryDuplicateCandidates;
 
   useEffect(() => {
     if (
@@ -522,6 +551,105 @@ function ArtistManager({
       setAuditSummary(error.message || "MusicBrainz 暂时无法核验");
     } finally {
       setAuditRunning(false);
+    }
+  }
+
+  async function runDuplicateArtistScan() {
+    if (duplicateScanRunning) return;
+    setDuplicateScanRunning(true);
+    setDuplicateScanCompleted(false);
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      const { findPossibleDuplicateArtistGroups } = await import(
+        "../lib/artistChinese.js"
+      );
+      const candidates = findPossibleDuplicateArtistGroups(
+        releases,
+        identityState,
+      );
+      setDuplicateCandidates(candidates);
+      setDuplicateSelections({});
+      setShowBroadDuplicateCandidates(false);
+      setDuplicateScanCompleted(true);
+      onToast?.(
+        candidates.length
+          ? `发现 ${candidates.length} 组疑似重复艺人，等待你确认`
+          : "没有发现新的疑似重复艺人",
+      );
+    } catch {
+      onToast?.("重复艺人扫描暂时无法完成");
+    } finally {
+      setDuplicateScanRunning(false);
+    }
+  }
+
+  function dismissDuplicateCandidate(candidateKey) {
+    setDuplicateCandidates((current) =>
+      current.filter((candidate) => candidate.key !== candidateKey),
+    );
+    setDuplicateSelections((current) => {
+      const next = { ...current };
+      delete next[candidateKey];
+      return next;
+    });
+  }
+
+  function mergeDuplicateCandidate(candidate) {
+    const selectedMemberId = duplicateSelections[candidate.key];
+    const selectedMember = candidate.members.find(
+      (member) => member.id === selectedMemberId,
+    );
+    if (!selectedMember) {
+      onToast?.("请先选择关联后使用的主艺人名称");
+      return;
+    }
+    if (candidate.hasMbidConflict) {
+      onToast?.("这组候选的 MusicBrainz ID 不同，请先人工核对");
+      return;
+    }
+    const otherNames = candidate.members
+      .filter((member) => member.id !== selectedMember.id)
+      .map((member) => member.canonicalName)
+      .join("、");
+    if (
+      !window.confirm(
+        `确认把「${otherNames}」关联到「${selectedMember.canonicalName}」？\n\n唱片仍保留原始艺人署名；搜索、艺人页和筛选会把它们归为同一个艺人。`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const nextState = mergePossibleDuplicateArtists(
+        identityState,
+        candidate,
+        selectedMemberId,
+      );
+      onChange(nextState);
+      const memberIds = new Set(
+        candidate.members.flatMap((member) => [
+          member.id,
+          member.identityId,
+        ]),
+      );
+      setDuplicateCandidates((current) =>
+        current.filter(
+          (item) =>
+            !item.members.some(
+              (member) =>
+                memberIds.has(member.id) ||
+                memberIds.has(member.identityId),
+            ),
+        ),
+      );
+      const targetIdentityId =
+        selectedMember.identityId ||
+        candidate.members.find((member) => member.identityId)?.identityId;
+      if (targetIdentityId) setSelectedId(targetIdentityId);
+      onToast?.(
+        `已关联为「${selectedMember.canonicalName}」，原始署名保持不变`,
+      );
+    } catch (error) {
+      onToast?.(error.message || "暂时无法关联这组艺人");
     }
   }
 
@@ -833,6 +961,151 @@ function ArtistManager({
                   .join("、")}
                 <span>{group.mbid}</span>
               </p>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="artist-duplicate-scan">
+        <header>
+          <div>
+            <span className="artist-duplicate-scan-icon">
+              <Copy weight="fill" aria-hidden="true" />
+            </span>
+            <span>
+              <strong>重复艺人扫描</strong>
+              <small>
+                按简繁体、相近名字和连续相同字符生成候选，不会自动合并
+              </small>
+            </span>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={duplicateScanRunning}
+            onClick={runDuplicateArtistScan}
+          >
+            {duplicateScanRunning ? (
+              <SpinnerGap className="is-spinning" aria-hidden="true" />
+            ) : (
+              <ArrowsClockwise aria-hidden="true" />
+            )}
+            {duplicateScanRunning
+              ? "扫描中"
+              : duplicateScanCompleted
+                ? "重新扫描"
+                : "开始扫描"}
+          </button>
+        </header>
+
+        {duplicateScanCompleted && !duplicateCandidates.length ? (
+          <p className="artist-duplicate-scan-empty">
+            当前没有待判断的相似艺人。已忽略的候选可通过“重新扫描”再次显示。
+          </p>
+        ) : null}
+
+        {duplicateCandidates.length ? (
+          <div className="artist-duplicate-candidates">
+            <p>
+              优先显示 {primaryDuplicateCandidates.length} 组较强候选。
+              相似名字只是提示，请依据作品和外部 ID 判断。
+            </p>
+            {broadDuplicateCandidates.length ? (
+              <button
+                type="button"
+                className="artist-duplicate-broad-toggle"
+                onClick={() =>
+                  setShowBroadDuplicateCandidates((current) => !current)
+                }
+              >
+                {showBroadDuplicateCandidates
+                  ? `收起 ${broadDuplicateCandidates.length} 组仅有共同字符的候选`
+                  : `查看更多名称片段候选（${broadDuplicateCandidates.length} 组，误判可能较高）`}
+              </button>
+            ) : null}
+            {visibleDuplicateCandidates.map((candidate) => (
+              <article key={candidate.key}>
+                <header>
+                  <div className="artist-duplicate-evidence">
+                    {candidate.evidence.map((evidence) => (
+                      <span key={evidence.type}>{evidence.label}</span>
+                    ))}
+                    {candidate.hasMbidConflict ? (
+                      <strong>MusicBrainz ID 冲突，不能快速合并</strong>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => dismissDuplicateCandidate(candidate.key)}
+                  >
+                    不是同一艺人
+                  </button>
+                </header>
+
+                <fieldset>
+                  <legend>选择关联后的主显示名</legend>
+                  {candidate.members.map((member) => {
+                    const selected =
+                      duplicateSelections[candidate.key] === member.id;
+                    const otherNames = member.names
+                      .filter(
+                        (name) =>
+                          normalizeText(name) !==
+                          normalizeText(member.canonicalName),
+                      )
+                      .slice(0, 3);
+                    return (
+                      <label
+                        key={member.id}
+                        className={selected ? "is-selected" : ""}
+                      >
+                        <input
+                          type="radio"
+                          name={`duplicate-keeper-${candidate.key}`}
+                          checked={selected}
+                          onChange={() =>
+                            setDuplicateSelections((current) => ({
+                              ...current,
+                              [candidate.key]: member.id,
+                            }))
+                          }
+                        />
+                        <span>
+                          <strong>{member.canonicalName}</strong>
+                          <small>
+                            {member.releaseCount} 张发行 ·{" "}
+                            {member.mapped ? "已建立身份" : "原始署名"}
+                          </small>
+                          {otherNames.length ? (
+                            <small>已有名字：{otherNames.join("、")}</small>
+                          ) : null}
+                          {member.musicBrainzMbid ? (
+                            <small>MBID：{member.musicBrainzMbid}</small>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+
+                <footer>
+                  <span>
+                    只合并艺人身份；唱片、评论和收听记录不会被删除。
+                  </span>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={
+                      !duplicateSelections[candidate.key] ||
+                      candidate.hasMbidConflict
+                    }
+                    onClick={() => mergeDuplicateCandidate(candidate)}
+                  >
+                    <LinkSimple aria-hidden="true" />
+                    关联并合并同类项
+                  </button>
+                </footer>
+              </article>
             ))}
           </div>
         ) : null}

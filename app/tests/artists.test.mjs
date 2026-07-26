@@ -11,11 +11,13 @@ import {
   getReleaseArtistTargets,
   groupReleasesByArtistIdentity,
   loadArtistIdentityState,
+  mergePossibleDuplicateArtists,
   releaseMatchesMappedArtistQuery,
   saveArtistIdentityState,
   sortArtistGroups,
 } from "../src/lib/artists.js";
 import {
+  findPossibleDuplicateArtistGroups,
   getChineseNameVariants,
   reconcileChineseArtistVariants,
 } from "../src/lib/artistChinese.js";
@@ -154,6 +156,178 @@ test("script variants create one identity only when the same work is shared", ()
   assert.deepEqual(
     result.state.identities[0].aliases.map((alias) => alias.name).sort(),
     ["张震岳", "張震嶽"].sort(),
+  );
+});
+
+test("duplicate artist scan suggests script variants without auto-merging them", () => {
+  const releases = [
+    { ...release("one", "张震岳"), title: "再见" },
+    { ...release("two", "張震嶽"), title: "思念是一种病" },
+  ];
+  const candidates = findPossibleDuplicateArtistGroups(releases, {
+    schemaVersion: 2,
+    identities: [],
+  });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(
+    candidates[0].evidence.some(
+      (evidence) => evidence.type === "SCRIPT_VARIANT",
+    ),
+    true,
+  );
+  assert.deepEqual(
+    candidates[0].members.map((member) => member.canonicalName).sort(),
+    ["张震岳", "張震嶽"].sort(),
+  );
+});
+
+test("duplicate artist scan uses conservative shared-character suggestions", () => {
+  const candidates = findPossibleDuplicateArtistGroups(
+    [
+      release("one", "魏如萱"),
+      release("two", "魏如萱 Waa"),
+      release("three", "魏如"),
+    ],
+    { schemaVersion: 2, identities: [] },
+  );
+
+  assert.equal(
+    candidates.some((candidate) =>
+      candidate.members.some(
+        (member) => member.canonicalName === "魏如萱 Waa",
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    candidates.some((candidate) =>
+      candidate.members.some((member) => member.canonicalName === "魏如"),
+    ),
+    false,
+  );
+});
+
+test("duplicate artist scan groups connected strong matches for one review", () => {
+  const candidates = findPossibleDuplicateArtistGroups(
+    [release("one", "Yoga Lin"), release("two", "林宥嘉")],
+    {
+      schemaVersion: 2,
+      identities: [
+        {
+          id: "lin-one",
+          canonicalName: "林宥嘉",
+          aliases: [{ name: "Yoga Lin" }],
+        },
+        {
+          id: "lin-two",
+          canonicalName: "林宥嘉",
+          aliases: [{ name: "Yoga Lin" }],
+        },
+      ],
+    },
+  );
+  const primaryCandidates = candidates.filter((candidate) =>
+    candidate.evidence.some(
+      (evidence) => evidence.type !== "SHARED_CHARACTERS",
+    ),
+  );
+
+  assert.equal(primaryCandidates.length, 1);
+  assert.equal(primaryCandidates[0].members.length, 4);
+});
+
+test("confirmed duplicate artists merge into the selected identity", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "waa",
+        canonicalName: "魏如萱",
+        musicBrainzMbid: "00000000-0000-0000-0000-000000000001",
+        aliases: [{ name: "Waa Wei", source: "USER" }],
+      },
+      {
+        id: "waa-credit",
+        canonicalName: "魏如萱 Waa",
+        aliases: [],
+      },
+    ],
+  };
+  const candidate = {
+    members: [
+      {
+        id: "waa",
+        identityId: "waa",
+        canonicalName: "魏如萱",
+        names: ["魏如萱", "Waa Wei"],
+      },
+      {
+        id: "waa-credit",
+        identityId: "waa-credit",
+        canonicalName: "魏如萱 Waa",
+        names: ["魏如萱 Waa"],
+      },
+    ],
+  };
+  const merged = mergePossibleDuplicateArtists(state, candidate, "waa");
+
+  assert.equal(merged.identities.length, 1);
+  assert.equal(merged.identities[0].id, "waa");
+  assert.equal(merged.identities[0].canonicalName, "魏如萱");
+  assert.equal(
+    merged.identities[0].aliases.some(
+      (alias) => alias.name === "魏如萱 Waa",
+    ),
+    true,
+  );
+  assert.equal(
+    merged.identities[0].musicBrainzMbid,
+    "00000000-0000-0000-0000-000000000001",
+  );
+});
+
+test("confirmed duplicate merge blocks conflicting MusicBrainz identities", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "one",
+        canonicalName: "Alex",
+        musicBrainzMbid: "00000000-0000-0000-0000-000000000001",
+        aliases: [],
+      },
+      {
+        id: "two",
+        canonicalName: "Alexs",
+        musicBrainzMbid: "00000000-0000-0000-0000-000000000002",
+        aliases: [],
+      },
+    ],
+  };
+  assert.throws(
+    () =>
+      mergePossibleDuplicateArtists(
+        state,
+        {
+          members: [
+            {
+              id: "one",
+              identityId: "one",
+              canonicalName: "Alex",
+              names: ["Alex"],
+            },
+            {
+              id: "two",
+              identityId: "two",
+              canonicalName: "Alexs",
+              names: ["Alexs"],
+            },
+          ],
+        },
+        "one",
+      ),
+    /MusicBrainz ID 不同/,
   );
 });
 

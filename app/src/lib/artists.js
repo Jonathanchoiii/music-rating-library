@@ -547,6 +547,104 @@ export function findDuplicateArtistMbidGroups(identityState) {
     .map(([mbid, identities]) => ({ mbid, identities }));
 }
 
+export function mergePossibleDuplicateArtists(
+  rawState,
+  candidate,
+  selectedMemberId,
+) {
+  const state = sanitizeArtistIdentityState(rawState);
+  const members = Array.isArray(candidate?.members)
+    ? candidate.members
+    : [];
+  const selectedMember = members.find(
+    (member) => member.id === selectedMemberId,
+  );
+  if (!selectedMember || members.length < 2) {
+    throw new Error("请选择关联后保留的主艺人");
+  }
+
+  const identityById = new Map(
+    state.identities.map((identity) => [identity.id, identity]),
+  );
+  const mergedIdentityIds = new Set(
+    members
+      .map((member) => member.identityId || member.id)
+      .filter((identityId) => identityById.has(identityId)),
+  );
+  const musicBrainzMbids = new Set(
+    [...mergedIdentityIds]
+      .map((identityId) => identityById.get(identityId)?.musicBrainzMbid)
+      .filter(Boolean),
+  );
+  if (musicBrainzMbids.size > 1) {
+    throw new Error("候选艺人的 MusicBrainz ID 不同，请先人工核对 ID");
+  }
+
+  const selectedExistingIdentity = identityById.get(
+    selectedMember.identityId || selectedMember.id,
+  );
+  const fallbackIdentity = [...mergedIdentityIds]
+    .map((identityId) => identityById.get(identityId))
+    .find(Boolean);
+  const baseIdentity =
+    selectedExistingIdentity ??
+    fallbackIdentity ??
+    createArtistIdentity(selectedMember.canonicalName);
+  if (!baseIdentity) {
+    throw new Error("无法建立主艺人身份");
+  }
+
+  const aliasCandidates = [];
+  for (const member of members) {
+    aliasCandidates.push(member.canonicalName, ...(member.names ?? []));
+    const identity = identityById.get(member.identityId || member.id);
+    if (!identity) continue;
+    aliasCandidates.push(
+      identity.canonicalName,
+      ...(identity.aliases ?? []).map((alias) => alias.name),
+    );
+  }
+  const canonicalName = cleanName(selectedMember.canonicalName);
+  const aliases = [
+    ...(baseIdentity.aliases ?? []),
+    ...aliasCandidates.map((name) => ({
+      name: cleanName(name),
+      locale: "",
+      type:
+        normalizeText(name) === normalizeText(canonicalName)
+          ? "PRIMARY"
+          : "CREDIT_VARIANT",
+      source: "USER_CONFIRMED_DUPLICATE",
+    })),
+  ].filter((alias) => alias.name);
+  const deduplicatedAliases = [
+    ...new Map(
+      aliases.map((alias) => [normalizeText(alias.name), alias]),
+    ).values(),
+  ];
+  const targetIdentity = sanitizeIdentity({
+    ...baseIdentity,
+    id: baseIdentity.id,
+    canonicalName,
+    sortName: canonicalName,
+    musicBrainzMbid:
+      [...musicBrainzMbids][0] || baseIdentity.musicBrainzMbid || "",
+    source:
+      baseIdentity.source === "USER"
+        ? "USER_CONFIRMED_DUPLICATE"
+        : baseIdentity.source,
+    aliases: deduplicatedAliases,
+  });
+  const identities = state.identities.filter(
+    (identity) => !mergedIdentityIds.has(identity.id),
+  );
+  identities.push(targetIdentity);
+  return sanitizeArtistIdentityState({
+    ...state,
+    identities,
+  });
+}
+
 export function applyMusicBrainzArtistAuditResults(
   rawState,
   results = [],
