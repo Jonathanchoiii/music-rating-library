@@ -2127,8 +2127,7 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .detail-facts {
-  grid-column: 1 / -1;
-  margin: 2px 0 0;
+  margin: 14px 0 0;
   display: flex;
   flex-wrap: wrap;
   gap: 8px 22px;
@@ -2204,28 +2203,84 @@ html.is-desktop-shell .desktop-sidebar {
   padding: 18px 0 22px;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+}
+
+.platform-row-slots {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 9px;
 }
 
-.platform-row a {
+.platform-row a,
+.platform-row .platform-link-missing {
   min-height: 42px;
   padding: 0 13px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-control);
   background: var(--surface);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   gap: 7px;
   font-size: 13px;
   font-weight: 650;
+  cursor: pointer;
 }
 
-.platform-row a svg {
+.platform-row a svg,
+.platform-row .platform-link-missing svg {
   width: 17px;
   height: 17px;
+  flex: none;
+}
+
+.platform-row .platform-link-missing {
+  opacity: 0.45;
+}
+
+.platform-row .platform-link-missing:hover,
+.platform-row .platform-link-missing.is-editing {
+  opacity: 0.78;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.platform-link-editor {
+  display: grid;
+  gap: 7px;
+}
+
+.platform-link-editor > label {
+  color: var(--muted-dark);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.platform-link-editor > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.platform-link-editor input {
+  min-height: 42px;
+  width: 100%;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  font: inherit;
+}
+
+.platform-link-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .match-pending {
@@ -4531,13 +4586,25 @@ button.settings-entry:hover {
   }
 
   .detail-facts {
-    display: none;
+    margin-top: 10px;
+    gap: 6px 14px;
+    font-size: 11px;
   }
 
   .detail-type-editor {
     grid-column: 1 / -1;
     margin-top: 2px;
     padding-top: 12px;
+  }
+
+  .platform-link-editor > div {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-link-editor .secondary-button,
+  .platform-link-editor .text-button {
+    width: 100%;
+    min-height: 42px;
   }
 
   .timeline-header {

@@ -22,6 +22,7 @@ import {
   normalizeNeoDbUrl,
   normalizeSupportedReleaseUrl,
   normalizeReleaseType,
+  upsertConfirmedExternalLink,
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
   reconcileCanonicalTitleOverride,
@@ -92,6 +93,54 @@ test("NeoDB CSV snapshots keep stable source ids and row fingerprints", () => {
   assert.match(snapshot.csv, /content_hash/);
   const [, dataRow] = snapshot.csv.trim().split("\n");
   assert.ok(dataRow.split(",").at(-1));
+});
+
+test("upsertConfirmedExternalLink accepts matching platform album URLs", () => {
+  const release = {
+    id: "release-links",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/source-one",
+        status: "CONFIRMED",
+      },
+    ],
+  };
+  const result = upsertConfirmedExternalLink(
+    release,
+    "https://music.apple.com/cn/album/example/1234567890",
+    "APPLE_MUSIC",
+  );
+  assert.equal(result.error, null);
+  assert.deepEqual(
+    result.release.externalLinks.map((link) => link.provider).sort(),
+    ["APPLE_MUSIC", "NEODB"],
+  );
+  assert.equal(
+    result.release.externalLinks.find(
+      (link) => link.provider === "APPLE_MUSIC",
+    )?.status,
+    "CONFIRMED",
+  );
+});
+
+test("upsertConfirmedExternalLink rejects wrong provider and non-album URLs", () => {
+  const release = { id: "release-links", externalLinks: [] };
+  const wrongProvider = upsertConfirmedExternalLink(
+    release,
+    "https://open.spotify.com/album/platform-one",
+    "APPLE_MUSIC",
+  );
+  assert.match(wrongProvider.error, /Apple Music/);
+  assert.equal(wrongProvider.release, release);
+
+  const nonAlbum = upsertConfirmedExternalLink(
+    release,
+    "https://open.spotify.com/track/song-one",
+    "SPOTIFY",
+  );
+  assert.match(nonAlbum.error, /Spotify/);
+  assert.equal(nonAlbum.release, release);
 });
 
 test("supported release links normalize only exact album platforms", () => {
