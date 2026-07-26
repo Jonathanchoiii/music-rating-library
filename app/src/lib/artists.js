@@ -3,6 +3,7 @@ import {
   normalizeText,
   splitArtistCredits,
 } from "./music.js";
+import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
 
 export const ARTIST_IDENTITY_STORAGE_KEY =
   "recordshelf-artist-identities-v1";
@@ -187,6 +188,9 @@ export function saveArtistIdentityState(
       ARTIST_IDENTITY_STORAGE_KEY,
       serialized,
     );
+    if (storage === globalThis.localStorage) {
+      notifySharedLocalStateChanged();
+    }
   } catch (error) {
     console.warn("艺人映射暂时无法保存", error);
   }

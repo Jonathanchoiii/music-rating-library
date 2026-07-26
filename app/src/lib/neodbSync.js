@@ -4,6 +4,7 @@ import {
   normalizeExternalReleaseType,
   normalizeText,
 } from "./music.js";
+import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
 
 export const NEODB_ORIGIN = "https://neodb.social";
 export const NEODB_SYNC_STATE_KEY = "recordshelf-neodb-sync-v1";
@@ -1137,6 +1138,7 @@ export function loadNeoDbSyncState() {
 
 export function saveNeoDbSyncState(state) {
   window.localStorage.setItem(NEODB_SYNC_STATE_KEY, JSON.stringify(state));
+  notifySharedLocalStateChanged();
 }
 
 export function clearNeoDbAccessToken() {
@@ -1183,6 +1185,7 @@ export async function beginNeoDbLogin() {
       NEODB_OAUTH_CLIENT_KEY,
       JSON.stringify(client),
     );
+    notifySharedLocalStateChanged();
   }
 
   const state = crypto.randomUUID();

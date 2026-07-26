@@ -90,6 +90,7 @@ import {
   validateRecordshelfBackup,
 } from "./lib/backupMerge.js";
 import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "./lib/sharedStorageKeys.js";
+import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
 
 const USER_STATE_KEY = "recordshelf-user-state-v2";
 const LEGACY_USER_STATE_KEY = "recordshelf-user-state-v1";
@@ -358,6 +359,7 @@ function LibraryApp() {
     );
     try {
       window.localStorage.setItem(USER_STATE_KEY, serializedState);
+      notifySharedLocalStateChanged();
     } catch (error) {
       try {
         LEGACY_FULL_LIBRARY_KEYS.forEach((key) =>
@@ -365,6 +367,7 @@ function LibraryApp() {
         );
         window.localStorage.removeItem(LEGACY_USER_STATE_KEY);
         window.localStorage.setItem(USER_STATE_KEY, serializedState);
+        notifySharedLocalStateChanged();
       } catch (retryError) {
         console.warn("用户变更暂时无法写入本地存储", retryError ?? error);
       }
@@ -943,6 +946,7 @@ function LibraryApp() {
       NEODB_OAUTH_CLIENT_KEY,
       DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
     ].forEach((key) => window.localStorage.removeItem(key));
+    notifySharedLocalStateChanged();
     [NEODB_ACCESS_TOKEN_KEY, NEODB_OAUTH_PENDING_KEY].forEach((key) =>
       window.sessionStorage.removeItem(key),
     );

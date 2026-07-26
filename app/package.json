@@ -1,7 +1,7 @@
 {
   "name": "app",
   "productName": "RecordShelf",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "main": "electron/main.mjs",
@@ -20,7 +20,7 @@
     "import:neodb": "node scripts/import-neodb-csv.mjs",
     "repair:neodb-identities": "node scripts/split-merged-neodb-identities.mjs",
     "preview": "vite preview",
-    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs",
+    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs",
     "test:build-privacy": "node scripts/verify-build-privacy.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },

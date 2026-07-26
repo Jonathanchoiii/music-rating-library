@@ -38,6 +38,7 @@ import {
 } from "../lib/artists.js";
 import { normalizeText } from "../lib/music.js";
 import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "../lib/sharedStorageKeys.js";
+import { notifySharedLocalStateChanged } from "../lib/sharedLocalState.js";
 
 function updatedState(state, updater) {
   return {
@@ -68,6 +69,7 @@ function saveDismissedArtistDuplicateKeys(keys) {
     DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
     JSON.stringify([...keys].sort()),
   );
+  notifySharedLocalStateChanged();
 }
 
 export function SettingsDialog({

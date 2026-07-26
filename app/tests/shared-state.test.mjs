@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   applySharedStateChanges,
+  isAuthoritativeSharedStateRequest,
   readSharedState,
 } from "../shared-state/index.mjs";
 
@@ -17,6 +18,33 @@ async function temporaryStatePath() {
     statePath: path.join(directory, "state.json"),
   };
 }
+
+test("the shared database accepts writes only through port 4173", () => {
+  assert.equal(
+    isAuthoritativeSharedStateRequest({
+      headers: { host: "127.0.0.1:4173" },
+    }),
+    true,
+  );
+  assert.equal(
+    isAuthoritativeSharedStateRequest({
+      headers: { host: "localhost:4173" },
+    }),
+    true,
+  );
+  assert.equal(
+    isAuthoritativeSharedStateRequest({
+      headers: { host: "127.0.0.1:5173" },
+    }),
+    false,
+  );
+  assert.equal(
+    isAuthoritativeSharedStateRequest({
+      headers: { host: "127.0.0.1:4187" },
+    }),
+    false,
+  );
+});
 
 test("shared state persists only approved local keys", async (context) => {
   const { directory, statePath } = await temporaryStatePath();
@@ -231,5 +259,159 @@ test("different alias edits merge while an explicit removal stays removed", asyn
   assert.deepEqual(
     aliases.map((item) => item.name),
     ["Keep me", "Mac alias", "Web alias"],
+  );
+});
+
+test("stale artist identities with a shared name and alias are coalesced", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const key = "recordshelf-artist-identities-v1";
+  const current = {
+    identities: [
+      {
+        id: "artist-current",
+        canonicalName: "持修",
+        source: "MUSICBRAINZ_AND_USER",
+        musicBrainzMbid: "mbid-1",
+        aliases: [
+          { name: "持修", source: "USER" },
+          { name: "Chih Siou", source: "USER" },
+        ],
+      },
+    ],
+  };
+  const staleClient = {
+    identities: [
+      {
+        id: "artist-stale",
+        canonicalName: "持修",
+        source: "USER_CONFIRMED_DUPLICATE",
+        aliases: [
+          { name: "持修", source: "USER_CONFIRMED_DUPLICATE" },
+          {
+            name: "Chih Siou",
+            source: "USER_CONFIRMED_DUPLICATE",
+          },
+          {
+            name: "持修 chih_siou",
+            source: "USER_CONFIRMED_DUPLICATE",
+          },
+        ],
+      },
+    ],
+  };
+
+  await applySharedStateChanges(
+    { [key]: JSON.stringify(current) },
+    statePath,
+  );
+  const state = await applySharedStateChanges(
+    { [key]: JSON.stringify(staleClient) },
+    statePath,
+    {
+      baseStorage: {
+        [key]: JSON.stringify({ identities: [] }),
+      },
+    },
+  );
+  const merged = JSON.parse(state.storage[key]);
+
+  assert.equal(merged.identities.length, 1);
+  assert.equal(merged.identities[0].id, "artist-current");
+  assert.equal(merged.identities[0].musicBrainzMbid, "mbid-1");
+  assert.equal(
+    merged.identities[0].source,
+    "USER_CONFIRMED_DUPLICATE",
+  );
+  assert.deepEqual(
+    merged.identities[0].aliases.map((alias) => alias.name),
+    ["持修", "Chih Siou", "持修 chih_siou"],
+  );
+});
+
+test("same-name artists stay separate without a second shared alias", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const key = "recordshelf-artist-identities-v1";
+
+  await applySharedStateChanges(
+    {
+      [key]: JSON.stringify({
+        identities: [
+          {
+            id: "artist-a",
+            canonicalName: "重名艺人",
+            aliases: [{ name: "重名艺人" }],
+          },
+        ],
+      }),
+    },
+    statePath,
+  );
+  const state = await applySharedStateChanges(
+    {
+      [key]: JSON.stringify({
+        identities: [
+          {
+            id: "artist-b",
+            canonicalName: "重名艺人",
+            aliases: [{ name: "重名艺人" }],
+          },
+        ],
+      }),
+    },
+    statePath,
+    {
+      baseStorage: {
+        [key]: JSON.stringify({ identities: [] }),
+      },
+    },
+  );
+
+  assert.equal(
+    JSON.parse(state.storage[key]).identities.length,
+    2,
+  );
+});
+
+test("conflicting MusicBrainz identities never coalesce", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const key = "recordshelf-artist-identities-v1";
+  const identity = (id, mbid) => ({
+    id,
+    canonicalName: "Same Name",
+    musicBrainzMbid: mbid,
+    aliases: [
+      { name: "Same Name" },
+      { name: "Shared Alias" },
+    ],
+  });
+
+  await applySharedStateChanges(
+    {
+      [key]: JSON.stringify({
+        identities: [identity("artist-a", "mbid-a")],
+      }),
+    },
+    statePath,
+  );
+  const state = await applySharedStateChanges(
+    {
+      [key]: JSON.stringify({
+        identities: [identity("artist-b", "mbid-b")],
+      }),
+    },
+    statePath,
+    {
+      baseStorage: {
+        [key]: JSON.stringify({ identities: [] }),
+      },
+    },
+  );
+
+  assert.equal(
+    JSON.parse(state.storage[key]).identities.length,
+    2,
   );
 });

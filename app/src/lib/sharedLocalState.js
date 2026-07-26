@@ -8,6 +8,42 @@ let knownRevision = 0;
 let lastSnapshot = {};
 let syncTimer = null;
 let syncInFlight = null;
+let immediateFlushQueued = false;
+
+export function isAuthoritativeSharedStateWriter({
+  hostname,
+  port,
+  userAgent,
+}) {
+  return (
+    userAgent.includes("Electron/") ||
+    (["127.0.0.1", "localhost"].includes(hostname) &&
+      port === "4173")
+  );
+}
+
+function isDesktopShell() {
+  return navigator.userAgent.includes("Electron/");
+}
+
+function isAuthoritativeWebOrigin() {
+  return (
+    !isDesktopShell() &&
+    isAuthoritativeSharedStateWriter({
+      hostname: window.location.hostname,
+      port: window.location.port,
+      userAgent: navigator.userAgent,
+    })
+  );
+}
+
+function canWriteSharedState() {
+  return isAuthoritativeSharedStateWriter({
+    hostname: window.location.hostname,
+    port: window.location.port,
+    userAgent: navigator.userAgent,
+  });
+}
 
 function localSnapshot() {
   return Object.fromEntries(
@@ -89,25 +125,25 @@ export async function bootstrapSharedLocalState() {
   try {
     const remote = await requestSharedState();
     const local = localSnapshot();
-    const isDesktopShell = navigator.userAgent.includes("Electron/");
     const migrationCompleted =
       window.localStorage.getItem(MIGRATION_MARKER_KEY) === "1";
     const remoteIsEmpty =
       (remote.revision ?? 0) === 0 &&
       !Object.keys(remote.storage ?? {}).length;
-    const shouldMigrateExistingWebState =
-      !isDesktopShell &&
+    const shouldSeedExistingWebState =
+      isAuthoritativeWebOrigin() &&
+      remoteIsEmpty &&
       !migrationCompleted &&
       Object.keys(local).length > 0;
     if (
-      (remoteIsEmpty || shouldMigrateExistingWebState) &&
+      shouldSeedExistingWebState &&
       Object.keys(local).length
     ) {
       const seeded = await pushChanges(
         changedValues(remote.storage ?? {}, local),
         {
-          baseStorage: remoteIsEmpty ? remote.storage ?? {} : {},
-          mergeMode: remoteIsEmpty ? "three-way" : "preserve-latest",
+          baseStorage: remote.storage ?? {},
+          mergeMode: "three-way",
         },
       );
       knownRevision = seeded?.revision ?? 0;
@@ -128,6 +164,7 @@ export async function bootstrapSharedLocalState() {
 }
 
 export function flushSharedLocalState() {
+  if (!canWriteSharedState()) return Promise.resolve();
   if (syncInFlight) return syncInFlight;
   const nextSnapshot = localSnapshot();
   const changes = changedValues(lastSnapshot, nextSnapshot);
@@ -157,6 +194,15 @@ export function flushSharedLocalState() {
   return syncInFlight;
 }
 
+export function notifySharedLocalStateChanged() {
+  if (!canWriteSharedState() || immediateFlushQueued) return;
+  immediateFlushQueued = true;
+  queueMicrotask(() => {
+    immediateFlushQueued = false;
+    void flushSharedLocalState();
+  });
+}
+
 async function refreshFromSharedState() {
   if (document.visibilityState !== "visible") return;
   await flushSharedLocalState();
@@ -173,6 +219,7 @@ async function refreshFromSharedState() {
 }
 
 function sendPendingChanges() {
+  if (!canWriteSharedState()) return;
   const nextSnapshot = localSnapshot();
   const changes = changedValues(lastSnapshot, nextSnapshot);
   if (!Object.keys(changes).length) return;
@@ -197,6 +244,14 @@ function sendPendingChanges() {
 
 export function startSharedLocalStateSync() {
   if (syncTimer) return;
+  if (!canWriteSharedState()) {
+    window.addEventListener("focus", refreshFromSharedState);
+    document.addEventListener(
+      "visibilitychange",
+      refreshFromSharedState,
+    );
+    return;
+  }
   syncTimer = window.setInterval(
     flushSharedLocalState,
     SYNC_INTERVAL_MS,

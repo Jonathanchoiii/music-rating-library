@@ -230,6 +230,137 @@ function parseJsonValue(value) {
   }
 }
 
+function normalizedArtistName(value) {
+  return typeof value === "string"
+    ? value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim()
+    : "";
+}
+
+function artistIdentityNames(identity) {
+  return new Set(
+    [
+      identity?.canonicalName,
+      ...(Array.isArray(identity?.aliases)
+        ? identity.aliases.map((alias) => alias?.name)
+        : []),
+    ]
+      .map(normalizedArtistName)
+      .filter(Boolean),
+  );
+}
+
+function artistIdentitiesAreEquivalent(left, right) {
+  if (!isPlainObject(left) || !isPlainObject(right)) return false;
+  const leftMbid =
+    typeof left.musicBrainzMbid === "string"
+      ? left.musicBrainzMbid.trim()
+      : "";
+  const rightMbid =
+    typeof right.musicBrainzMbid === "string"
+      ? right.musicBrainzMbid.trim()
+      : "";
+  if (leftMbid && rightMbid) return leftMbid === rightMbid;
+  const leftCanonical = normalizedArtistName(left.canonicalName);
+  const rightCanonical = normalizedArtistName(right.canonicalName);
+  if (!leftCanonical || leftCanonical !== rightCanonical) return false;
+  const leftNames = artistIdentityNames(left);
+  const sharedNames = [...artistIdentityNames(right)].filter((name) =>
+    leftNames.has(name),
+  );
+  // One shared display name can legitimately describe different artists.
+  // A second exact shared search alias makes this a duplicated local identity.
+  return sharedNames.length >= 2;
+}
+
+function preferredArtistSource(left, right) {
+  const rank = (value) => {
+    if (value === "USER_CONFIRMED_DUPLICATE") return 3;
+    if (typeof value === "string" && value.includes("USER")) return 2;
+    return value ? 1 : 0;
+  };
+  return rank(right) > rank(left) ? right : left;
+}
+
+function mergeEquivalentArtistIdentities(current, duplicate) {
+  const aliases = [
+    ...(Array.isArray(current.aliases) ? current.aliases : []),
+    ...(Array.isArray(duplicate.aliases) ? duplicate.aliases : []),
+  ];
+  return {
+    ...duplicate,
+    ...current,
+    id: current.id || duplicate.id,
+    canonicalName:
+      current.canonicalName || duplicate.canonicalName,
+    sortName:
+      current.sortName ||
+      duplicate.sortName ||
+      current.canonicalName ||
+      duplicate.canonicalName,
+    musicBrainzMbid:
+      current.musicBrainzMbid || duplicate.musicBrainzMbid || "",
+    source: preferredArtistSource(
+      current.source,
+      duplicate.source,
+    ),
+    musicBrainzStatus:
+      current.musicBrainzStatus ||
+      duplicate.musicBrainzStatus ||
+      "",
+    musicBrainzCheckedAt:
+      current.musicBrainzCheckedAt ||
+      duplicate.musicBrainzCheckedAt ||
+      "",
+    musicBrainzAuditFingerprint:
+      current.musicBrainzAuditFingerprint ||
+      duplicate.musicBrainzAuditFingerprint ||
+      "",
+    musicBrainzEvidence:
+      current.musicBrainzEvidence ??
+      duplicate.musicBrainzEvidence ??
+      null,
+    musicBrainzCandidates:
+      Array.isArray(current.musicBrainzCandidates) &&
+      current.musicBrainzCandidates.length
+        ? current.musicBrainzCandidates
+        : duplicate.musicBrainzCandidates ?? [],
+    aliases: [
+      ...new Map(
+        aliases
+          .filter((alias) => normalizedArtistName(alias?.name))
+          .map((alias) => [
+            normalizedArtistName(alias.name),
+            alias,
+          ]),
+      ).values(),
+    ],
+  };
+}
+
+function coalesceEquivalentArtistIdentities(value) {
+  if (!isPlainObject(value) || !Array.isArray(value.identities)) {
+    return value;
+  }
+  const identities = [];
+  for (const identity of value.identities) {
+    const equivalentIndex = identities.findIndex((candidate) =>
+      artistIdentitiesAreEquivalent(candidate, identity),
+    );
+    if (equivalentIndex < 0) {
+      identities.push(identity);
+      continue;
+    }
+    identities[equivalentIndex] = mergeEquivalentArtistIdentities(
+      identities[equivalentIndex],
+      identity,
+    );
+  }
+  return {
+    ...value,
+    identities,
+  };
+}
+
 function mergedStorageValue(key, base, current, incoming) {
   const parsedBase = parseJsonValue(base);
   const parsedCurrent = parseJsonValue(current);
@@ -258,7 +389,12 @@ function mergedStorageValue(key, base, current, incoming) {
     parsedIncoming,
     [key],
   );
-  return merged === MISSING ? null : JSON.stringify(merged);
+  if (merged === MISSING) return null;
+  const normalized =
+    key === "recordshelf-artist-identities-v1"
+      ? coalesceEquivalentArtistIdentities(merged)
+      : merged;
+  return JSON.stringify(normalized);
 }
 
 async function backupSharedState(statePath, state) {
@@ -380,6 +516,19 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+export function isAuthoritativeSharedStateRequest(request) {
+  const host = request.headers?.host ?? "";
+  try {
+    const url = new URL(`http://${host}`);
+    return (
+      ["127.0.0.1", "localhost"].includes(url.hostname) &&
+      url.port === "4173"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function handleSharedStateRequest(
   request,
   response,
@@ -398,6 +547,10 @@ export async function handleSharedStateRequest(
     }
     if (!["PATCH", "POST"].includes(request.method)) {
       sendJson(response, 405, { error: "METHOD_NOT_ALLOWED" });
+      return true;
+    }
+    if (!isAuthoritativeSharedStateRequest(request)) {
+      sendJson(response, 403, { error: "READ_ONLY_ORIGIN" });
       return true;
     }
     const payload = await readRequestJson(request);

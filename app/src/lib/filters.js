@@ -9,6 +9,7 @@ import {
   getArtistAliasIndex,
   resolveArtistCredit,
 } from "./artists.js";
+import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
 
 export const LIBRARY_FILTER_STORAGE_KEY = "recordshelf-library-filters-v1";
 
@@ -112,6 +113,9 @@ export function saveLibraryFilters(
       LIBRARY_FILTER_STORAGE_KEY,
       JSON.stringify(sanitized),
     );
+    if (storage === globalThis.localStorage) {
+      notifySharedLocalStateChanged();
+    }
   } catch (error) {
     console.warn("筛选条件暂时无法保存", error);
   }
