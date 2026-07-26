@@ -419,6 +419,50 @@ export function normalizeSupportedReleaseUrl(value = "") {
   }
 }
 
+export function upsertConfirmedExternalLink(
+  release,
+  url,
+  expectedProvider,
+) {
+  const normalized = normalizeSupportedReleaseUrl(String(url ?? "").trim());
+  const providerLabels = {
+    NEODB: "NeoDB",
+    APPLE_MUSIC: "Apple Music",
+    SPOTIFY: "Spotify",
+  };
+  const expectedLabel = providerLabels[expectedProvider] ?? expectedProvider;
+  if (!normalized) {
+    return {
+      release,
+      error: `请粘贴精确的 ${expectedLabel} 专辑链接`,
+    };
+  }
+  if (normalized.provider !== expectedProvider) {
+    return {
+      release,
+      error: `请粘贴 ${expectedLabel} 专辑链接，而不是 ${normalized.providerLabel}`,
+    };
+  }
+  const nextLink = {
+    provider: normalized.provider,
+    url: normalized.normalizedUrl,
+    status: "CONFIRMED",
+  };
+  const externalLinks = [
+    ...(release.externalLinks ?? []).filter(
+      (link) => link.provider !== expectedProvider,
+    ),
+    nextLink,
+  ];
+  return {
+    release: {
+      ...release,
+      externalLinks,
+    },
+    error: null,
+  };
+}
+
 export function getRecordShelfReleaseId(value = "", currentOrigin = "") {
   const rawValue = String(value).trim();
   if (!rawValue) return null;

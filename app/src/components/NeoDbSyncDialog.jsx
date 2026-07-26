@@ -258,6 +258,33 @@ export function NeoDbSyncDialog({
         });
         setPhase("done");
 
+        const coverTargetIds = [
+          ...new Set([
+            ...additionReleaseIds,
+            ...result.plan.updates.map((item) => item.releaseId),
+          ]),
+        ].filter((releaseId) => {
+          const release = nextReleases.find((item) => item.id === releaseId);
+          if (!release) return false;
+          return (
+            !release.coverUrl ||
+            /^https?:\/\//i.test(release.coverUrl)
+          );
+        });
+        if (coverTargetIds.length) {
+          fetch("/api/local-enrich-covers", {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              releaseIds: coverTargetIds,
+              cacheLocal: true,
+            }),
+          }).catch(() => {});
+        }
+
         const changed = changeCount(result.plan);
         const needsTypeReview =
           typeVerification.unresolved + typeVerification.conflicts;
