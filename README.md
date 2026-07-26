@@ -17,7 +17,7 @@
 
 ## 隐私边界
 
-这个仓库只包含应用代码、匿名合成示例和公开预览图。真实音乐库、评论、评分、同步备份与历史截图保留在本机的 `app/.private/`，该目录已被 Git 忽略。
+这个仓库只包含应用代码、匿名合成示例和公开预览图。真实音乐库、评论、评分、同步备份与历史截图保留在本机的 `app/.private/` 和 macOS `Application Support/RecordShelf/`，不会提交到 GitHub。
 
 Vite 使用两种明确的数据模式：
 
@@ -45,7 +45,28 @@ cd app
 npm run import:neodb -- "/absolute/path/to/music_mark.csv"
 ```
 
-修改本机数据前建议备份整个 `app/.private/` 目录。该目录不会由 GitHub 代为备份。
+修改本机数据前建议同时备份：
+
+- `app/.private/`：基础音乐目录；
+- `~/Library/Application Support/RecordShelf/shared-local-state.json`：
+  Web 与 Mac 共用的删改、合并、艺人映射和同步增量。
+
+这些私人资料都不会由 GitHub 代为备份。
+
+## macOS 本地应用
+
+在 Apple Silicon Mac 上可生成一个不依赖 Codex 的本地应用：
+
+```bash
+cd app
+npm run build:desktop
+```
+
+构建产物位于 `app/desktop-release/`。桌面包会包含构建当时的私人音乐库
+快照；运行后与 `4173` Web 版共用同一个 Application Support 增量文件，
+所以两端会恢复相同的删除、合并和重复项选择。产物目录已被 Git 忽略，
+不要公开上传或分享。安装、资料迁移和
+更新说明见 [macOS 本地应用指南](docs/MAC_APP.md)。
 
 ## 验证公开构建
 
@@ -53,6 +74,7 @@ npm run import:neodb -- "/absolute/path/to/music_mark.csv"
 cd app
 npm run build
 npm test
+npm run test:build-privacy
 npm run test:sites
 npm run preview
 ```

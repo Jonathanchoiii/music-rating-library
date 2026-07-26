@@ -3,7 +3,9 @@
 # Dependencies and generated output
 app/node_modules/
 app/dist/
+app/desktop-release/
 app/.vite/
+app/electron/assets/*.iconset/
 
 # Local personal library and recovery material
 app/.private/

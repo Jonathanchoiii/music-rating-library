@@ -89,6 +89,7 @@ import {
   mergeSelectedReleases,
   validateRecordshelfBackup,
 } from "./lib/backupMerge.js";
+import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "./lib/sharedStorageKeys.js";
 
 const USER_STATE_KEY = "recordshelf-user-state-v2";
 const LEGACY_USER_STATE_KEY = "recordshelf-user-state-v1";
@@ -923,7 +924,7 @@ function LibraryApp() {
 
   function restoreFactorySettings() {
     const acknowledged = window.confirm(
-      "恢复出厂设置会清除这个浏览器中的手动添加、编辑、删除、艺人映射、筛选条件和 NeoDB 同步状态，并恢复初始音乐库。\n\n是否继续？",
+      "恢复出厂设置会清除 Web 与 Mac 共用的手动添加、编辑、删除、重复项取舍、艺人映射、筛选条件和 NeoDB 同步状态，并恢复初始音乐库。\n\n是否继续？",
     );
     if (!acknowledged) return;
     const finallyConfirmed = window.confirm(
@@ -940,6 +941,7 @@ function LibraryApp() {
       LIBRARY_FILTER_STORAGE_KEY,
       NEODB_SYNC_STATE_KEY,
       NEODB_OAUTH_CLIENT_KEY,
+      DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
     ].forEach((key) => window.localStorage.removeItem(key));
     [NEODB_ACCESS_TOKEN_KEY, NEODB_OAUTH_PENDING_KEY].forEach((key) =>
       window.sessionStorage.removeItem(key),

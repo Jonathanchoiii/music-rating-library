@@ -37,12 +37,37 @@ import {
   removeResolvedDuplicateArtistCandidates,
 } from "../lib/artists.js";
 import { normalizeText } from "../lib/music.js";
+import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "../lib/sharedStorageKeys.js";
 
 function updatedState(state, updater) {
   return {
     ...state,
     identities: updater(state.identities ?? []),
   };
+}
+
+function loadDismissedArtistDuplicateKeys() {
+  try {
+    const saved = JSON.parse(
+      window.localStorage.getItem(
+        DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
+      ) ?? "[]",
+    );
+    return new Set(
+      Array.isArray(saved)
+        ? saved.filter((key) => typeof key === "string")
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDismissedArtistDuplicateKeys(keys) {
+  window.localStorage.setItem(
+    DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
+    JSON.stringify([...keys].sort()),
+  );
 }
 
 export function SettingsDialog({
@@ -265,7 +290,7 @@ function SettingsHome({
       </div>
 
       <div className="settings-reset-zone">
-        <p>高级操作 · 清除这个浏览器中的本地修改与同步状态</p>
+        <p>高级操作 · 清除 Web 与 Mac 共用的本地修改与同步状态</p>
         <button
           type="button"
           className="settings-reset-button"
@@ -301,6 +326,9 @@ function ArtistManager({
   const [duplicateScanCompleted, setDuplicateScanCompleted] = useState(false);
   const [duplicateCandidates, setDuplicateCandidates] = useState([]);
   const [duplicateSelections, setDuplicateSelections] = useState({});
+  const [dismissedDuplicateKeys, setDismissedDuplicateKeys] = useState(
+    loadDismissedArtistDuplicateKeys,
+  );
   const duplicateListRef = useRef(null);
   const duplicateScrollRestoreRef = useRef(null);
   const scriptReconciledRef = useRef(false);
@@ -578,7 +606,7 @@ function ArtistManager({
       const candidates = findPossibleDuplicateArtistGroups(
         releases,
         identityState,
-      );
+      ).filter((candidate) => !dismissedDuplicateKeys.has(candidate.key));
       duplicateScrollRestoreRef.current = {
         nextKey: "",
         anchorOffset: 0,
@@ -600,6 +628,12 @@ function ArtistManager({
   }
 
   function dismissDuplicateCandidate(candidateKey) {
+    setDismissedDuplicateKeys((current) => {
+      const next = new Set(current);
+      next.add(candidateKey);
+      saveDismissedArtistDuplicateKeys(next);
+      return next;
+    });
     removeDuplicateCandidatesFromCurrentBatch(
       (candidate) => candidate.key === candidateKey,
       candidateKey,
@@ -1050,7 +1084,8 @@ function ArtistManager({
 
         {duplicateScanCompleted && !duplicateCandidates.length ? (
           <p className="artist-duplicate-scan-empty">
-            当前没有待判断的相似艺人。已忽略的候选可通过“重新扫描”再次显示。
+            当前没有待判断的相似艺人。已确认“不是同一艺人”的候选会被记住，
+            不会在下次扫描时重复出现。
           </p>
         ) : null}
 

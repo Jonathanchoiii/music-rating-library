@@ -6,6 +6,7 @@ import {
   verifyArtistIdentities,
   verifyReleaseTypes,
 } from "./worker/index.js";
+import { handleSharedStateRequest } from "./shared-state/index.mjs";
 
 const VIRTUAL_LIBRARY_ID = "virtual:recordshelf-library";
 const RESOLVED_VIRTUAL_LIBRARY_ID = `\0${VIRTUAL_LIBRARY_ID}`;
@@ -13,6 +14,8 @@ const PRIVATE_LIBRARY_PATH = path.resolve(
   import.meta.dirname,
   ".private/neodb-library.local.json",
 );
+const INCLUDE_PRIVATE_DESKTOP_LIBRARY =
+  process.env.RECORDSHELF_LOCAL_DESKTOP === "1";
 
 function privacySafeLibrary(command) {
   return {
@@ -23,12 +26,19 @@ function privacySafeLibrary(command) {
     },
     async load(id) {
       if (id !== RESOLVED_VIRTUAL_LIBRARY_ID) return null;
-      if (command !== "serve") return "export default [];";
+      if (command !== "serve" && !INCLUDE_PRIVATE_DESKTOP_LIBRARY) {
+        return "export default [];";
+      }
       try {
         const library = await fs.readFile(PRIVATE_LIBRARY_PATH, "utf8");
         this.addWatchFile(PRIVATE_LIBRARY_PATH);
         return `export default ${library};`;
       } catch (error) {
+        if (INCLUDE_PRIVATE_DESKTOP_LIBRARY && error?.code === "ENOENT") {
+          throw new Error(
+            "Desktop build requires .private/neodb-library.local.json",
+          );
+        }
         if (error?.code !== "ENOENT") throw error;
         return "export default [];";
       }
@@ -77,6 +87,10 @@ function neoDbCanonicalizeDevApi() {
   return {
     name: "recordshelf-read-only-metadata-api",
     configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        if (await handleSharedStateRequest(request, response)) return;
+        next();
+      });
       server.middlewares.use(
         "/api/neodb/canonicalize",
         async (request, response) => {
