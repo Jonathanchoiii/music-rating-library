@@ -1,0 +1,31 @@
+{
+  "name": "app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "enrich:covers": "node scripts/enrich-cover-art.mjs",
+    "enrich:titles": "node scripts/enrich-canonical-titles.mjs",
+    "enrich:titles:promote-editions": "node scripts/enrich-canonical-titles.mjs --promote-stored-platform-titles",
+    "enrich:types": "node scripts/enrich-release-types.mjs",
+    "enrich:dates": "node scripts/enrich-release-dates.mjs",
+    "enrich:neodb-urls": "node scripts/enrich-neodb-canonical-urls.mjs",
+    "import:neodb": "node scripts/import-neodb-csv.mjs",
+    "repair:neodb-identities": "node scripts/split-merged-neodb-identities.mjs",
+    "preview": "vite preview",
+    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs",
+    "test:sites": "node --test tests/sites-worker.test.mjs"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@vitejs/plugin-react": "5.0.4",
+    "opencc-js": "^1.4.1",
+    "papaparse": "^5.5.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-router-dom": "^7.18.1",
+    "vite": "6.4.2"
+  }
+}

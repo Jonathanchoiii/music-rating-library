@@ -1,0 +1,2 @@
+title,artists,primary_artist,release_type,release_date,genres,listened_at,rated_at,rating_10,comment,cover_url,neodb_url,rym_url,aoty_url,douban_url,apple_music_url,spotify_url,source,source_item_id,is_private
+"Vespertine","Björk","Björk","LP","2001-08-27","Art Pop;Electronic","2026-07-20","2026-07-20T22:10:00+08:00","10","细节像冰晶一样展开。","https://example.com/cover.jpg","https://neodb.social/music/example","","","","","","NEODB","neodb-example","false"

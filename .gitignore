@@ -1,0 +1,26 @@
+.DS_Store
+
+# Dependencies and generated output
+app/node_modules/
+app/dist/
+app/.vite/
+
+# Local personal library and recovery material
+app/.private/
+backups/
+*.local.json
+*music_mark*.csv
+*recordshelf-backup*.json
+
+# Credentials
+.env
+.env.*
+app/.env
+app/.env.*
+!.env.example
+!app/.env.example
+
+# Logs and editor state
+*.log
+.idea/
+.vscode/
