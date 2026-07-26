@@ -43,6 +43,7 @@ import {
   buildNeoDbSyncPlan,
   buildVerifiedNeoDbRemovalCandidates,
   dedupeEquivalentListeningEntries,
+  getOrphanNeoDbLinkedSourceIds,
   getReleaseTypeVerificationFingerprint,
   neoDbMarkHash,
   neoDbMarkToRelease,
@@ -1102,6 +1103,138 @@ test("NeoDB sync appends changed history instead of overwriting an old entry", (
   assert.equal(next[0].listeningEntries.length, 2);
   assert.equal(next[0].listeningEntries[0].comment, "旧短评");
   assert.equal(next[0].listeningEntries[1].comment, "短评\n\n长评");
+});
+
+test("manual release with confirmed NeoDB link updates instead of adding a duplicate", () => {
+  const manual = {
+    id: "release-manual-less-than-a-lover",
+    title: "Less than a Lover",
+    artists: ["JENNIE"],
+    releaseType: "SINGLE",
+    coverUrl: "https://example.com/cover.jpg",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/neodb-album-1",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-manual-1",
+        listenedAt: "2026-07-26",
+        listenedAtPrecision: "DAY",
+        ratedAt: "2026-07-26T09:36:39.132Z",
+        rating10: 7,
+        comment: "手动短评",
+        source: "MANUAL",
+        sourceUrl: null,
+        markedAt: "2026-07-26T09:36:39.132Z",
+        createdAt: "2026-07-26T09:36:39.132Z",
+      },
+    ],
+  };
+  assert.deepEqual(
+    [...getOrphanNeoDbLinkedSourceIds([manual])],
+    ["neodb-album-1"],
+  );
+  const plan = buildNeoDbSyncPlan(
+    [manual],
+    [{ mark: neoDbMark, review: null, logs: [] }],
+  );
+  assert.equal(plan.additions.length, 0);
+  assert.equal(plan.updates.length, 1);
+  assert.equal(plan.updates[0].releaseId, manual.id);
+  const next = applyNeoDbSyncPlan([manual], plan);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].id, manual.id);
+  assert.equal(next[0].listeningEntries.length, 2);
+  assert.equal(next[0].listeningEntries[0].source, "MANUAL");
+  assert.equal(next[0].listeningEntries[1].source, "NEODB");
+  assert.equal(next[0].listeningEntries[1].sourceItemId, "neodb-album-1");
+  assert.equal(next[0].neodbSourceTitle, "Heaven or Las Vegas");
+});
+
+test("orphan NeoDB link still enriches when snapshot hash is unchanged", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "3KJmAMZWxECFhVBSl4Chba",
+      url: "https://neodb.social/album/3KJmAMZWxECFhVBSl4Chba",
+      title: "Less than a Lover",
+    },
+  };
+  const manual = {
+    id: "release-c55a5951-8105-4ec8-9223-d8ba5a9bf050",
+    title: "Less than a Lover",
+    artists: ["JENNIE"],
+    releaseType: "SINGLE",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/3KJmAMZWxECFhVBSl4Chba",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-manual",
+        rating10: 7,
+        comment: "手动短评",
+        source: "MANUAL",
+        createdAt: "2026-07-26T09:36:39.132Z",
+      },
+    ],
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      return new Response(
+        JSON.stringify({ data: [mark], pages: 1, count: 1 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me")) {
+      return new Response(
+        JSON.stringify({ username: "tester" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [manual],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: { "3KJmAMZWxECFhVBSl4Chba": unchangedHash },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(
+      result.plan.updates[0].releaseId,
+      "release-c55a5951-8105-4ec8-9223-d8ba5a9bf050",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("comment-only NeoDB changes do not request another type verification", () => {
