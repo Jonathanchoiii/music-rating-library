@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   mergeArtistIdentityStates,
   mergeReleaseLibraries,
+  mergeSelectedReleases,
   validateRecordshelfBackup,
 } from "../src/lib/backupMerge.js";
 
@@ -40,6 +41,48 @@ test("backup release merge keeps the primary record and adds distinct history", 
   assert.equal(result.historyAdded, 1);
   assert.equal(result.releases[0].listeningEntries.length, 2);
   assert.deepEqual(result.releases[0].titleAliases, ["Translated"]);
+});
+
+test("manual detail merge preserves the chosen record and absorbs unique history", () => {
+  const kept = release("keep", "Keep title", "one");
+  kept.externalLinks.push({
+    provider: "SPOTIFY",
+    url: "https://open.spotify.com/album/keep",
+  });
+  const removed = release("remove", "Removed title", "two");
+  removed.externalLinks[0].url = "https://neodb.social/album/remove";
+  removed.externalLinks.push({
+    provider: "SPOTIFY",
+    url: "https://open.spotify.com/album/remove",
+  });
+  removed.externalLinks.push({
+    provider: "APPLE_MUSIC",
+    url: "https://music.apple.com/cn/album/example/123",
+  });
+
+  const result = mergeSelectedReleases(kept, removed, "NEODB");
+
+  assert.equal(result.keptReleaseId, "keep");
+  assert.equal(result.removedReleaseId, "remove");
+  assert.equal(result.historyAdded, 1);
+  assert.equal(result.release.title, "Keep title");
+  assert.deepEqual(result.release.titleAliases, ["Removed title"]);
+  assert.deepEqual(
+    result.release.listeningEntries.map((entry) => entry.id),
+    ["one", "two"],
+  );
+  assert.deepEqual(
+    result.release.externalLinks
+      .filter((link) => link.provider === "NEODB")
+      .map((link) => link.url),
+    ["https://neodb.social/album/example"],
+  );
+  assert.equal(
+    result.release.externalLinks.some(
+      (link) => link.provider === "APPLE_MUSIC",
+    ),
+    true,
+  );
 });
 
 test("backup release merge keeps different NeoDB identities separate on ID collision", () => {

@@ -138,6 +138,28 @@ function mergeRelease(primary, incoming) {
   return { release: next, historyAdded: history.added };
 }
 
+export function mergeSelectedReleases(
+  keptRelease,
+  removedRelease,
+  matchedProvider,
+) {
+  if (!keptRelease || !removedRelease || keptRelease.id === removedRelease.id) {
+    throw new Error("需要两个不同的发行才能合并");
+  }
+  const incoming = {
+    ...removedRelease,
+    externalLinks: (removedRelease.externalLinks ?? []).filter(
+      (link) => link.provider !== matchedProvider,
+    ),
+  };
+  const merged = mergeRelease(keptRelease, incoming);
+  return {
+    ...merged,
+    removedReleaseId: removedRelease.id,
+    keptReleaseId: keptRelease.id,
+  };
+}
+
 export function mergeReleaseLibraries(primary = [], incoming = []) {
   const releases = primary.map((release) => ({ ...release }));
   const byId = new Map(releases.map((release) => [release.id, release]));

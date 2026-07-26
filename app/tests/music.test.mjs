@@ -7,6 +7,7 @@ import {
   csvRowToRelease,
   detectHeaderMap,
   findExactNeoDbDuplicateGroups,
+  findReleaseByPlatformUrl,
   getCurrentRating,
   getDatePrecision,
   getLatestMarkedAt,
@@ -18,6 +19,7 @@ import {
   normalizeArtistField,
   normalizeExternalReleaseType,
   normalizeNeoDbUrl,
+  normalizeSupportedReleaseUrl,
   normalizeReleaseType,
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
@@ -44,6 +46,78 @@ import {
   pullNeoDbDelta,
   verifyChangedReleaseTypes,
 } from "../src/lib/neodbSync.js";
+
+test("supported release links normalize only exact album platforms", () => {
+  assert.deepEqual(
+    normalizeSupportedReleaseUrl(
+      "https://open.spotify.com/album/abc123?si=tracking",
+    ),
+    {
+      provider: "SPOTIFY",
+      providerLabel: "Spotify",
+      normalizedUrl: "https://open.spotify.com/album/abc123",
+    },
+  );
+  assert.equal(
+    normalizeSupportedReleaseUrl("https://open.spotify.com/track/abc123"),
+    null,
+  );
+});
+
+test("detail merge lookup requires another record on the same exact platform", () => {
+  const releases = [
+    {
+      id: "current",
+      externalLinks: [
+        {
+          provider: "NEODB",
+          url: "https://neodb.social/album/current",
+        },
+      ],
+      listeningEntries: [],
+    },
+    {
+      id: "candidate",
+      externalLinks: [
+        {
+          provider: "NEODB",
+          url: "https://neodb.social/album/candidate",
+        },
+        {
+          provider: "APPLE_MUSIC",
+          url: "https://music.apple.com/cn/album/example/123",
+        },
+      ],
+      listeningEntries: [],
+    },
+  ];
+
+  const found = findReleaseByPlatformUrl(
+    releases,
+    "current",
+    "https://neodb.social/album/candidate?ref=share",
+  );
+  assert.equal(found.status, "FOUND");
+  assert.equal(found.candidate.id, "candidate");
+  assert.equal(found.provider, "NEODB");
+
+  assert.equal(
+    findReleaseByPlatformUrl(
+      releases,
+      "current",
+      "https://music.apple.com/cn/album/example/123",
+    ).status,
+    "PLATFORM_MISMATCH",
+  );
+  assert.equal(
+    findReleaseByPlatformUrl(
+      releases,
+      "current",
+      "https://neodb.social/album/current",
+    ).status,
+    "CURRENT_URL",
+  );
+});
 
 test("exact title evidence promotes the release-language title and preserves the localized alias", () => {
   const release = applyCanonicalTitleEvidence(

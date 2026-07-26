@@ -377,6 +377,139 @@ export function normalizeNeoDbUrl(url = "") {
   }
 }
 
+export function normalizeSupportedReleaseUrl(value = "") {
+  const neoDbUrl = normalizeNeoDbUrl(value);
+  if (neoDbUrl) {
+    return {
+      provider: "NEODB",
+      providerLabel: "NeoDB",
+      normalizedUrl: neoDbUrl,
+    };
+  }
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLocaleLowerCase().replace(/^www\./, "");
+    const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    let provider = null;
+    let providerLabel = "";
+    if (host === "music.apple.com" && pathname.includes("/album/")) {
+      provider = "APPLE_MUSIC";
+      providerLabel = "Apple Music";
+    }
+    if (
+      host === "open.spotify.com" &&
+      /\/(?:intl-[^/]+\/)?album\//i.test(pathname)
+    ) {
+      provider = "SPOTIFY";
+      providerLabel = "Spotify";
+    }
+    if (!provider) return null;
+    parsed.protocol = "https:";
+    parsed.hostname = host;
+    parsed.search = "";
+    parsed.hash = "";
+    parsed.pathname = pathname;
+    return {
+      provider,
+      providerLabel,
+      normalizedUrl: parsed.toString().replace(/\/$/, ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function getReleasePlatformUrls(release, provider) {
+  const values = [
+    ...(release?.externalLinks ?? [])
+      .filter((link) => link.provider === provider)
+      .flatMap((link) => [link.canonicalUrl, link.url]),
+    ...(release?.listeningEntries ?? [])
+      .filter(
+        (entry) =>
+          String(entry.source ?? entry.sourceProvider ?? "").toUpperCase() ===
+          provider,
+      )
+      .flatMap((entry) => [entry.canonicalSourceUrl, entry.sourceUrl]),
+  ];
+  return [
+    ...new Set(
+      values
+        .map(normalizeSupportedReleaseUrl)
+        .filter((item) => item?.provider === provider)
+        .map((item) => item.normalizedUrl),
+    ),
+  ];
+}
+
+export function findReleaseByPlatformUrl(
+  releases,
+  currentReleaseId,
+  inputUrl,
+) {
+  const platform = normalizeSupportedReleaseUrl(inputUrl);
+  if (!platform) {
+    return {
+      status: "UNSUPPORTED_URL",
+      message: "请输入 NeoDB、Apple Music 或 Spotify 的唱片链接。",
+    };
+  }
+  const currentRelease = releases.find(
+    (release) => release.id === currentReleaseId,
+  );
+  if (!currentRelease) {
+    return {
+      status: "CURRENT_NOT_FOUND",
+      message: "当前发行已不存在，请关闭详情后重试。",
+    };
+  }
+  if (!getReleasePlatformUrls(currentRelease, platform.provider).length) {
+    return {
+      status: "PLATFORM_MISMATCH",
+      provider: platform.provider,
+      providerLabel: platform.providerLabel,
+      message: `当前发行没有 ${platform.providerLabel} 链接，不能用该平台确认合并关系。`,
+    };
+  }
+  const matches = releases.filter(
+    (release) =>
+      release.id !== currentReleaseId &&
+      getReleasePlatformUrls(release, platform.provider).includes(
+        platform.normalizedUrl,
+      ),
+  );
+  if (!matches.length) {
+    const pointsToCurrent = getReleasePlatformUrls(
+      currentRelease,
+      platform.provider,
+    ).includes(platform.normalizedUrl);
+    return {
+      status: pointsToCurrent ? "CURRENT_URL" : "NOT_FOUND",
+      provider: platform.provider,
+      providerLabel: platform.providerLabel,
+      message: pointsToCurrent
+        ? "这个链接指向当前发行，请输入另一个条目的链接。"
+        : `音乐库中没有找到使用该 ${platform.providerLabel} 链接的其他条目。`,
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      status: "AMBIGUOUS",
+      provider: platform.provider,
+      providerLabel: platform.providerLabel,
+      matches,
+      message: `该链接命中 ${matches.length} 条记录，请先在“设置 → 疑似重复条目”中处理。`,
+    };
+  }
+  return {
+    status: "FOUND",
+    provider: platform.provider,
+    providerLabel: platform.providerLabel,
+    normalizedUrl: platform.normalizedUrl,
+    candidate: matches[0],
+  };
+}
+
 export function getReleaseNeoDbUrls(release) {
   const urls = [
     ...(release.externalLinks ?? [])

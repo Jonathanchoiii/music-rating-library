@@ -32,6 +32,7 @@ import {
   getReleaseContextMatches,
   getLatestListenedAt,
   getNextVisibleLimit,
+  findReleaseByPlatformUrl,
   normalizeText,
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
@@ -76,6 +77,7 @@ import {
 import {
   mergeArtistIdentityStates,
   mergeReleaseLibraries,
+  mergeSelectedReleases,
   validateRecordshelfBackup,
 } from "./lib/backupMerge.js";
 
@@ -759,6 +761,68 @@ function LibraryApp() {
     );
   }
 
+  function findMergeCandidate(releaseId, inputUrl) {
+    return findReleaseByPlatformUrl(releases, releaseId, inputUrl);
+  }
+
+  function mergeReleaseSelection({
+    currentReleaseId,
+    candidateReleaseId,
+    keepReleaseId,
+    provider,
+  }) {
+    const currentRelease = releases.find(
+      (release) => release.id === currentReleaseId,
+    );
+    const candidateRelease = releases.find(
+      (release) => release.id === candidateReleaseId,
+    );
+    if (
+      !currentRelease ||
+      !candidateRelease ||
+      ![currentReleaseId, candidateReleaseId].includes(keepReleaseId)
+    ) {
+      setToast("合并目标已经变化，请重新查找后再试");
+      return;
+    }
+    const keptRelease =
+      keepReleaseId === currentReleaseId ? currentRelease : candidateRelease;
+    const removedRelease =
+      keepReleaseId === currentReleaseId ? candidateRelease : currentRelease;
+    const mergeResult = mergeSelectedReleases(
+      keptRelease,
+      removedRelease,
+      provider,
+    );
+    setReleases((library) =>
+      library
+        .filter((release) => release.id !== mergeResult.removedReleaseId)
+        .map((release) =>
+          release.id === mergeResult.keptReleaseId
+            ? mergeResult.release
+            : release,
+        ),
+    );
+    setReleaseTypeOverrides((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(
+          ([releaseId]) => releaseId !== mergeResult.removedReleaseId,
+        ),
+      ),
+    );
+    if (mergeResult.keptReleaseId !== currentReleaseId) {
+      navigate(
+        `/releases/${encodeURIComponent(mergeResult.keptReleaseId)}${
+          location.search
+        }`,
+        { replace: true },
+      );
+    }
+    setToast(
+      `已保留《${mergeResult.release.title}》，合并 ${mergeResult.historyAdded} 条独有收听历史并删除另一条发行`,
+    );
+  }
+
   function resolveDuplicateGroup(group, keepReleaseId) {
     const removedReleaseIds = new Set(
       group.releases
@@ -1249,6 +1313,8 @@ function LibraryApp() {
         onClose={() => navigate(`${activeBasePath}?view=${view}`)}
         onAddListening={(releaseId) => setListeningReleaseId(releaseId)}
         onChangeType={updateReleaseType}
+        onFindMergeCandidate={findMergeCandidate}
+        onMergeRelease={mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
       />
       {isAddRoute ? (

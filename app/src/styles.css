@@ -2273,6 +2273,236 @@ textarea:focus-visible {
   color: var(--muted);
 }
 
+.release-merge-panel {
+  margin-top: 18px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.release-merge-entry,
+.release-merge-editor > header,
+.release-merge-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.release-merge-entry > div > span,
+.release-merge-editor > header span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.release-merge-entry h3,
+.release-merge-editor h3 {
+  margin: 4px 0;
+  font-size: 17px;
+}
+
+.release-merge-entry p,
+.release-merge-editor header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.release-merge-editor {
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--surface));
+}
+
+.release-merge-editor > header {
+  align-items: flex-start;
+}
+
+.release-merge-editor form {
+  margin-top: 18px;
+}
+
+.release-merge-editor form > label {
+  margin-bottom: 7px;
+  color: var(--muted-dark);
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.release-merge-editor form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.release-merge-editor input[type="url"] {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--surface);
+}
+
+.release-merge-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, white);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.release-merge-confirmation {
+  margin-top: 18px;
+}
+
+.release-merge-confirmation > p {
+  margin: 0 0 10px;
+  color: var(--muted-dark);
+  font-size: 12px;
+}
+
+.release-merge-choices {
+  display: grid;
+  gap: 8px;
+}
+
+.release-merge-choice {
+  position: relative;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  display: grid;
+  grid-template-columns: 18px 64px minmax(0, 1fr) auto 58px;
+  align-items: center;
+  gap: 11px;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.release-merge-choice:hover,
+.release-merge-choice.is-kept {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+}
+
+.release-merge-choice > input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.release-merge-radio {
+  width: 17px;
+  height: 17px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 4px var(--surface);
+}
+
+.release-merge-choice.is-kept .release-merge-radio {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.release-merge-choice > img,
+.release-merge-cover-placeholder {
+  width: 64px;
+  aspect-ratio: 1;
+  border-radius: var(--radius-cover);
+  object-fit: cover;
+}
+
+.release-merge-cover-placeholder {
+  background: var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  font-weight: 750;
+}
+
+.release-merge-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.release-merge-copy small {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.release-merge-copy strong,
+.release-merge-copy span,
+.release-merge-copy em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.release-merge-copy strong {
+  font-size: 14px;
+}
+
+.release-merge-copy span,
+.release-merge-copy em {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.release-merge-copy em {
+  margin-top: 2px;
+  font-style: normal;
+}
+
+.release-merge-decision {
+  color: var(--muted);
+  display: none;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.release-merge-choice.is-kept .release-merge-decision {
+  color: var(--accent);
+  display: inline-flex;
+}
+
+.release-merge-decision svg {
+  width: 17px;
+  height: 17px;
+}
+
+.release-merge-actions {
+  margin-top: 12px;
+}
+
+.release-merge-actions > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.release-merge-actions .danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .form-dialog,
 .import-dialog,
 .settings-dialog,
@@ -4023,6 +4253,44 @@ button.settings-entry:hover {
   .timeline-meta {
     flex-direction: column;
     gap: 3px;
+  }
+
+  .release-merge-entry,
+  .release-merge-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .release-merge-entry .secondary-button,
+  .release-merge-actions .danger-button {
+    width: 100%;
+  }
+
+  .release-merge-editor {
+    padding: 14px;
+  }
+
+  .release-merge-editor form > div {
+    grid-template-columns: 1fr;
+  }
+
+  .release-merge-editor form .secondary-button {
+    width: 100%;
+  }
+
+  .release-merge-choice {
+    grid-template-columns: 18px 54px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .release-merge-choice > img,
+  .release-merge-cover-placeholder {
+    width: 54px;
+  }
+
+  .release-merge-choice > .rating,
+  .release-merge-decision {
+    display: none;
   }
 
   .form-dialog,

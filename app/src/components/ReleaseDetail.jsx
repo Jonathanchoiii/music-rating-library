@@ -16,6 +16,7 @@ import {
   getReleaseKindLabel,
 } from "../lib/music.js";
 import { Rating } from "./Rating.jsx";
+import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
 
 const providerConfig = {
   APPLE_MUSIC: { label: "在 Apple Music 打开", Icon: AppleLogo },
@@ -29,6 +30,8 @@ export function ReleaseDetail({
   onClose,
   onAddListening,
   onChangeType,
+  onFindMergeCandidate,
+  onMergeRelease,
   onOpenArtist,
 }) {
   if (!release) return null;
@@ -239,6 +242,11 @@ export function ReleaseDetail({
             </li>
           ))}
         </ol>
+        <ReleaseMergePanel
+          release={release}
+          onFindCandidate={onFindMergeCandidate}
+          onMerge={onMergeRelease}
+        />
       </aside>
     </div>
   );
