@@ -1582,6 +1582,28 @@ title,artists,release_type,release_date,genres,listened_at,rated_at,rating_10,co
 Vespertine,Björk,LP,2001-08-27,Art Pop;Electronic,2026-07-20,2026-07-20T22:10:00+08:00,10,"细节像冰晶一样展开。",https://neodb.social/music/example,https://example.com/cover.jpg,NEODB,neodb-example,false
 ```
 
+### 10.11 NeoDB 自动快照与快速对账
+
+日常 NeoDB 同步不得通过抓取完整 HTML 页面后重新导入整库。默认链路为：
+
+1. 使用只读 OAuth API 并行读取 `complete`、`progress`、`wishlist`、`dropped`
+   四种状态的最新首页；
+2. 每轮只额外读取一个跨状态轮换审计页；远端总数下降或用户选择“完整核对”
+   时才读取全部分页；
+3. 以原始 NeoDB `source_item_id` 为主键，对标题、艺人、链接、状态、评分、
+   评论、标记时间、标签及来源条目资料生成内容指纹；
+4. 指纹相同的条目不读取评论详情、不重新写入、不触发元数据平台请求；
+5. 新增或指纹变化项先写入共享数据库，再把规范地址和类型校验放入后台阶段；
+6. 每次成功同步都从当前 NeoDB 来源记录生成一份 UTF-8 CSV 快照。每行必须包含
+   `source_item_id` 与 `content_hash`，以便离线审计和后续增量校正；
+7. CSV 快照只保存在本机
+   `Application Support/RecordShelf/neodb-snapshots`，内容相同则复用已有文件，
+   最多保留最近 20 份不同快照，不进入 Git、公开部署或 OAuth 凭证；
+8. 快照保存失败不得回滚已完成的同步。共享数据库仍是事实来源，CSV 只是本地
+   恢复和审计材料；
+9. CSV 中没有出现的本地条目只能进入待复核，不能据此自动删除。删除保护仍遵守
+   两次完整核对与用户确认规则。
+
 ---
 
 ## 11. Apple Music 与 Spotify 匹配
@@ -2455,6 +2477,20 @@ MVP 可以只记录 owner 可见的匿名产品事件：
 **Given** 用户连续通过两次确认  
 **When** 恢复执行  
 **Then** 清除 Web 与 Mac 共享文件中的用户增量、艺人映射/恢复快照、重复项判断、筛选、发行覆盖和 NeoDB 同步/OAuth 本地状态，并清除当前会话 token，恢复初始目录与默认视图，明确提示“已恢复出厂设置”。
+
+### AC-046 NeoDB 增量快照
+
+**Given** 本地已有 NeoDB 条目 ID 与内容指纹
+**When** 用户执行普通同步且远端总数没有减少
+**Then** 系统并行读取四种收藏状态的最新首页和一个全局轮换审计页，只为新增或指纹变化项读取评论详情；未变化项不得重新写入或触发类型平台请求。
+
+**Given** 本轮核心变化已经写入
+**When** 后台阶段开始
+**Then** 系统把当前 NeoDB 来源记录保存为带 `source_item_id` 与 `content_hash` 的本地 CSV 快照，同时只优先核验变化项地址并抽查少量旧地址；快照失败不得影响同步结果。
+
+**Given** 新快照内容与上一份完全相同
+**When** 系统保存快照
+**Then** 复用已有文件而不制造重复副本；只保留最近 20 份不同内容的私有快照，任何快照都不得包含 OAuth token 或进入公开构建。
 
 ---
 

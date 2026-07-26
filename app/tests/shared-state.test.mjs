@@ -5,7 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import {
   applySharedStateChanges,
+  getNeoDbSnapshotDirectory,
   isAuthoritativeSharedStateRequest,
+  persistNeoDbCsvSnapshot,
   readSharedState,
 } from "../shared-state/index.mjs";
 
@@ -66,6 +68,30 @@ test("shared state persists only approved local keys", async (context) => {
   });
   const onDisk = await readSharedState(statePath);
   assert.deepEqual(onDisk, state);
+});
+
+test("NeoDB CSV snapshots are private, retained locally, and content-addressed", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const payload = {
+    csv: "title,source_item_id\nAlbum,source-one\n",
+    rowCount: 1,
+    syncedAt: "2026-07-26T12:34:56Z",
+  };
+
+  const first = await persistNeoDbCsvSnapshot(payload, statePath);
+  const second = await persistNeoDbCsvSnapshot(payload, statePath);
+  const snapshotPath = path.join(
+    getNeoDbSnapshotDirectory(statePath),
+    first.fileName,
+  );
+  const details = await fs.stat(snapshotPath);
+
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, true);
+  assert.equal(second.fileName, first.fileName);
+  assert.equal(await fs.readFile(snapshotPath, "utf8"), payload.csv);
+  assert.equal(details.mode & 0o777, 0o600);
 });
 
 test("shared state merges changes and honors removals", async (context) => {

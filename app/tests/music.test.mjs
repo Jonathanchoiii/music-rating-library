@@ -37,6 +37,7 @@ import {
   applyNeoDbCanonicalMappings,
   applyNeoDbSyncPlan,
   applyReleaseTypeVerification,
+  buildNeoDbCsvSnapshot,
   buildNeoDbCanonicalAliases,
   buildNeoDbSyncPlan,
   buildVerifiedNeoDbRemovalCandidates,
@@ -47,6 +48,50 @@ import {
   pullNeoDbDelta,
   verifyChangedReleaseTypes,
 } from "../src/lib/neodbSync.js";
+
+test("NeoDB CSV snapshots keep stable source ids and row fingerprints", () => {
+  const snapshot = buildNeoDbCsvSnapshot([
+    {
+      id: "release-one",
+      title: "Primary title",
+      neodbSourceTitle: "NeoDB title",
+      translatedTitle: "译名",
+      artists: ["Artist A", "Artist B"],
+      releaseType: "LP",
+      releaseDate: "2026-07-26",
+      tags: ["tag-a"],
+      externalLinks: [
+        {
+          provider: "NEODB",
+          url: "https://neodb.social/album/source-one",
+        },
+        {
+          provider: "SPOTIFY",
+          url: "https://open.spotify.com/album/platform-one",
+        },
+      ],
+      listeningEntries: [
+        {
+          id: "entry-one",
+          source: "NEODB",
+          sourceItemId: "source-one",
+          sourceUrl: "https://neodb.social/album/source-one",
+          markedAt: "2026-07-26T10:00:00Z",
+          markStatus: "complete",
+          rating10: 9,
+          comment: "Latest comment",
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(snapshot.rowCount, 1);
+  assert.match(snapshot.csv, /source_item_id/);
+  assert.match(snapshot.csv, /source-one/);
+  assert.match(snapshot.csv, /NeoDB title/);
+  assert.match(snapshot.csv, /content_hash/);
+  assert.ok(snapshot.contentHash);
+});
 
 test("supported release links normalize only exact album platforms", () => {
   assert.deepEqual(
@@ -1366,6 +1411,52 @@ test("NeoDB sync compares every music shelf before deciding a record was removed
     );
     assert.equal(result.plan.additions.length, 0);
     assert.equal(result.plan.removals.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ordinary NeoDB sync reads one global rotating audit page", async () => {
+  const requestedPages = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    const shelf = parsed.pathname.match(
+      /\/api\/me\/shelf\/([^/]+)/,
+    )?.[1];
+    if (!shelf) throw new Error(`Unexpected URL: ${url}`);
+    requestedPages.push([
+      shelf,
+      Number(parsed.searchParams.get("page")),
+    ]);
+    return new Response(
+      JSON.stringify({ data: [], pages: 3, count: 0 }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 0,
+        snapshot: {},
+        auditCursor: 0,
+      },
+    );
+
+    assert.equal(requestedPages.length, 5);
+    assert.deepEqual(
+      requestedPages.filter(([, page]) => page === 1).length,
+      4,
+    );
+    assert.deepEqual(
+      requestedPages.filter(([, page]) => page > 1),
+      [["complete", 2]],
+    );
+    assert.equal(result.nextState.auditCursor, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

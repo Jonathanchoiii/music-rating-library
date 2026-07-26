@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,8 @@ const SCHEMA_VERSION = 1;
 const MAX_VALUE_BYTES = 16 * 1024 * 1024;
 const MAX_BODY_BYTES = 24 * 1024 * 1024;
 const MAX_BACKUPS = 20;
+const MAX_NEODB_SNAPSHOTS = 20;
+const MAX_NEODB_SNAPSHOT_BYTES = 20 * 1024 * 1024;
 const writeQueues = new Map();
 const MISSING = Symbol("missing");
 
@@ -25,6 +28,12 @@ export function getSharedStatePath() {
     "RecordShelf",
     "shared-local-state.json",
   );
+}
+
+export function getNeoDbSnapshotDirectory(
+  statePath = getSharedStatePath(),
+) {
+  return path.join(path.dirname(statePath), "neodb-snapshots");
 }
 
 function emptyState() {
@@ -82,6 +91,83 @@ async function atomicWrite(statePath, state) {
   } finally {
     await fs.rm(temporaryPath, { force: true }).catch(() => {});
   }
+}
+
+function safeSnapshotTimestamp(value) {
+  const timestamp = Date.parse(value);
+  return new Date(Number.isFinite(timestamp) ? timestamp : Date.now())
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "Z")
+    .replaceAll(":", "-");
+}
+
+export async function persistNeoDbCsvSnapshot(
+  payload,
+  statePath = getSharedStatePath(),
+) {
+  const csv = typeof payload?.csv === "string" ? payload.csv : "";
+  const byteLength = Buffer.byteLength(csv, "utf8");
+  if (!csv || byteLength > MAX_NEODB_SNAPSHOT_BYTES) {
+    const error = new Error(
+      !csv ? "EMPTY_NEODB_SNAPSHOT" : "NEODB_SNAPSHOT_TOO_LARGE",
+    );
+    error.statusCode = !csv ? 400 : 413;
+    throw error;
+  }
+  const contentHash = createHash("sha256").update(csv).digest("hex");
+  const shortHash = contentHash.slice(0, 16);
+  const snapshotDirectory = getNeoDbSnapshotDirectory(statePath);
+  await fs.mkdir(snapshotDirectory, { recursive: true });
+  const existingSnapshots = (await fs.readdir(snapshotDirectory))
+    .filter((name) => /^neodb-snapshot-.+-[a-f0-9]{16}\.csv$/.test(name))
+    .sort();
+  const existingName = existingSnapshots.find((name) =>
+    name.endsWith(`-${shortHash}.csv`),
+  );
+  if (existingName) {
+    return {
+      fileName: existingName,
+      contentHash,
+      rowCount: Number(payload.rowCount) || 0,
+      reused: true,
+      directoryName: "neodb-snapshots",
+    };
+  }
+
+  const fileName = `neodb-snapshot-${safeSnapshotTimestamp(
+    payload.syncedAt,
+  )}-${shortHash}.csv`;
+  const filePath = path.join(snapshotDirectory, fileName);
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, csv, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    await fs.rename(temporaryPath, filePath);
+    await fs.chmod(filePath, 0o600);
+  } finally {
+    await fs.rm(temporaryPath, { force: true }).catch(() => {});
+  }
+
+  const snapshots = (await fs.readdir(snapshotDirectory))
+    .filter((name) => /^neodb-snapshot-.+-[a-f0-9]{16}\.csv$/.test(name))
+    .sort();
+  await Promise.all(
+    snapshots
+      .slice(0, Math.max(0, snapshots.length - MAX_NEODB_SNAPSHOTS))
+      .map((name) =>
+        fs.rm(path.join(snapshotDirectory, name), { force: true }),
+      ),
+  );
+  return {
+    fileName,
+    contentHash,
+    rowCount: Number(payload.rowCount) || 0,
+    reused: false,
+    directoryName: "neodb-snapshots",
+  };
 }
 
 function isPlainObject(value) {
@@ -538,9 +624,32 @@ export async function handleSharedStateRequest(
     request.url,
     "http://127.0.0.1",
   ).pathname;
-  if (pathname !== "/api/local-state") return false;
+  if (
+    !["/api/local-state", "/api/local-neodb-snapshot"].includes(
+      pathname,
+    )
+  ) {
+    return false;
+  }
 
   try {
+    if (pathname === "/api/local-neodb-snapshot") {
+      if (request.method !== "POST") {
+        sendJson(response, 405, { error: "METHOD_NOT_ALLOWED" });
+        return true;
+      }
+      if (!isAuthoritativeSharedStateRequest(request)) {
+        sendJson(response, 403, { error: "READ_ONLY_ORIGIN" });
+        return true;
+      }
+      const payload = await readRequestJson(request);
+      sendJson(
+        response,
+        200,
+        await persistNeoDbCsvSnapshot(payload, statePath),
+      );
+      return true;
+    }
     if (request.method === "GET") {
       sendJson(response, 200, await readSharedState(statePath));
       return true;

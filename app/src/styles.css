@@ -3838,6 +3838,7 @@ button.settings-entry:hover {
   border-top: 1px solid var(--line);
   color: var(--muted-dark);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .sync-removal-notice {

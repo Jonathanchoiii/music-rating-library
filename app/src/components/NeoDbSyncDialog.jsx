@@ -21,6 +21,7 @@ import {
   pullNeoDbDelta,
   refreshNeoDbCanonicalIdentity,
   saveNeoDbSyncState,
+  saveNeoDbCsvSnapshot,
   verifyChangedReleaseTypes,
 } from "../lib/neodbSync.js";
 import { findExactNeoDbDuplicateGroups } from "../lib/music.js";
@@ -105,6 +106,16 @@ export function NeoDbSyncDialog({
               .map((item) => item.releaseId),
           ]),
         ];
+        const canonicalPriorityReleaseIds = [
+          ...new Set([
+            ...result.plan.additions.map((item) => item.release.id),
+            ...result.plan.updates
+              .filter((item) =>
+                item.changedMetadataFields.includes("externalLinks"),
+              )
+              .map((item) => item.releaseId),
+          ]),
+        ];
         let removals = result.fullReconcile
           ? []
           : currentState.pendingRemovals ?? [];
@@ -143,14 +154,21 @@ export function NeoDbSyncDialog({
             : "已读取 NeoDB 最新变化；正在后台抽查地址与元数据",
         );
 
-        const canonicalResult = await refreshNeoDbCanonicalIdentity(
-          nextReleases,
-          [...identityPool, ...nextReleases],
-          {
-            auditCursor: currentState.canonicalAuditCursor ?? 0,
-            forceFull: forceFull || result.fullReconcile,
-          },
-        );
+        const [canonicalResult, snapshotResult] = await Promise.all([
+          refreshNeoDbCanonicalIdentity(
+            nextReleases,
+            [...identityPool, ...nextReleases],
+            {
+              auditCursor: currentState.canonicalAuditCursor ?? 0,
+              forceFull: forceFull || result.fullReconcile,
+              priorityReleaseIds: canonicalPriorityReleaseIds,
+            },
+          ),
+          saveNeoDbCsvSnapshot(nextReleases, {
+            remoteCount: result.nextState.remoteCount,
+            syncedAt: result.nextState.lastSyncedAt,
+          }),
+        ]);
         nextReleases = canonicalResult.releases;
         let typeVerification = {
           checked: 0,
@@ -212,6 +230,15 @@ export function NeoDbSyncDialog({
             typeVerification.nextCache ??
             currentState.typeVerificationCache ??
             {},
+          lastCsvSnapshot: snapshotResult.saved
+            ? {
+                fileName: snapshotResult.fileName,
+                contentHash: snapshotResult.contentHash,
+                rowCount: snapshotResult.rowCount,
+                savedAt: result.nextState.lastSyncedAt,
+                reused: snapshotResult.reused,
+              }
+            : currentState.lastCsvSnapshot ?? null,
         };
         saveNeoDbSyncState(nextState);
         setSyncState(nextState);
@@ -222,6 +249,7 @@ export function NeoDbSyncDialog({
           canonicalResult,
           duplicateGroups,
           typeVerification,
+          snapshotResult,
           removalReviewCandidates,
           backgroundPending: false,
         });
@@ -428,7 +456,8 @@ export function NeoDbSyncDialog({
                 <div>
                   <strong>正在对比变化</strong>
                   <span>
-                    正在读取收藏变化、核验规范地址与可靠来源中的发行类型…
+                    正在读取四种收藏状态的最新页，并用本地内容指纹跳过
+                    未变化记录…
                   </span>
                 </div>
               </div>
@@ -440,7 +469,8 @@ export function NeoDbSyncDialog({
                 <div>
                   <strong>收藏变化已经写入</strong>
                   <span>
-                    正在后台抽查旧地址，并只核验类型相关的变化；完成前可以继续查看本轮结果。
+                    正在保存本地 CSV 快照、轮换抽查旧地址，并只核验
+                    类型相关的变化。
                   </span>
                 </div>
               </div>
@@ -489,6 +519,18 @@ export function NeoDbSyncDialog({
                     类型校验：缓存复用{" "}
                     {lastResult.typeVerification.cacheHits ?? 0} 张，联网核验{" "}
                     {lastResult.typeVerification.queried ?? 0} 张。
+                  </p>
+                ) : null}
+                {lastResult.snapshotResult &&
+                !lastResult.backgroundPending ? (
+                  <p className="sync-cache-summary">
+                    {lastResult.snapshotResult.saved
+                      ? `本地 CSV 快照${
+                          lastResult.snapshotResult.reused
+                            ? "内容未变化，已复用"
+                            : "已保存"
+                        }：${lastResult.snapshotResult.fileName}`
+                      : "当前环境不支持自动保存本地 CSV 快照；同步数据仍已正常写入。"}
                   </p>
                 ) : null}
               </div>
@@ -614,10 +656,11 @@ export function NeoDbSyncDialog({
               </button>
             </div>
             <p className="sync-footnote">
-              NeoDB 增量变化会先写入，旧地址抽查和类型核验随后在后台完成。
+              快速同步只读取四个最新首页和一个轮换审计页，按 NeoDB ID
+              与内容指纹对账，并在本机保留最近 20 份去重 CSV 快照。
               评分、评论或收听时间单独变化不会重查类型；标题、来源类型、
-              精确外链和规范地址未变时直接复用上次证据。地址最终相同的记录
-              仍进入“疑似重复条目”，不会自动删除或静默合并。
+              精确外链和规范地址未变时直接复用上次证据。完整核对仅在你
+              主动选择或远端总数减少时运行。
             </p>
           </>
         )}
