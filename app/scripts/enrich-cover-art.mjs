@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -11,6 +12,16 @@ const DEFAULT_COVER_DIRECTORY = path.resolve(
   "../.private/covers",
 );
 const PRIVATE_COVER_ROUTE = "/private-covers";
+
+function supportCoverDirectory() {
+  return path.join(
+    os.homedir(),
+    "Library",
+    "Application Support",
+    "RecordShelf",
+    "covers",
+  );
+}
 const requestTimeoutMs = 15_000;
 const userAgent = "RecordShelf/0.1 (local personal music archive)";
 
@@ -391,7 +402,24 @@ export async function runCoverEnrichment({
 }
 
 export function getPrivateCoverDirectory() {
+  if (process.env.RECORDSHELF_COVER_DIRECTORY) {
+    return path.resolve(process.env.RECORDSHELF_COVER_DIRECTORY);
+  }
+  // Packaged Electron cannot write into asar/resources; cache new covers here.
+  if (process.versions?.electron) {
+    return supportCoverDirectory();
+  }
   return DEFAULT_COVER_DIRECTORY;
+}
+
+export function getBundledPrivateCoverDirectory() {
+  if (process.env.RECORDSHELF_BUNDLED_COVER_DIRECTORY) {
+    return path.resolve(process.env.RECORDSHELF_BUNDLED_COVER_DIRECTORY);
+  }
+  if (process.versions?.electron && process.resourcesPath) {
+    return path.join(process.resourcesPath, "covers");
+  }
+  return null;
 }
 
 export function getPrivateCoverRoutePrefix() {

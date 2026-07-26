@@ -51,10 +51,21 @@
     "files": [
       "electron/**/*",
       "shared-state/**/*",
+      "scripts/private-covers-http.mjs",
+      "scripts/enrich-cover-art.mjs",
       "src/lib/sharedStorageKeys.js",
       "dist/desktop-client/**/*",
       "worker/index.js",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".private/covers",
+        "to": "covers",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
       "category": "public.app-category.music",

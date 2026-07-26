@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  getBundledPrivateCoverDirectory,
   getPrivateCoverDirectory,
   getPrivateCoverRoutePrefix,
   runCoverEnrichment,
@@ -47,7 +48,7 @@ async function readJsonBody(request, limit = 1_000_000) {
   }
 }
 
-function safeCoverFilePath(pathname) {
+function safeCoverFileName(pathname) {
   const prefix = `${getPrivateCoverRoutePrefix()}/`;
   if (!pathname.startsWith(prefix)) return null;
   const fileName = decodeURIComponent(pathname.slice(prefix.length));
@@ -55,7 +56,27 @@ function safeCoverFilePath(pathname) {
     return null;
   }
   if (!/^[a-zA-Z0-9._-]+$/.test(fileName)) return null;
-  return path.join(getPrivateCoverDirectory(), fileName);
+  return fileName;
+}
+
+async function resolveCoverFilePath(pathname) {
+  const fileName = safeCoverFileName(pathname);
+  if (!fileName) return { fileName: null, filePath: null };
+  const candidates = [
+    path.join(getPrivateCoverDirectory(), fileName),
+    getBundledPrivateCoverDirectory()
+      ? path.join(getBundledPrivateCoverDirectory(), fileName)
+      : null,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return { fileName, filePath: candidate };
+    } catch {
+      // try next location
+    }
+  }
+  return { fileName, filePath: null };
 }
 
 export async function handlePrivateCoverStatic(request, response) {
@@ -68,15 +89,13 @@ export async function handlePrivateCoverStatic(request, response) {
     response.end();
     return true;
   }
-  const filePath = safeCoverFilePath(url.pathname);
-  if (!filePath) {
+  const { fileName, filePath } = await resolveCoverFilePath(url.pathname);
+  if (!fileName) {
     response.statusCode = 403;
     response.end();
     return true;
   }
-  try {
-    await fs.access(filePath);
-  } catch {
+  if (!filePath) {
     response.statusCode = 404;
     response.end();
     return true;
