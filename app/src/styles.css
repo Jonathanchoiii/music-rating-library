@@ -2019,6 +2019,7 @@ textarea:focus-visible {
   grid-template-columns: minmax(190px, 42%) 1fr;
   gap: 26px;
   align-items: end;
+  margin-bottom: 10px;
 }
 
 .detail-hero > img,
@@ -4236,7 +4237,6 @@ button.settings-entry:hover {
     grid-template-columns: 112px 1fr;
     gap: 16px;
     align-items: center;
-    margin-bottom: 10px;
   }
 
   .detail-summary h2 {
