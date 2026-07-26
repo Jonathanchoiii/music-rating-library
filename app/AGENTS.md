@@ -15,6 +15,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - The public visual reference is `../docs/recordshelf-preview.png`; private design-history captures remain local-only.
 - Preserve the cover-first warm-white visual system: near-black type, cool gray metadata, restrained violet active states, amber ratings, tiny cover radii, hairline dividers, and almost no shadow.
 - Mobile uses bottom navigation and a three-column cover grid; desktop uses a slim left navigation and a six-to-seven-column cover grid.
+- Mobile detail-header icon-only actions use a fixed 44 × 44 hit target with the SVG centered independently of the hidden text baseline.
 - Releases and listening entries are separate entities. Never overwrite historical scores or comments when a new listening entry is created.
 - Local development may load an ignored private NeoDB export. In that export, the `info` value is shaped as `artist:<name>`; remove only the leading `artist:` field label and treat the complete remainder as the artist display/grouping name. Production and public builds must use synthetic demo records.
 - Preserve NeoDB mark status. A `wishlist` timestamp is a mark date, not a listening or rating date.

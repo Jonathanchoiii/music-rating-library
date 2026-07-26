@@ -4266,9 +4266,23 @@ button.settings-entry:hover {
   }
 
   .timeline-header .secondary-button {
+    flex: 0 0 44px;
     width: 44px;
+    height: 44px;
+    min-height: 44px;
     padding: 0;
+    display: grid;
+    place-items: center;
     font-size: 0;
+    line-height: 0;
+  }
+
+  .timeline-header .secondary-button svg {
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    display: block;
+    flex: none;
   }
 
   .timeline-meta {
