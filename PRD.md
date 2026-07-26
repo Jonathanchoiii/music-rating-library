@@ -1943,6 +1943,22 @@ MVP 不需要引入独立搜索服务。
 - 至少保留 14 天；
 - 每月验证一次恢复流程；
 - 设置页显示最近成功备份时间，但不暴露基础设施信息。
+
+### 14.6 Web 与 macOS 交付分支
+
+- `main` 只作为共享核心与数据协议主线，包含响应式界面、领域模型、导入/同步
+  规则、共享状态协议和跨端测试。
+- `web` 是长期 Web 交付分支，只增加公开演示、Web 托管、线上环境变量和
+  浏览器部署相关差异；不得包含真实本地数据库或 macOS 私人构建产物。
+- `mac` 是长期 macOS 客户端交付分支，只增加 Electron 包装、本机签名、
+  Application Support 数据目录和桌面安装相关差异。
+- `web` 与 `mac` 从同一个已验证共享核心提交建立，但之后作为两条独立交付线
+  发布；不得建立互不相关的 Git 历史，否则共享数据 schema 和修复无法可靠同步。
+- 跨端修复先进入 `main`，通过测试后分别合并到 `web` 与 `mac`。平台专属改动
+  留在对应交付分支，不直接反向覆盖另一平台。
+- 两条交付分支必须使用同一 `shared-local-state` schema version 与向后兼容
+  迁移规则；任一平台升级 schema 前，都要先验证另一分支能够读取旧版本并安全
+  忽略未知字段。
 - local-first MVP 的真实数据不由 GitHub 备份；用户应同时备份
   `app/.private/` 和
   `~/Library/Application Support/RecordShelf/shared-local-state.json`，
