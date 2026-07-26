@@ -14,7 +14,7 @@ npm run build:desktop
 输出：
 
 - `app/desktop-release/mac-arm64/RecordShelf.app`
-- `app/desktop-release/RecordShelf-0.1.1-arm64.dmg`
+- `app/desktop-release/RecordShelf-0.1.2-arm64.dmg`
 
 生成的 `.app` 与 DMG 包含构建当时的私人音乐资料，不要公开上传或分享。
 
@@ -29,6 +29,9 @@ npm run build:desktop
   `~/Library/Application Support/RecordShelf/shared-local-state.json`。
   删除、手动合并、疑似重复条目取舍、艺人映射、筛选和安全的同步状态都会
   在两端恢复；NeoDB 登录 token 不会写入该文件。
+- 两端修改按稳定 ID 三方合并；同一字段冲突时保留共享文件里更新更晚的值，
+  删除和人工取舍不会被旧端复活。每次写入前自动保存上一 revision，滚动保留
+  最近 20 份私有恢复快照。
 - 从旧版升级时，应用会自动迁移已有 Web 增量。历史上使用过 `5173` 的资料
   也可通过在该端口加载新版一次并入同一共享文件。
 - 窗口顶部保留可拖拽区域，可按住顶部空白处移动 Mac 窗口。

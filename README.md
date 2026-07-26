@@ -52,6 +52,8 @@ npm run import:neodb -- "/absolute/path/to/music_mark.csv"
   Web 与 Mac 共用的删改、合并、艺人映射和同步增量。
 
 这些私人资料都不会由 GitHub 代为备份。
+共享文件每次更新前会在相邻的 `.backups/` 目录保留上一 revision，滚动保留
+最近 20 份，以便误操作后恢复。
 
 ## macOS 本地应用
 

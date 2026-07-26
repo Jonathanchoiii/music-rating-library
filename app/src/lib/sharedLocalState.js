@@ -50,15 +50,39 @@ async function requestSharedState(options) {
   return response.json();
 }
 
-async function pushChanges(changes) {
+async function pushChanges(
+  changes,
+  {
+    baseStorage = {},
+    mergeMode = "three-way",
+  } = {},
+) {
   if (!Object.keys(changes).length) return null;
   const state = await requestSharedState({
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sourceId, changes }),
+    body: JSON.stringify({
+      sourceId,
+      changes,
+      baseStorage,
+      mergeMode,
+      baseRevision: knownRevision,
+    }),
   });
   knownRevision = state.revision ?? knownRevision;
   return state;
+}
+
+function reconcileWithAuthoritativeState(state) {
+  if (!state?.storage) return false;
+  const current = localSnapshot();
+  if (!Object.keys(changedValues(current, state.storage)).length) {
+    lastSnapshot = current;
+    return false;
+  }
+  applyRemoteStorage(state.storage);
+  lastSnapshot = localSnapshot();
+  return true;
 }
 
 export async function bootstrapSharedLocalState() {
@@ -81,9 +105,13 @@ export async function bootstrapSharedLocalState() {
     ) {
       const seeded = await pushChanges(
         changedValues(remote.storage ?? {}, local),
+        {
+          baseStorage: remoteIsEmpty ? remote.storage ?? {} : {},
+          mergeMode: remoteIsEmpty ? "three-way" : "preserve-latest",
+        },
       );
       knownRevision = seeded?.revision ?? 0;
-      lastSnapshot = localSnapshot();
+      reconcileWithAuthoritativeState(seeded);
       window.localStorage.setItem(MIGRATION_MARKER_KEY, "1");
       return { migrated: true, available: true };
     }
@@ -106,7 +134,19 @@ export function flushSharedLocalState() {
   if (!Object.keys(changes).length) return Promise.resolve();
   const previousSnapshot = lastSnapshot;
   lastSnapshot = nextSnapshot;
-  syncInFlight = pushChanges(changes)
+  syncInFlight = pushChanges(changes, {
+    baseStorage: Object.fromEntries(
+      Object.keys(changes).map((key) => [
+        key,
+        previousSnapshot[key] ?? null,
+      ]),
+    ),
+  })
+    .then((state) => {
+      if (reconcileWithAuthoritativeState(state)) {
+        window.location.reload();
+      }
+    })
     .catch((error) => {
       console.warn("RecordShelf 本地修改将在稍后重试", error);
       lastSnapshot = previousSnapshot;
@@ -137,7 +177,19 @@ function sendPendingChanges() {
   const changes = changedValues(lastSnapshot, nextSnapshot);
   if (!Object.keys(changes).length) return;
   const body = new Blob(
-    [JSON.stringify({ sourceId, changes })],
+    [
+      JSON.stringify({
+        sourceId,
+        changes,
+        baseStorage: Object.fromEntries(
+          Object.keys(changes).map((key) => [
+            key,
+            lastSnapshot[key] ?? null,
+          ]),
+        ),
+        baseRevision: knownRevision,
+      }),
+    ],
     { type: "application/json" },
   );
   navigator.sendBeacon?.(LOCAL_STATE_ENDPOINT, body);
