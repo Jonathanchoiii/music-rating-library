@@ -12,6 +12,7 @@ import {
   groupReleasesByArtistIdentity,
   loadArtistIdentityState,
   mergePossibleDuplicateArtists,
+  removeResolvedDuplicateArtistCandidates,
   releaseMatchesMappedArtistQuery,
   saveArtistIdentityState,
   sortArtistGroups,
@@ -182,29 +183,59 @@ test("duplicate artist scan suggests script variants without auto-merging them",
   );
 });
 
-test("duplicate artist scan uses conservative shared-character suggestions", () => {
+test("duplicate artist scan keeps structured Chinese and Latin alias candidates", () => {
   const candidates = findPossibleDuplicateArtistGroups(
     [
       release("one", "魏如萱"),
       release("two", "魏如萱 Waa"),
-      release("three", "魏如"),
     ],
     { schemaVersion: 2, identities: [] },
   );
 
+  assert.equal(candidates.length, 1);
   assert.equal(
-    candidates.some((candidate) =>
-      candidate.members.some(
-        (member) => member.canonicalName === "魏如萱 Waa",
-      ),
+    candidates[0].evidence.some(
+      (evidence) => evidence.type === "NAME_CONTAINS",
     ),
     true,
   );
+});
+
+test("duplicate artist scan rejects a shared three-character fragment", () => {
+  const candidates = findPossibleDuplicateArtistGroups(
+    [
+      release("one", "海朋森乐队"),
+      release("two", "海朋森之夜"),
+    ],
+    { schemaVersion: 2, identities: [] },
+  );
+
+  assert.deepEqual(candidates, []);
+});
+
+test("duplicate artist scan requires shared release evidence for fuzzy names", () => {
+  const withoutSharedWork = findPossibleDuplicateArtistGroups(
+    [
+      release("one", "PinkPantheress"),
+      release("two", "PinkPanteress"),
+    ],
+    { schemaVersion: 2, identities: [] },
+  );
+  const withSharedWork = findPossibleDuplicateArtistGroups(
+    [
+      { ...release("one", "PinkPantheress"), title: "Fancy That" },
+      { ...release("two", "PinkPanteress"), title: "Fancy That" },
+    ],
+    { schemaVersion: 2, identities: [] },
+  );
+
+  assert.deepEqual(withoutSharedWork, []);
+  assert.equal(withSharedWork.length, 1);
   assert.equal(
-    candidates.some((candidate) =>
-      candidate.members.some((member) => member.canonicalName === "魏如"),
+    withSharedWork[0].evidence.some(
+      (evidence) => evidence.type === "SHARED_RELEASE",
     ),
-    false,
+    true,
   );
 });
 
@@ -284,6 +315,38 @@ test("confirmed duplicate artists merge into the selected identity", () => {
   assert.equal(
     merged.identities[0].musicBrainzMbid,
     "00000000-0000-0000-0000-000000000001",
+  );
+});
+
+test("resolved raw-credit candidate does not collapse unrelated candidates", () => {
+  const resolved = {
+    key: "resolved",
+    members: [
+      { id: "raw-one", identityId: "" },
+      { id: "raw-two", identityId: "" },
+    ],
+  };
+  const overlapping = {
+    key: "overlapping",
+    members: [
+      { id: "raw-one", identityId: "" },
+      { id: "raw-three", identityId: "" },
+    ],
+  };
+  const unrelated = {
+    key: "unrelated",
+    members: [
+      { id: "raw-four", identityId: "" },
+      { id: "raw-five", identityId: "" },
+    ],
+  };
+
+  assert.deepEqual(
+    removeResolvedDuplicateArtistCandidates(
+      [resolved, overlapping, unrelated],
+      resolved,
+    ).map((candidate) => candidate.key),
+    ["unrelated"],
   );
 });
 

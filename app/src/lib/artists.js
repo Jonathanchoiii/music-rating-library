@@ -645,6 +645,25 @@ export function mergePossibleDuplicateArtists(
   });
 }
 
+export function removeResolvedDuplicateArtistCandidates(
+  candidates = [],
+  resolvedCandidate,
+) {
+  const resolvedMemberIds = new Set(
+    (resolvedCandidate?.members ?? [])
+      .flatMap((member) => [member.id, member.identityId])
+      .filter(Boolean),
+  );
+  return candidates.filter(
+    (candidate) =>
+      !candidate.members.some((member) =>
+        [member.id, member.identityId]
+          .filter(Boolean)
+          .some((memberId) => resolvedMemberIds.has(memberId)),
+      ),
+  );
+}
+
 export function applyMusicBrainzArtistAuditResults(
   rawState,
   results = [],

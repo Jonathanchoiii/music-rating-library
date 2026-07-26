@@ -3102,22 +3102,6 @@ button.settings-entry:hover {
   font-size: 10px;
 }
 
-.artist-duplicate-broad-toggle {
-  margin: 0 0 9px;
-  padding: 4px 0;
-  border: 0;
-  color: var(--accent);
-  background: transparent;
-  font-size: 10px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.artist-duplicate-broad-toggle:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
 .artist-duplicate-candidates > article {
   padding: 11px;
   border: 1px solid var(--line);

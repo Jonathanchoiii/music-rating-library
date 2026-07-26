@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowLeft,
   ArrowSquareOut,
@@ -28,6 +34,7 @@ import {
   getRawArtistCreditCounts,
   groupReleasesByArtistIdentity,
   mergePossibleDuplicateArtists,
+  removeResolvedDuplicateArtistCandidates,
 } from "../lib/artists.js";
 import { normalizeText } from "../lib/music.js";
 
@@ -294,8 +301,8 @@ function ArtistManager({
   const [duplicateScanCompleted, setDuplicateScanCompleted] = useState(false);
   const [duplicateCandidates, setDuplicateCandidates] = useState([]);
   const [duplicateSelections, setDuplicateSelections] = useState({});
-  const [showBroadDuplicateCandidates, setShowBroadDuplicateCandidates] =
-    useState(false);
+  const duplicateListRef = useRef(null);
+  const duplicateScrollRestoreRef = useRef(null);
   const scriptReconciledRef = useRef(false);
   const automaticAuditStartedRef = useRef(false);
 
@@ -354,27 +361,6 @@ function ArtistManager({
       ).length,
     };
   }, [identityState]);
-  const primaryDuplicateCandidates = useMemo(
-    () =>
-      duplicateCandidates.filter((candidate) =>
-        candidate.evidence.some(
-          (evidence) => evidence.type !== "SHARED_CHARACTERS",
-        ),
-      ),
-    [duplicateCandidates],
-  );
-  const broadDuplicateCandidates = useMemo(
-    () =>
-      duplicateCandidates.filter((candidate) =>
-        candidate.evidence.every(
-          (evidence) => evidence.type === "SHARED_CHARACTERS",
-        ),
-      ),
-    [duplicateCandidates],
-  );
-  const visibleDuplicateCandidates = showBroadDuplicateCandidates
-    ? duplicateCandidates
-    : primaryDuplicateCandidates;
 
   useEffect(() => {
     if (
@@ -385,6 +371,32 @@ function ArtistManager({
     }
     setSelectedId(identityState.identities[0]?.id ?? "");
   }, [identityState.identities, selectedId]);
+
+  useLayoutEffect(() => {
+    const pending = duplicateScrollRestoreRef.current;
+    const list = duplicateListRef.current;
+    if (!pending || !list) return;
+
+    if (pending.nextKey) {
+      const nextCandidate = [
+        ...list.querySelectorAll("[data-duplicate-candidate]"),
+      ].find(
+        (element) =>
+          element.dataset.duplicateCandidate === pending.nextKey,
+      );
+      if (nextCandidate) {
+        const currentOffset =
+          nextCandidate.getBoundingClientRect().top -
+          list.getBoundingClientRect().top;
+        list.scrollTop += currentOffset - pending.anchorOffset;
+      } else {
+        list.scrollTop = pending.scrollTop;
+      }
+    } else {
+      list.scrollTop = pending.scrollTop;
+    }
+    duplicateScrollRestoreRef.current = null;
+  }, [duplicateCandidates]);
 
   useEffect(() => {
     setCanonicalNameDraft(selectedIdentity?.canonicalName ?? "");
@@ -567,9 +579,13 @@ function ArtistManager({
         releases,
         identityState,
       );
+      duplicateScrollRestoreRef.current = {
+        nextKey: "",
+        anchorOffset: 0,
+        scrollTop: 0,
+      };
       setDuplicateCandidates(candidates);
       setDuplicateSelections({});
-      setShowBroadDuplicateCandidates(false);
       setDuplicateScanCompleted(true);
       onToast?.(
         candidates.length
@@ -584,14 +600,56 @@ function ArtistManager({
   }
 
   function dismissDuplicateCandidate(candidateKey) {
-    setDuplicateCandidates((current) =>
-      current.filter((candidate) => candidate.key !== candidateKey),
+    removeDuplicateCandidatesFromCurrentBatch(
+      (candidate) => candidate.key === candidateKey,
+      candidateKey,
     );
-    setDuplicateSelections((current) => {
-      const next = { ...current };
-      delete next[candidateKey];
-      return next;
-    });
+  }
+
+  function removeDuplicateCandidatesFromCurrentBatch(
+    shouldRemove,
+    anchorKey,
+  ) {
+    const nextCandidates = duplicateCandidates.filter(
+      (candidate) => !shouldRemove(candidate),
+    );
+    const anchorIndex = duplicateCandidates.findIndex(
+      (candidate) => candidate.key === anchorKey,
+    );
+    const nextCandidate =
+      nextCandidates[
+        Math.min(
+          Math.max(anchorIndex, 0),
+          Math.max(nextCandidates.length - 1, 0),
+        )
+      ];
+    const list = duplicateListRef.current;
+    const anchor = list
+      ? [...list.querySelectorAll("[data-duplicate-candidate]")].find(
+          (element) =>
+            element.dataset.duplicateCandidate === anchorKey,
+        )
+      : null;
+    duplicateScrollRestoreRef.current = {
+      nextKey: nextCandidate?.key ?? "",
+      anchorOffset:
+        anchor && list
+          ? anchor.getBoundingClientRect().top -
+            list.getBoundingClientRect().top
+          : 0,
+      scrollTop: list?.scrollTop ?? 0,
+    };
+    setDuplicateCandidates(nextCandidates);
+    const remainingKeys = new Set(
+      nextCandidates.map((candidate) => candidate.key),
+    );
+    setDuplicateSelections((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([key]) =>
+          remainingKeys.has(key),
+        ),
+      ),
+    );
   }
 
   function mergeDuplicateCandidate(candidate) {
@@ -625,28 +683,20 @@ function ArtistManager({
         selectedMemberId,
       );
       onChange(nextState);
-      const memberIds = new Set(
-        candidate.members.flatMap((member) => [
-          member.id,
-          member.identityId,
-        ]),
+      const remainingCandidates =
+        removeResolvedDuplicateArtistCandidates(
+          duplicateCandidates,
+          candidate,
+        );
+      const remainingKeys = new Set(
+        remainingCandidates.map((item) => item.key),
       );
-      setDuplicateCandidates((current) =>
-        current.filter(
-          (item) =>
-            !item.members.some(
-              (member) =>
-                memberIds.has(member.id) ||
-                memberIds.has(member.identityId),
-            ),
-        ),
+      removeDuplicateCandidatesFromCurrentBatch(
+        (item) => !remainingKeys.has(item.key),
+        candidate.key,
       );
-      const targetIdentityId =
-        selectedMember.identityId ||
-        candidate.members.find((member) => member.identityId)?.identityId;
-      if (targetIdentityId) setSelectedId(targetIdentityId);
       onToast?.(
-        `已关联为「${selectedMember.canonicalName}」，原始署名保持不变`,
+        `已关联为「${selectedMember.canonicalName}」，可继续处理当前扫描列表`,
       );
     } catch (error) {
       onToast?.(error.message || "暂时无法关联这组艺人");
@@ -975,7 +1025,7 @@ function ArtistManager({
             <span>
               <strong>重复艺人扫描</strong>
               <small>
-                按简繁体、相近名字和连续相同字符生成候选，不会自动合并
+                按完整同名、简繁体、外部 ID 与共同作品证据生成候选
               </small>
             </span>
           </div>
@@ -1005,26 +1055,19 @@ function ArtistManager({
         ) : null}
 
         {duplicateCandidates.length ? (
-          <div className="artist-duplicate-candidates">
+          <div
+            className="artist-duplicate-candidates"
+            ref={duplicateListRef}
+          >
             <p>
-              优先显示 {primaryDuplicateCandidates.length} 组较强候选。
-              相似名字只是提示，请依据作品和外部 ID 判断。
+              发现 {duplicateCandidates.length} 组较强候选。字符片段相同但
+              没有身份或作品依据的艺人已被排除。
             </p>
-            {broadDuplicateCandidates.length ? (
-              <button
-                type="button"
-                className="artist-duplicate-broad-toggle"
-                onClick={() =>
-                  setShowBroadDuplicateCandidates((current) => !current)
-                }
+            {duplicateCandidates.map((candidate) => (
+              <article
+                key={candidate.key}
+                data-duplicate-candidate={candidate.key}
               >
-                {showBroadDuplicateCandidates
-                  ? `收起 ${broadDuplicateCandidates.length} 组仅有共同字符的候选`
-                  : `查看更多名称片段候选（${broadDuplicateCandidates.length} 组，误判可能较高）`}
-              </button>
-            ) : null}
-            {visibleDuplicateCandidates.map((candidate) => (
-              <article key={candidate.key}>
                 <header>
                   <div className="artist-duplicate-evidence">
                     {candidate.evidence.map((evidence) => (

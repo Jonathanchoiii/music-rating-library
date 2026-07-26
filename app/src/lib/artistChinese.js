@@ -55,14 +55,17 @@ function releaseEvidenceKeys(release) {
           link?.provider,
         ),
     )
-    .map((link) => `link:${normalizeText(link.url)}`);
-  return new Set([
-    `title:${normalizeText(release.title)}`,
-    ...(release.titleAliases ?? []).map(
-      (title) => `title:${normalizeText(title)}`,
-    ),
-    ...exactLinks,
-  ]);
+    .map((link) => normalizeText(link.url))
+    .filter(Boolean)
+    .map((url) => `link:${url}`);
+  const exactTitles = [
+    release.title,
+    ...(release.titleAliases ?? []),
+  ]
+    .map(normalizeText)
+    .filter(Boolean)
+    .map((title) => `title:${title}`);
+  return new Set([...exactTitles, ...exactLinks]);
 }
 
 function evidenceSetsOverlap(left = new Set(), right = new Set()) {
@@ -259,6 +262,43 @@ function characterWindows(value = "", size = 3) {
   return windows;
 }
 
+function sharedReleaseEvidence(left, right) {
+  const matches = [...(left.releaseEvidence ?? [])].filter((key) =>
+    right.releaseEvidence?.has(key),
+  );
+  const exactLink = matches.find((key) => key.startsWith("link:"));
+  const exactTitle = matches.find((key) => key.startsWith("title:"));
+  if (exactLink) {
+    return {
+      type: "SHARED_RELEASE",
+      label: "共同的精确作品链接",
+    };
+  }
+  if (exactTitle) {
+    return {
+      type: "SHARED_RELEASE",
+      label: "共同的完整作品标题",
+    };
+  }
+  return null;
+}
+
+function isCrossScriptAliasContainment(
+  shorter,
+  longer,
+  shorterLength,
+) {
+  if (shorterLength < 3 || !/^\p{Script=Han}+$/u.test(shorter)) {
+    return false;
+  }
+  const remainder = longer.replace(shorter, "");
+  return (
+    remainder !== longer &&
+    Boolean(remainder) &&
+    /^[\p{Script=Latin}\p{Number}]+$/u.test(remainder)
+  );
+}
+
 function levenshteinDistance(left = "", right = "") {
   const leftCharacters = [...left];
   const rightCharacters = [...right];
@@ -285,36 +325,6 @@ function levenshteinDistance(left = "", right = "") {
     previous = current;
   }
   return previous.at(-1) ?? 0;
-}
-
-function longestCommonCharacterRun(left = "", right = "") {
-  const leftCharacters = [...left];
-  const rightCharacters = [...right];
-  let previous = new Array(rightCharacters.length + 1).fill(0);
-  let bestLength = 0;
-  let bestEnd = 0;
-  for (let leftIndex = 1; leftIndex <= leftCharacters.length; leftIndex += 1) {
-    const current = new Array(rightCharacters.length + 1).fill(0);
-    for (
-      let rightIndex = 1;
-      rightIndex <= rightCharacters.length;
-      rightIndex += 1
-    ) {
-      if (
-        leftCharacters[leftIndex - 1] === rightCharacters[rightIndex - 1]
-      ) {
-        current[rightIndex] = previous[rightIndex - 1] + 1;
-        if (current[rightIndex] > bestLength) {
-          bestLength = current[rightIndex];
-          bestEnd = leftIndex;
-        }
-      }
-    }
-    previous = current;
-  }
-  return leftCharacters
-    .slice(bestEnd - bestLength, bestEnd)
-    .join("");
 }
 
 function candidateEntities(releases = [], rawState) {
@@ -347,6 +357,11 @@ function candidateEntities(releases = [], rawState) {
         identity?.musicBrainzMbid ?? group.musicBrainzMbid ?? "",
       mapped: Boolean(identity),
       releaseCount: group.releases.length,
+      releaseEvidence: new Set(
+        group.releases.flatMap((release) => [
+          ...releaseEvidenceKeys(release),
+        ]),
+      ),
     };
   });
   const includedIds = new Set(entities.map((entity) => entity.identityId));
@@ -370,6 +385,7 @@ function candidateEntities(releases = [], rawState) {
       musicBrainzMbid: identity.musicBrainzMbid ?? "",
       mapped: true,
       releaseCount: 0,
+      releaseEvidence: new Set(),
     });
   }
   return entities;
@@ -382,6 +398,7 @@ function pairKey(leftId, rightId) {
 function evidenceForEntityPair(left, right) {
   const evidence = new Map();
   let confidence = 0;
+  const releaseEvidence = sharedReleaseEvidence(left, right);
   const leftMbid = normalizeText(left.musicBrainzMbid);
   const rightMbid = normalizeText(right.musicBrainzMbid);
   if (leftMbid && leftMbid === rightMbid) {
@@ -405,8 +422,8 @@ function evidenceForEntityPair(left, right) {
       const longer =
         shorter === leftComparable ? rightComparable : leftComparable;
       const shorterLength = [...shorter].length;
-      const shorterHasHan = /\p{Script=Han}/u.test(shorter);
-      const minimumContainedLength = shorterHasHan ? 3 : 4;
+      const longerLength = [...longer].length;
+      const containmentCoverage = shorterLength / longerLength;
 
       if (leftComparable === rightComparable) {
         evidence.set("NORMALIZED_NAME", {
@@ -429,57 +446,42 @@ function evidenceForEntityPair(left, right) {
         confidence = Math.max(confidence, 94);
       }
       if (
-        shorterLength >= minimumContainedLength &&
+        leftComparable !== rightComparable &&
         longer.includes(shorter) &&
-        leftComparable !== rightComparable
+        (isCrossScriptAliasContainment(
+          shorter,
+          longer,
+          shorterLength,
+        ) ||
+          (shorterLength >= 5 &&
+            containmentCoverage >= 0.8 &&
+            releaseEvidence))
       ) {
         evidence.set("NAME_CONTAINS", {
           type: "NAME_CONTAINS",
-          label: `一个名字包含另一个名字（${shorterLength} 个字符）`,
+          label: "完整艺名与别名结构一致",
         });
-        confidence = Math.max(confidence, 84);
+        confidence = Math.max(confidence, releaseEvidence ? 91 : 88);
       }
 
-      const commonRun = longestCommonCharacterRun(
-        leftComparable,
-        rightComparable,
-      );
-      const commonRunLength = [...commonRun].length;
-      const commonRunHasHan = /\p{Script=Han}/u.test(commonRun);
-      const commonRunIsMeaningful =
-        (commonRunHasHan && commonRunLength >= 3) ||
-        (!commonRunHasHan &&
-          commonRunLength >= 4 &&
-          commonRunLength / shorterLength >= 0.5);
-      if (commonRunIsMeaningful) {
-        evidence.set("SHARED_CHARACTERS", {
-          type: "SHARED_CHARACTERS",
-          label: `连续相同字符“${commonRun}”`,
-        });
-        confidence = Math.max(
-          confidence,
-          62 + Math.min(commonRunLength, 8),
-        );
-      }
-
-      const longestLength = Math.max(
-        [...leftComparable].length,
-        [...rightComparable].length,
-      );
-      if (longestLength >= 4) {
+      if (longerLength >= 5 && releaseEvidence) {
         const similarity =
           1 -
           levenshteinDistance(leftComparable, rightComparable) /
-            longestLength;
-        if (similarity >= 0.78 && leftComparable !== rightComparable) {
+            longerLength;
+        if (similarity >= 0.9 && leftComparable !== rightComparable) {
           evidence.set("SIMILAR_NAME", {
             type: "SIMILAR_NAME",
-            label: `名字相似度 ${Math.round(similarity * 100)}%`,
+            label: `名字高度相似（${Math.round(similarity * 100)}%）`,
           });
-          confidence = Math.max(confidence, Math.round(similarity * 90));
+          confidence = Math.max(confidence, Math.round(similarity * 95));
         }
       }
     }
+  }
+
+  if (releaseEvidence && evidence.size) {
+    evidence.set(releaseEvidence.type, releaseEvidence);
   }
 
   return {
@@ -517,8 +519,8 @@ export function findPossibleDuplicateArtistGroups(
         addToBucket(`window:${window}`, entity.id);
       }
       for (const hanRun of comparable.match(/\p{Script=Han}+/gu) ?? []) {
-        for (const window of characterWindows(hanRun, 3)) {
-          addToBucket(`window:${window}`, entity.id);
+        if ([...hanRun].length >= 3) {
+          addToBucket(`han-name:${hanRun}`, entity.id);
         }
       }
     }
@@ -559,11 +561,7 @@ export function findPossibleDuplicateArtistGroups(
       };
     })
     .filter(Boolean);
-  const primaryPairs = pairCandidates.filter((candidate) =>
-    candidate.evidence.some(
-      (evidence) => evidence.type !== "SHARED_CHARACTERS",
-    ),
-  );
+  const primaryPairs = pairCandidates;
   const parent = new Map();
   const findRoot = (id) => {
     const currentParent = parent.get(id) ?? id;
@@ -635,26 +633,7 @@ export function findPossibleDuplicateArtistGroups(
       };
     },
   );
-  const primaryRootByMemberId = new Map();
-  for (const [root, component] of componentByRoot.entries()) {
-    component.memberIds.forEach((memberId) =>
-      primaryRootByMemberId.set(memberId, root),
-    );
-  }
-  const broadPairs = pairCandidates.filter((candidate) => {
-    if (
-      !candidate.evidence.every(
-        (evidence) => evidence.type === "SHARED_CHARACTERS",
-      )
-    ) {
-      return false;
-    }
-    const leftRoot = primaryRootByMemberId.get(candidate.members[0].id);
-    const rightRoot = primaryRootByMemberId.get(candidate.members[1].id);
-    return !leftRoot || !rightRoot || leftRoot !== rightRoot;
-  });
-
-  return [...primaryComponents, ...broadPairs]
+  return primaryComponents
     .sort(
       (left, right) =>
         right.confidence - left.confidence ||
