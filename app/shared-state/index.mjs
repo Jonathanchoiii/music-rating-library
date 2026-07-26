@@ -77,20 +77,45 @@ export async function readSharedState(
   }
 }
 
-async function atomicWrite(statePath, state) {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const temporaryPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+async function atomicWriteTextFile(filePath, content, options = {}) {
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
-    await fs.writeFile(
-      temporaryPath,
-      `${JSON.stringify(state, null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    );
-    await fs.rename(temporaryPath, statePath);
-    await fs.chmod(statePath, 0o600);
+    await fs.writeFile(temporaryPath, content, {
+      encoding: "utf8",
+      mode: 0o600,
+      ...options,
+    });
+    await fs.rename(temporaryPath, filePath);
+    await fs.chmod(filePath, 0o600);
   } finally {
     await fs.rm(temporaryPath, { force: true }).catch(() => {});
   }
+}
+
+async function atomicWrite(statePath, state) {
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  await atomicWriteTextFile(
+    statePath,
+    `${JSON.stringify(state, null, 2)}\n`,
+  );
+}
+
+const NEODB_SNAPSHOT_NAME_RE = /^neodb-snapshot-.+-[a-f0-9]{16}\.csv$/;
+
+async function listNeoDbSnapshots(directory) {
+  return (await fs.readdir(directory))
+    .filter((name) => NEODB_SNAPSHOT_NAME_RE.test(name))
+    .sort();
+}
+
+async function pruneRetainedFiles(directory, names, maxCount) {
+  await Promise.all(
+    names
+      .slice(0, Math.max(0, names.length - maxCount))
+      .map((name) =>
+        fs.rm(path.join(directory, name), { force: true }),
+      ),
+  );
 }
 
 function safeSnapshotTimestamp(value) {
@@ -99,6 +124,20 @@ function safeSnapshotTimestamp(value) {
     .toISOString()
     .replace(/\.\d{3}Z$/, "Z")
     .replaceAll(":", "-");
+}
+
+function neoDbSnapshotMeta({
+  fileName,
+  contentHash,
+  rowCount,
+  reused,
+}) {
+  return {
+    fileName,
+    contentHash,
+    rowCount: Number(rowCount) || 0,
+    reused,
+  };
 }
 
 export async function persistNeoDbCsvSnapshot(
@@ -118,56 +157,38 @@ export async function persistNeoDbCsvSnapshot(
   const shortHash = contentHash.slice(0, 16);
   const snapshotDirectory = getNeoDbSnapshotDirectory(statePath);
   await fs.mkdir(snapshotDirectory, { recursive: true });
-  const existingSnapshots = (await fs.readdir(snapshotDirectory))
-    .filter((name) => /^neodb-snapshot-.+-[a-f0-9]{16}\.csv$/.test(name))
-    .sort();
+  const existingSnapshots = await listNeoDbSnapshots(snapshotDirectory);
   const existingName = existingSnapshots.find((name) =>
     name.endsWith(`-${shortHash}.csv`),
   );
   if (existingName) {
-    return {
+    return neoDbSnapshotMeta({
       fileName: existingName,
       contentHash,
-      rowCount: Number(payload.rowCount) || 0,
+      rowCount: payload.rowCount,
       reused: true,
-      directoryName: "neodb-snapshots",
-    };
+    });
   }
 
   const fileName = `neodb-snapshot-${safeSnapshotTimestamp(
     payload.syncedAt,
   )}-${shortHash}.csv`;
-  const filePath = path.join(snapshotDirectory, fileName);
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    await fs.writeFile(temporaryPath, csv, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    await fs.rename(temporaryPath, filePath);
-    await fs.chmod(filePath, 0o600);
-  } finally {
-    await fs.rm(temporaryPath, { force: true }).catch(() => {});
-  }
-
-  const snapshots = (await fs.readdir(snapshotDirectory))
-    .filter((name) => /^neodb-snapshot-.+-[a-f0-9]{16}\.csv$/.test(name))
-    .sort();
-  await Promise.all(
-    snapshots
-      .slice(0, Math.max(0, snapshots.length - MAX_NEODB_SNAPSHOTS))
-      .map((name) =>
-        fs.rm(path.join(snapshotDirectory, name), { force: true }),
-      ),
+  await atomicWriteTextFile(
+    path.join(snapshotDirectory, fileName),
+    csv,
+    { flag: "wx" },
   );
-  return {
+  await pruneRetainedFiles(
+    snapshotDirectory,
+    [...existingSnapshots, fileName].sort(),
+    MAX_NEODB_SNAPSHOTS,
+  );
+  return neoDbSnapshotMeta({
     fileName,
     contentHash,
-    rowCount: Number(payload.rowCount) || 0,
+    rowCount: payload.rowCount,
     reused: false,
-    directoryName: "neodb-snapshots",
-  };
+  });
 }
 
 function isPlainObject(value) {
@@ -501,13 +522,7 @@ async function backupSharedState(statePath, state) {
   const backups = (await fs.readdir(backupDirectory))
     .filter((name) => /^revision-\d+\.json$/.test(name))
     .sort();
-  await Promise.all(
-    backups
-      .slice(0, Math.max(0, backups.length - MAX_BACKUPS))
-      .map((name) =>
-        fs.rm(path.join(backupDirectory, name), { force: true }),
-      ),
-  );
+  await pruneRetainedFiles(backupDirectory, backups, MAX_BACKUPS);
 }
 
 function enqueueWrite(statePath, task) {

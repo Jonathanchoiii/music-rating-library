@@ -2041,9 +2041,9 @@ html.is-desktop-shell .desktop-sidebar {
 
 .detail-hero {
   display: grid;
-  grid-template-columns: minmax(190px, 42%) 1fr;
-  gap: 26px;
-  align-items: end;
+  grid-template-columns: minmax(210px, 38%) minmax(0, 1fr);
+  gap: 18px 24px;
+  align-items: start;
   margin-bottom: 10px;
 }
 
@@ -2069,15 +2069,20 @@ html.is-desktop-shell .desktop-sidebar {
   font-weight: 700;
 }
 
+.detail-summary {
+  min-width: 0;
+  align-self: end;
+}
+
 .detail-summary h2 {
-  margin: 9px 0 5px;
-  font-size: clamp(30px, 4.2vw, 46px);
-  line-height: 1;
-  letter-spacing: -0.045em;
+  margin: 8px 0 5px;
+  font-size: clamp(28px, 3.6vw, 40px);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
 }
 
 .detail-summary > .detail-artist {
-  margin: 0 0 20px;
+  margin: 0 0 14px;
   color: var(--muted-dark);
   font-size: 16px;
 }
@@ -2118,7 +2123,8 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .detail-facts {
-  margin-top: 19px;
+  grid-column: 2;
+  margin-top: 0;
   display: grid;
   gap: 8px;
   color: var(--muted-dark);
@@ -2126,7 +2132,8 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .detail-type-editor {
-  margin-top: 18px;
+  grid-column: 2;
+  margin-top: 0;
   display: grid;
   gap: 7px;
 }
@@ -4476,19 +4483,32 @@ button.settings-entry:hover {
   }
 
   .detail-hero {
-    grid-template-columns: 112px 1fr;
-    gap: 16px;
-    align-items: center;
+    grid-template-columns: 148px minmax(0, 1fr);
+    gap: 12px 14px;
+    align-items: start;
+  }
+
+  .detail-hero > img,
+  .detail-cover-placeholder {
+    grid-row: 1;
+  }
+
+  .detail-summary {
+    grid-row: 1;
+    align-self: start;
   }
 
   .detail-summary h2 {
-    margin-top: 6px;
-    font-size: 28px;
+    margin-top: 5px;
+    margin-bottom: 4px;
+    font-size: 22px;
+    line-height: 1.12;
+    letter-spacing: -0.03em;
   }
 
   .detail-summary > .detail-artist {
-    margin-bottom: 12px;
-    font-size: 14px;
+    margin-bottom: 10px;
+    font-size: 13px;
   }
 
   .detail-summary > .detail-title-alias {
@@ -4496,16 +4516,21 @@ button.settings-entry:hover {
     font-size: 11px;
   }
 
+  .detail-cover-placeholder {
+    font-size: 42px;
+  }
+
   .detail-facts {
     display: none;
   }
 
   .detail-type-editor {
-    margin-top: 12px;
+    grid-column: 1 / -1;
+    margin-top: 2px;
   }
 
   .timeline-header {
-    align-items: flex-start;
+    align-items: center;
   }
 
   .timeline-header .secondary-button {
@@ -4514,8 +4539,7 @@ button.settings-entry:hover {
     height: 44px;
     min-height: 44px;
     padding: 0;
-    display: grid;
-    place-items: center;
+    gap: 0;
     font-size: 0;
     line-height: 0;
   }

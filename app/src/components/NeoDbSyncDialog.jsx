@@ -98,9 +98,12 @@ export function NeoDbSyncDialog({
           reconciledReleases,
           safePlan,
         );
+        const additionReleaseIds = result.plan.additions.map(
+          (item) => item.release.id,
+        );
         const typeRelevantReleaseIds = [
           ...new Set([
-            ...result.plan.additions.map((item) => item.release.id),
+            ...additionReleaseIds,
             ...result.plan.updates
               .filter((item) => item.typeVerificationRelevant)
               .map((item) => item.releaseId),
@@ -108,7 +111,7 @@ export function NeoDbSyncDialog({
         ];
         const canonicalPriorityReleaseIds = [
           ...new Set([
-            ...result.plan.additions.map((item) => item.release.id),
+            ...additionReleaseIds,
             ...result.plan.updates
               .filter((item) =>
                 item.changedMetadataFields.includes("externalLinks"),
@@ -165,8 +168,8 @@ export function NeoDbSyncDialog({
             },
           ),
           saveNeoDbCsvSnapshot(nextReleases, {
-            remoteCount: result.nextState.remoteCount,
             syncedAt: result.nextState.lastSyncedAt,
+            previousSnapshot: currentState.lastCsvSnapshot ?? null,
           }),
         ]);
         nextReleases = canonicalResult.releases;

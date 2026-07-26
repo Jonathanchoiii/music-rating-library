@@ -137,36 +137,36 @@ export function ReleaseDetail({
                 : release.artists.join("、")}
             </p>
             <Rating score={rating} />
-            <div className="detail-type-editor">
-              <span>发行类型</span>
-              <div role="group" aria-label="快速设置发行类型">
-                {[
-                  ["LP", "LP"],
-                  ["EP", "EP"],
-                  ["SINGLE", "Single"],
-                  ["OTHER", "未分类"],
-                ].map(([value, label]) => (
-                  <button
-                    type="button"
-                    key={value}
-                    className={release.releaseType === value ? "is-active" : ""}
-                    onClick={() => onChangeType?.(release.id, value)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+          </div>
+          <div className="detail-type-editor">
+            <span>发行类型</span>
+            <div role="group" aria-label="快速设置发行类型">
+              {[
+                ["LP", "LP"],
+                ["EP", "EP"],
+                ["SINGLE", "Single"],
+                ["OTHER", "未分类"],
+              ].map(([value, label]) => (
+                <button
+                  type="button"
+                  key={value}
+                  className={release.releaseType === value ? "is-active" : ""}
+                  onClick={() => onChangeType?.(release.id, value)}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-            <div className="detail-facts">
-              <span>
-                <CalendarBlank aria-hidden="true" />
-                最近听过 {latest ? displayDate(latest) : "未记录"}
-              </span>
-              <span>
-                <ClockCounterClockwise aria-hidden="true" />
-                {release.listeningEntries.length} 次记录
-              </span>
-            </div>
+          </div>
+          <div className="detail-facts">
+            <span>
+              <CalendarBlank aria-hidden="true" />
+              最近听过 {latest ? displayDate(latest) : "未记录"}
+            </span>
+            <span>
+              <ClockCounterClockwise aria-hidden="true" />
+              {release.listeningEntries.length} 次记录
+            </span>
           </div>
         </div>
         {release.genres.length ? (
@@ -227,12 +227,6 @@ export function ReleaseDetail({
                           entry.listenedAtPrecision,
                         )
                       : "日期未记录"}
-                  </span>
-                  <span>
-                    打分：
-                    {entry.ratedAt
-                      ? displayDate(entry.ratedAt)
-                      : "时间未记录"}
                   </span>
                 </div>
                 <Rating score={entry.rating10} compact />

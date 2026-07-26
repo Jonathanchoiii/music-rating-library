@@ -189,16 +189,25 @@ function neoDbUrlsFromReleases(releases = []) {
   ].sort();
 }
 
+function entryMarkedTime(entry) {
+  return (
+    Date.parse(entry.markedAt ?? entry.createdAt ?? entry.listenedAt ?? 0) ||
+    0
+  );
+}
+
 function latestEntry(entries = []) {
-  return [...entries].sort((left, right) => {
-    const leftTime = Date.parse(
-      left.markedAt ?? left.createdAt ?? left.listenedAt ?? 0,
-    );
-    const rightTime = Date.parse(
-      right.markedAt ?? right.createdAt ?? right.listenedAt ?? 0,
-    );
-    return (rightTime || 0) - (leftTime || 0);
-  })[0];
+  let latest = entries[0];
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entryMarkedTime(entries[index]) > entryMarkedTime(latest)) {
+      latest = entries[index];
+    }
+  }
+  return latest;
+}
+
+function uniqueUrls(urls = []) {
+  return [...new Set(urls.filter(Boolean))];
 }
 
 function neoDbSnapshotRows(releases = []) {
@@ -216,14 +225,13 @@ function neoDbSnapshotRows(releases = []) {
     }
     for (const [sourceItemId, entries] of entriesBySourceId) {
       const entry = latestEntry(entries);
-      const links = [
-        entry.sourceUrl,
-        ...(release.externalLinks ?? []).map((link) => link.url),
-      ].filter((url, index, all) => url && all.indexOf(url) === index);
       const row = {
         title: release.neodbSourceTitle ?? release.title,
         info: `artist:${(release.artists ?? []).join("/")}`,
-        links: links.join(" "),
+        links: uniqueUrls([
+          entry.sourceUrl,
+          ...(release.externalLinks ?? []).map((link) => link.url),
+        ]).join(" "),
         timestamp:
           entry.markedAt ??
           entry.createdAt ??
@@ -258,22 +266,61 @@ function neoDbSnapshotRows(releases = []) {
 
 export function buildNeoDbCsvSnapshot(releases = []) {
   const rows = neoDbSnapshotRows(releases);
-  const csv = `${Papa.unparse(rows, {
-    columns: NEODB_SNAPSHOT_COLUMNS,
-    newline: "\n",
-  })}\n`;
   return {
-    csv,
+    csv: `${Papa.unparse(rows, {
+      columns: NEODB_SNAPSHOT_COLUMNS,
+      newline: "\n",
+    })}\n`,
     rowCount: rows.length,
-    contentHash: jsonHash(rows),
+  };
+}
+
+async function sha256Hex(value) {
+  if (!globalThis.crypto?.subtle) return null;
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function snapshotSaveResult(meta = {}, extras = {}) {
+  return {
+    fileName: meta.fileName ?? null,
+    contentHash: meta.contentHash ?? null,
+    rowCount: meta.rowCount ?? 0,
+    reused: Boolean(meta.reused),
+    saved: false,
+    ...extras,
   };
 }
 
 export async function saveNeoDbCsvSnapshot(
   releases,
-  { remoteCount = null, syncedAt = new Date().toISOString() } = {},
+  {
+    syncedAt = new Date().toISOString(),
+    previousSnapshot = null,
+  } = {},
 ) {
   const snapshot = buildNeoDbCsvSnapshot(releases);
+  const contentHash = await sha256Hex(snapshot.csv);
+  if (
+    contentHash &&
+    previousSnapshot?.contentHash === contentHash &&
+    previousSnapshot?.fileName
+  ) {
+    return snapshotSaveResult(
+      {
+        fileName: previousSnapshot.fileName,
+        contentHash,
+        rowCount: snapshot.rowCount,
+        reused: true,
+      },
+      { saved: true },
+    );
+  }
   try {
     const response = await fetch("/api/local-neodb-snapshot", {
       method: "POST",
@@ -282,30 +329,23 @@ export async function saveNeoDbCsvSnapshot(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        ...snapshot,
-        remoteCount,
+        csv: snapshot.csv,
+        rowCount: snapshot.rowCount,
         syncedAt,
       }),
     });
     if (response.status === 404) {
-      return { ...snapshot, saved: false, supported: false };
+      return snapshotSaveResult({ rowCount: snapshot.rowCount });
     }
     if (!response.ok) {
       throw new Error(`本地 CSV 快照保存失败（${response.status}）`);
     }
-    return {
-      ...snapshot,
-      ...(await response.json()),
-      saved: true,
-      supported: true,
-    };
+    return snapshotSaveResult(await response.json(), { saved: true });
   } catch (error) {
-    return {
-      ...snapshot,
-      saved: false,
-      supported: false,
-      error: error.message,
-    };
+    return snapshotSaveResult(
+      { rowCount: snapshot.rowCount },
+      { error: error.message },
+    );
   }
 }
 
@@ -419,19 +459,20 @@ export async function refreshNeoDbCanonicalIdentity(
     identityReleases,
   );
   const urls = neoDbUrlsFromReleases(known.releases);
-  const start = urls.length ? auditCursor % urls.length : 0;
-  const count = forceFull ? urls.length : Math.min(auditSize, urls.length);
-  const auditUrls = Array.from(
-    { length: count },
-    (_, offset) => urls[(start + offset) % urls.length],
-  );
-  const priorityIds = new Set(priorityReleaseIds);
-  const priorityUrls = neoDbUrlsFromReleases(
-    known.releases.filter((release) => priorityIds.has(release.id)),
-  );
-  const urlsToCheck = forceFull
-    ? urls
-    : [...new Set([...priorityUrls, ...auditUrls])];
+  let urlsToCheck = urls;
+  if (!forceFull) {
+    const start = urls.length ? auditCursor % urls.length : 0;
+    const count = Math.min(auditSize, urls.length);
+    const auditUrls = Array.from(
+      { length: count },
+      (_, offset) => urls[(start + offset) % urls.length],
+    );
+    const priorityIds = new Set(priorityReleaseIds);
+    const priorityUrls = neoDbUrlsFromReleases(
+      known.releases.filter((release) => priorityIds.has(release.id)),
+    );
+    urlsToCheck = [...new Set([...priorityUrls, ...auditUrls])];
+  }
   let canonicalByUrl = {};
   let error = null;
   try {
@@ -1229,6 +1270,15 @@ async function mapWithConcurrency(items, limit, task) {
   return results;
 }
 
+function shelfPagesBeyondFirst(totalPagesByShelf) {
+  return SHELF_TYPES.flatMap((shelfType) =>
+    Array.from(
+      { length: Math.max(0, totalPagesByShelf[shelfType] - 1) },
+      (_, index) => [shelfType, index + 2],
+    ),
+  );
+}
+
 async function enrichChangedMark(mark, token, includeLogs) {
   const uuid = encodeURIComponent(mark.item.uuid);
   const [review, logsPage] = await Promise.all([
@@ -1269,7 +1319,7 @@ export function loadNeoDbSyncState() {
       profile: state.profile,
       snapshot: {},
       remoteCount: null,
-      auditPages: {},
+      auditCursor: 0,
       pendingRemovals: [],
       removalCandidateStreaks: {},
       lastSyncedAt: state.lastSyncedAt ?? null,
@@ -1453,31 +1503,19 @@ export async function pullNeoDbDelta(
     return normalizedPage;
   }
 
+  const pagesBeyondFirst = shelfPagesBeyondFirst(totalPagesByShelf);
   if (shouldReconcile) {
-    const fullPageTasks = SHELF_TYPES.flatMap((shelfType) =>
-      Array.from(
-        { length: Math.max(0, totalPagesByShelf[shelfType] - 1) },
-        (_, index) => [shelfType, index + 2],
-      ),
-    );
     await mapWithConcurrency(
-      fullPageTasks,
+      pagesBeyondFirst,
       4,
       ([shelfType, page]) => addPage(shelfType, page),
     );
   } else {
-    const auditCandidates = SHELF_TYPES.flatMap((shelfType) =>
-      Array.from(
-        { length: Math.max(0, totalPagesByShelf[shelfType] - 1) },
-        (_, index) => [shelfType, index + 2],
-      ),
-    );
-    if (auditCandidates.length) {
+    if (pagesBeyondFirst.length) {
       const auditIndex =
         Math.max(previousState.auditCursor ?? 0, 0) %
-        auditCandidates.length;
-      const [auditShelfType, auditPage] =
-        auditCandidates[auditIndex];
+        pagesBeyondFirst.length;
+      const [auditShelfType, auditPage] = pagesBeyondFirst[auditIndex];
       await addPage(auditShelfType, auditPage);
     }
 
@@ -1520,24 +1558,21 @@ export async function pullNeoDbDelta(
     ).values(),
   ];
   const previousSnapshot = previousState.snapshot ?? {};
-  const snapshot = shouldReconcile
-    ? {}
-    : { ...previousSnapshot };
-  const changedMarks = forceFull
-    ? fetchedMarks
-    : fetchedMarks.filter(
-        (mark) =>
-          previousSnapshot[mark.item.uuid] !== neoDbMarkHash(mark),
-      );
+  const snapshot = shouldReconcile ? {} : { ...previousSnapshot };
+  const changedMarks = [];
+  for (const mark of fetchedMarks) {
+    const hash = neoDbMarkHash(mark);
+    if (forceFull || previousSnapshot[mark.item.uuid] !== hash) {
+      changedMarks.push(mark);
+    }
+    snapshot[mark.item.uuid] = hash;
+  }
   const enrichedMarks = await mapWithConcurrency(
     changedMarks,
     5,
     (mark) =>
       enrichChangedMark(mark, token, !localSourceIds.has(mark.item.uuid)),
   );
-  for (const mark of fetchedMarks) {
-    snapshot[mark.item.uuid] = neoDbMarkHash(mark);
-  }
 
   const remoteIds = shouldReconcile
     ? new Set(fetchedMarks.map((mark) => mark.item.uuid))
@@ -1545,11 +1580,7 @@ export async function pullNeoDbDelta(
   const removedSourceIds = shouldReconcile
     ? [...knownIds].filter((id) => !remoteIds.has(id))
     : [];
-  const auditCandidateCount = SHELF_TYPES.reduce(
-    (total, shelfType) =>
-      total + Math.max(0, totalPagesByShelf[shelfType] - 1),
-    0,
-  );
+  const auditCandidateCount = pagesBeyondFirst.length;
   const profile = previousState.profile ?? (await getNeoDbProfile(token));
   const nextState = {
     ...previousState,

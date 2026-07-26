@@ -90,7 +90,8 @@ test("NeoDB CSV snapshots keep stable source ids and row fingerprints", () => {
   assert.match(snapshot.csv, /source-one/);
   assert.match(snapshot.csv, /NeoDB title/);
   assert.match(snapshot.csv, /content_hash/);
-  assert.ok(snapshot.contentHash);
+  const [, dataRow] = snapshot.csv.trim().split("\n");
+  assert.ok(dataRow.split(",").at(-1));
 });
 
 test("supported release links normalize only exact album platforms", () => {
@@ -1401,7 +1402,7 @@ test("NeoDB sync compares every music shelf before deciding a record was removed
           [neoDbMark.item.uuid]: neoDbMarkHash(neoDbMark),
           [wishlistMark.item.uuid]: neoDbMarkHash(wishlistMark),
         },
-        auditPages: {},
+        auditCursor: 0,
       },
       { identityReleases: releases },
     );
