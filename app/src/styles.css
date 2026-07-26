@@ -4279,7 +4279,7 @@ button.settings-entry:hover {
   }
 
   .release-merge-choice {
-    grid-template-columns: 18px 54px minmax(0, 1fr);
+    grid-template-columns: 18px 54px minmax(0, 1fr) auto;
     gap: 9px;
   }
 
@@ -4288,8 +4288,7 @@ button.settings-entry:hover {
     width: 54px;
   }
 
-  .release-merge-choice > .rating,
-  .release-merge-decision {
+  .release-merge-choice > .rating {
     display: none;
   }
 
@@ -4561,6 +4560,11 @@ button.settings-entry:hover {
 
   .artist-cover-stack .release-cover {
     width: 69px;
+  }
+
+  .release-merge-decision {
+    gap: 0;
+    font-size: 0;
   }
 }
 
