@@ -45,7 +45,6 @@ const COMPLETENESS_OPTIONS = [
   ["MISSING_COVER", "缺封面"],
   ["MISSING_STREAMING", "缺流媒体链接"],
   ["MISSING_GENRE", "缺流派"],
-  ["MISSING_LANGUAGE", "缺目录语言"],
 ];
 
 const CONFIDENCE_OPTIONS = [
@@ -243,17 +242,6 @@ export function FilterDrawer({
                 onChange={(edge, value) =>
                   update(
                     edge === "from" ? "releaseDateFrom" : "releaseDateTo",
-                    value,
-                  )
-                }
-              />
-              <DateRange
-                label="标记时间"
-                from={draft.markedDateFrom}
-                to={draft.markedDateTo}
-                onChange={(edge, value) =>
-                  update(
-                    edge === "from" ? "markedDateFrom" : "markedDateTo",
                     value,
                   )
                 }
@@ -574,23 +562,6 @@ export function ActiveFilterChips({
       >
         发行：{filters.releaseDateFrom || "最早"} →{" "}
         {filters.releaseDateTo || "现在"}
-      </FilterChip>,
-    );
-  }
-  if (filters.markedDateFrom || filters.markedDateTo) {
-    chips.push(
-      <FilterChip
-        key="marked-date"
-        onRemove={() => {
-          onChange({
-            ...filters,
-            markedDateFrom: "",
-            markedDateTo: "",
-          });
-        }}
-      >
-        标记：{filters.markedDateFrom || "最早"} →{" "}
-        {filters.markedDateTo || "现在"}
       </FilterChip>,
     );
   }

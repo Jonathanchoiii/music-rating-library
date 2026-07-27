@@ -1265,7 +1265,9 @@ html.is-desktop-shell .desktop-sidebar {
   border-bottom: 1px solid var(--line);
   background: transparent;
   display: grid;
-  grid-template-columns: 58px minmax(180px, 1.5fr) 95px minmax(140px, 1fr) 110px 130px;
+  grid-template-columns:
+    58px minmax(180px, 1.5fr) 95px minmax(120px, 1fr)
+    72px 110px 130px;
   align-items: center;
   gap: 14px;
   text-align: left;
@@ -1299,9 +1301,41 @@ html.is-desktop-shell .desktop-sidebar {
 .list-release-main span,
 .list-release-type small,
 .list-release-genres,
+.list-release-status,
 .list-release-date {
   color: var(--muted);
   font-size: 12px;
+}
+
+.list-release-status {
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--muted-dark);
+  background: var(--surface);
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.list-release-status.is-complete {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.list-release-status.is-progress {
+  color: #8a5b13;
+  background: #fff4d8;
+}
+
+.list-release-status.is-wishlist {
+  color: #4e667c;
+  background: #edf3f8;
+}
+
+.list-release-status.is-dropped {
+  color: #8f4b4b;
+  background: #f8ecec;
 }
 
 .list-release-main .list-title-alias {
@@ -2184,8 +2218,11 @@ html.is-desktop-shell .desktop-sidebar {
   height: 16px;
 }
 
-.genre-row {
+.detail-genres {
   margin: 22px 0;
+}
+
+.genre-row {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
@@ -2197,6 +2234,12 @@ html.is-desktop-shell .desktop-sidebar {
   color: var(--muted-dark);
   background: #efefec;
   font-size: 12px;
+}
+
+.genre-source {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .platform-row {
@@ -2665,6 +2708,40 @@ html.is-desktop-shell .desktop-sidebar {
   display: grid;
   grid-template-columns: 1fr 1.4fr;
   gap: 12px;
+}
+
+.platform-link-fields {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  display: grid;
+  gap: 14px;
+}
+
+.platform-link-fields legend {
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.platform-link-fields > p {
+  margin: -4px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.form-dialog input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.form-field-error {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .form-dialog footer,
@@ -4262,6 +4339,14 @@ button.settings-entry:hover {
   .toolbar-right {
     margin-left: auto;
   }
+
+  .release-list-row {
+    grid-template-columns: 58px minmax(180px, 1fr) 95px 72px 110px 130px;
+  }
+
+  .list-release-genres {
+    display: none;
+  }
 }
 
 @media (max-width: 760px) {
@@ -4407,7 +4492,7 @@ button.settings-entry:hover {
   .release-list-row {
     min-height: 72px;
     padding: 8px 0;
-    grid-template-columns: 56px minmax(0, 1fr) auto;
+    grid-template-columns: 56px minmax(0, 1fr) auto auto;
     gap: 11px;
   }
 
@@ -4419,6 +4504,11 @@ button.settings-entry:hover {
   .list-release-genres,
   .list-release-date {
     display: none;
+  }
+
+  .list-release-status {
+    padding-inline: 7px;
+    justify-self: end;
   }
 
   .release-list-row .rating {

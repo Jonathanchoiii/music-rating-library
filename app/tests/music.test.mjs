@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyCanonicalTitleEvidence,
+  buildConfirmedExternalLinks,
   classifyImportedRelease,
   compareReleaseDates,
   csvRowToRelease,
@@ -9,8 +10,10 @@ import {
   findExactNeoDbDuplicateGroups,
   findReleaseByReferenceUrl,
   getCurrentRating,
+  getEffectiveMarkStatus,
   getDatePrecision,
   getLatestMarkedAt,
+  getMarkStatusLabel,
   getNextVisibleLimit,
   getRecordShelfReleaseId,
   getReleaseContextMatches,
@@ -142,6 +145,36 @@ test("upsertConfirmedExternalLink rejects wrong provider and non-album URLs", ()
   );
   assert.match(nonAlbum.error, /Spotify/);
   assert.equal(nonAlbum.release, release);
+});
+
+test("manual add builds all confirmed platform links and reports field errors", () => {
+  const valid = buildConfirmedExternalLinks({
+    neodbUrl:
+      "https://neodb.social/album/4RXOw79OuQvsatSQu74qzA?from=share",
+    spotifyUrl:
+      "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa?si=tracking",
+    appleMusicUrl:
+      "https://music.apple.com/cn/album/example/1234567890?l=zh",
+  });
+  assert.deepEqual(valid.errors, {});
+  assert.deepEqual(
+    valid.externalLinks.map((link) => link.provider),
+    ["NEODB", "SPOTIFY", "APPLE_MUSIC"],
+  );
+  assert.ok(
+    valid.externalLinks.every((link) => link.status === "CONFIRMED"),
+  );
+  assert.ok(
+    valid.externalLinks.every((link) => !link.url.includes("?")),
+  );
+
+  const invalid = buildConfirmedExternalLinks({
+    spotifyUrl: "https://open.spotify.com/track/not-an-album",
+    appleMusicUrl: "https://open.spotify.com/album/wrong-provider",
+  });
+  assert.equal(invalid.externalLinks.length, 0);
+  assert.match(invalid.errors.spotifyUrl, /Spotify/);
+  assert.match(invalid.errors.appleMusicUrl, /Apple Music/);
 });
 
 test("supported release links normalize only exact album platforms", () => {
@@ -450,6 +483,44 @@ test("exact edition evidence keeps Deluxe in the primary title", () => {
 test("9/10 maps to 4.5 stars", () => {
   assert.equal(scoreToStars(9), 4.5);
   assert.equal(scoreToStars(null), null);
+});
+
+test("mark status labels cover every NeoDB shelf state", () => {
+  assert.equal(getMarkStatusLabel("complete"), "听过");
+  assert.equal(getMarkStatusLabel("progress"), "在听");
+  assert.equal(getMarkStatusLabel("wishlist"), "想听");
+  assert.equal(getMarkStatusLabel("dropped"), "搁置");
+  assert.equal(getMarkStatusLabel(""), "未标记");
+});
+
+test("missing release status falls back to the latest entry or heard history", () => {
+  assert.equal(
+    getEffectiveMarkStatus({
+      markStatus: null,
+      listeningEntries: [
+        {
+          markedAt: "2026-07-20T00:00:00Z",
+          markStatus: "wishlist",
+        },
+        {
+          markedAt: "2026-07-21T00:00:00Z",
+          markStatus: "progress",
+        },
+      ],
+    }),
+    "progress",
+  );
+  assert.equal(
+    getEffectiveMarkStatus({
+      listeningEntries: [
+        {
+          listenedAt: "2026-07-21T00:00:00Z",
+          rating10: 8,
+        },
+      ],
+    }),
+    "complete",
+  );
 });
 
 test("automatic pagination advances one bounded batch at a time", () => {
@@ -1640,6 +1711,72 @@ test("ordinary NeoDB sync reads one global rotating audit page", async () => {
       [["complete", 2]],
     );
     assert.equal(result.nextState.auditCursor, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ordinary NeoDB sync batch-checks an older known mark outside fetched pages", async () => {
+  const olderMark = {
+    ...neoDbMark,
+    comment_text: "修改后的旧条目评论",
+    item: {
+      ...neoDbMark.item,
+      uuid: "older-known-mark-1",
+      url: "https://neodb.social/album/older-known-mark-1",
+      title: "Older Known Album",
+    },
+  };
+  const existing = neoDbMarkToRelease({
+    ...olderMark,
+    comment_text: "修改前的旧条目评论",
+  });
+  const originalFetch = globalThis.fetch;
+  const requestedBatchIds = [];
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/api/me/shelf/items/")) {
+      requestedBatchIds.push(
+        ...decodeURIComponent(parsed.pathname.split("/").at(-1)).split(","),
+      );
+      return Response.json([olderMark]);
+    }
+    if (
+      parsed.pathname.includes("/api/me/shelf/") &&
+      parsed.searchParams.has("page")
+    ) {
+      return Response.json({ data: [], pages: 1, count: 1 });
+    }
+    if (parsed.pathname.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [existing],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          [olderMark.item.uuid]: neoDbMarkHash({
+            ...olderMark,
+            comment_text: "修改前的旧条目评论",
+          }),
+          "removed-snapshot-only": "old-hash",
+        },
+        auditCursor: 0,
+      },
+    );
+
+    assert.deepEqual(requestedBatchIds, [olderMark.item.uuid]);
+    assert.equal(result.knownAuditCount, 1);
+    assert.equal(result.knownAuditBatchCount, 1);
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(result.plan.updates[0].releaseId, existing.id);
   } finally {
     globalThis.fetch = originalFetch;
   }

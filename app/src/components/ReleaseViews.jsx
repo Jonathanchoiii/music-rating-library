@@ -7,8 +7,10 @@ import {
 import {
   displayDate,
   getCurrentRating,
+  getEffectiveMarkStatus,
   getLatestListenedAt,
   getLatestMarkedAt,
+  getMarkStatusLabel,
   getReleaseKindLabel,
 } from "../lib/music.js";
 import { Rating } from "./Rating.jsx";
@@ -151,6 +153,8 @@ export function ReleaseList({ releases, onOpen }) {
         const rating = getCurrentRating(release.listeningEntries);
         const latest = getLatestListenedAt(release.listeningEntries);
         const latestMarkedAt = getLatestMarkedAt(release.listeningEntries);
+        const effectiveMarkStatus = getEffectiveMarkStatus(release);
+        const markStatusLabel = getMarkStatusLabel(effectiveMarkStatus);
         return (
           <button
             type="button"
@@ -181,6 +185,12 @@ export function ReleaseList({ releases, onOpen }) {
             </span>
             <span className="list-release-genres">
               {release.genres.join(" · ") || "未标记流派"}
+            </span>
+            <span
+              className={`list-release-status is-${effectiveMarkStatus ?? "unset"}`}
+              aria-label={`收藏状态：${markStatusLabel}`}
+            >
+              {markStatusLabel}
             </span>
             <span className="list-release-date">
               {latest ? displayDate(latest) : displayDate(latestMarkedAt)}

@@ -40,6 +40,30 @@ const PLATFORM_SLOTS = [
   },
 ];
 
+const GENRE_SOURCE_LABELS = {
+  APPLE_LOOKUP: "Apple Music",
+  APPLE_MUSIC: "Apple Music",
+  APPLE_MUSIC_EXACT: "Apple Music",
+  MUSICBRAINZ: "MusicBrainz",
+  MUSICBRAINZ_EXACT: "MusicBrainz",
+};
+
+function genreSourceLabels(release) {
+  const evidenceSources =
+    release.metadataEvidence?.genres?.sources?.map((source) => source.source) ??
+    [];
+  const sourceValues = evidenceSources.length
+    ? evidenceSources
+    : String(release.genreSource ?? "").split("_AND_");
+  return [
+    ...new Set(
+      sourceValues
+        .map((source) => GENRE_SOURCE_LABELS[source])
+        .filter(Boolean),
+    ),
+  ];
+}
+
 export function ReleaseDetail({
   release,
   artistTargets = [],
@@ -80,6 +104,7 @@ export function ReleaseDetail({
       )
       .map((link) => [link.provider, link]),
   );
+  const genreSources = genreSourceLabels(release);
   const titleAliases = [
     ...new Map(
       [release.translatedTitle, ...(release.titleAliases ?? [])]
@@ -228,10 +253,17 @@ export function ReleaseDetail({
           </div>
         </div>
         {release.genres.length ? (
-          <div className="genre-row">
-            {release.genres.map((genre) => (
-              <span key={genre}>{genre}</span>
-            ))}
+          <div className="detail-genres">
+            <div className="genre-row">
+              {release.genres.map((genre) => (
+                <span key={genre}>{genre}</span>
+              ))}
+            </div>
+            {genreSources.length ? (
+              <p className="genre-source">
+                精确信源：{genreSources.join("、")}
+              </p>
+            ) : null}
           </div>
         ) : null}
         <div className="platform-row">

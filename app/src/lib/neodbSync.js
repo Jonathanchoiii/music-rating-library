@@ -14,6 +14,8 @@ export const NEODB_OAUTH_PENDING_KEY = "recordshelf-neodb-oauth-pending-v1";
 export const NEODB_ACCESS_TOKEN_KEY = "recordshelf-neodb-access-token-v1";
 
 const PAGE_SIZE = 100;
+const KNOWN_MARK_BATCH_SIZE = 20;
+const KNOWN_MARK_AUDIT_CONCURRENCY = 6;
 const SHELF_TYPES = ["complete", "progress", "wishlist", "dropped"];
 const SYNC_SCHEMA_VERSION = 2;
 const REMOVAL_EVIDENCE_VERSION = 2;
@@ -594,6 +596,7 @@ export function neoDbMarkHash(mark) {
   return jsonHash({
     shelfType: mark.shelf_type,
     visibility: mark.visibility,
+    postId: mark.post_id,
     createdTime: mark.created_time,
     comment: mark.comment_text,
     rating: mark.rating_grade,
@@ -1293,6 +1296,43 @@ async function mapWithConcurrency(items, limit, task) {
   return results;
 }
 
+async function fetchKnownMarkBatch(token, sourceItemIds) {
+  if (!sourceItemIds.length) return [];
+  const encodedIds = sourceItemIds.map(encodeURIComponent).join(",");
+  const marks = await fetchNeoDb(
+    `/api/me/shelf/items/${encodedIds}`,
+    token,
+    { allow404: true },
+  );
+  if (marks) return marks;
+  if (sourceItemIds.length === 1) return [];
+  const middle = Math.ceil(sourceItemIds.length / 2);
+  const [left, right] = await Promise.all([
+    fetchKnownMarkBatch(token, sourceItemIds.slice(0, middle)),
+    fetchKnownMarkBatch(token, sourceItemIds.slice(middle)),
+  ]);
+  return [...left, ...right];
+}
+
+async function fetchKnownMarks(token, sourceItemIds) {
+  const batches = [];
+  for (
+    let offset = 0;
+    offset < sourceItemIds.length;
+    offset += KNOWN_MARK_BATCH_SIZE
+  ) {
+    batches.push(
+      sourceItemIds.slice(offset, offset + KNOWN_MARK_BATCH_SIZE),
+    );
+  }
+  const results = await mapWithConcurrency(
+    batches,
+    KNOWN_MARK_AUDIT_CONCURRENCY,
+    (batch) => fetchKnownMarkBatch(token, batch),
+  );
+  return results.flat();
+}
+
 function shelfPagesBeyondFirst(totalPagesByShelf) {
   return SHELF_TYPES.flatMap((shelfType) =>
     Array.from(
@@ -1475,9 +1515,12 @@ export async function pullNeoDbDelta(
   const canonicalAliases = buildNeoDbCanonicalAliases(identityReleases);
   const localSourceIds = getNeoDbSourceIds(releases);
   const orphanLinkedSourceIds = getOrphanNeoDbLinkedSourceIds(releases);
-  const knownIds = new Set([
+  const auditableSourceIds = new Set([
     ...localSourceIds,
     ...orphanLinkedSourceIds,
+  ]);
+  const knownIds = new Set([
+    ...auditableSourceIds,
     ...Object.keys(previousState.snapshot ?? {}),
   ]);
   const pageMap = new Map();
@@ -1570,9 +1613,20 @@ export async function pullNeoDbDelta(
     }
   }
 
+  const pagedMarks = [...pageMap.values()].flatMap((page) => page.data);
+  const pagedSourceIds = new Set(
+    pagedMarks.map((mark) => mark.item.uuid).filter(Boolean),
+  );
+  const knownSourceIdsToAudit = shouldReconcile
+    ? []
+    : [...auditableSourceIds]
+        .filter((sourceItemId) => !pagedSourceIds.has(sourceItemId))
+        .sort();
+  const knownAuditMarks = knownSourceIdsToAudit.length
+    ? await fetchKnownMarks(token, knownSourceIdsToAudit)
+    : [];
   const fetchedMarkMap = new Map(
-    [...pageMap.values()]
-      .flatMap((page) => page.data)
+    [...pagedMarks, ...knownAuditMarks]
       .sort(
         (markA, markB) =>
           Date.parse(markA.created_time ?? 0) -
@@ -1661,6 +1715,10 @@ export async function pullNeoDbDelta(
     plan,
     nextState,
     fetchedPages: [...pageMap.keys()].sort(),
+    knownAuditCount: knownSourceIdsToAudit.length,
+    knownAuditBatchCount: Math.ceil(
+      knownSourceIdsToAudit.length / KNOWN_MARK_BATCH_SIZE,
+    ),
     fullReconcile: shouldReconcile,
     remoteSourceIds: shouldReconcile ? [...remoteIds] : null,
   };

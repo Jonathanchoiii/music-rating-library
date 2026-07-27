@@ -463,6 +463,34 @@ export function upsertConfirmedExternalLink(
   };
 }
 
+export function buildConfirmedExternalLinks(values = {}) {
+  const fields = [
+    ["neodbUrl", "NEODB"],
+    ["spotifyUrl", "SPOTIFY"],
+    ["appleMusicUrl", "APPLE_MUSIC"],
+  ];
+  let release = { externalLinks: [] };
+  const errors = {};
+  for (const [field, provider] of fields) {
+    const url = String(values[field] ?? "").trim();
+    if (!url) continue;
+    const result = upsertConfirmedExternalLink(
+      release,
+      url,
+      provider,
+    );
+    if (result.error) {
+      errors[field] = result.error;
+    } else {
+      release = result.release;
+    }
+  }
+  return {
+    externalLinks: release.externalLinks,
+    errors,
+  };
+}
+
 export function getRecordShelfReleaseId(value = "", currentOrigin = "") {
   const rawValue = String(value).trim();
   if (!rawValue) return null;
@@ -818,6 +846,45 @@ export function getReleaseKindLabel(release) {
       wishlist: "想听",
     }[release.markStatus] ?? "未分类"
   );
+}
+
+export function getMarkStatusLabel(markStatus) {
+  return (
+    {
+      complete: "听过",
+      progress: "在听",
+      wishlist: "想听",
+      dropped: "搁置",
+    }[markStatus] ?? "未标记"
+  );
+}
+
+export function getEffectiveMarkStatus(release) {
+  if (release?.markStatus) return release.markStatus;
+  const entryStatus = [...(release?.listeningEntries ?? [])]
+    .filter((entry) => entry.markStatus)
+    .sort(
+      (left, right) =>
+        Date.parse(
+          right.markedAt ??
+            right.listenedAt ??
+            right.ratedAt ??
+            right.createdAt ??
+            0,
+        ) -
+        Date.parse(
+          left.markedAt ??
+            left.listenedAt ??
+            left.ratedAt ??
+            left.createdAt ??
+            0,
+        ),
+    )[0]?.markStatus;
+  if (entryStatus) return entryStatus;
+  return getLatestListenedAt(release?.listeningEntries) ||
+    getCurrentRating(release?.listeningEntries) != null
+    ? "complete"
+    : null;
 }
 
 export function scoreToStars(score) {

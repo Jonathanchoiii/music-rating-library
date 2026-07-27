@@ -1,7 +1,6 @@
 import {
   getCurrentRating,
   getLatestListenedAt,
-  getLatestMarkedAt,
   normalizeText,
   splitArtistCredits,
 } from "./music.js";
@@ -16,8 +15,6 @@ export const LIBRARY_FILTER_STORAGE_KEY = "recordshelf-library-filters-v1";
 export const EMPTY_LIBRARY_FILTERS = {
   releaseDateFrom: "",
   releaseDateTo: "",
-  markedDateFrom: "",
-  markedDateTo: "",
   listenedDateFrom: "",
   listenedDateTo: "",
   listenedDateMode: "LATEST",
@@ -86,10 +83,18 @@ function uniqueStrings(values = []) {
 }
 
 export function sanitizeLibraryFilters(filters = {}) {
-  const sanitized = { ...EMPTY_LIBRARY_FILTERS, ...filters };
+  const sanitized = Object.fromEntries(
+    Object.entries(EMPTY_LIBRARY_FILTERS).map(([field, defaultValue]) => [
+      field,
+      filters[field] ?? defaultValue,
+    ]),
+  );
   for (const field of ARRAY_FILTER_FIELDS) {
     sanitized[field] = uniqueStrings(filters[field] ?? []);
   }
+  sanitized.completeness = sanitized.completeness.filter(
+    (value) => value !== "MISSING_LANGUAGE",
+  );
   return sanitized;
 }
 
@@ -126,7 +131,6 @@ export function activeFilterCount(filters = {}) {
   const value = sanitizeLibraryFilters(filters);
   return [
     value.releaseDateFrom || value.releaseDateTo,
-    value.markedDateFrom || value.markedDateTo,
     value.listenedDateFrom || value.listenedDateTo,
     value.artistIds.length,
     value.releaseTypes.length,
@@ -285,9 +289,6 @@ function matchesCompleteness(release, value) {
   if (value === "MISSING_GENRE") {
     return getTrustedFacetValues(release, "genres").length === 0;
   }
-  if (value === "MISSING_LANGUAGE") {
-    return getTrustedFacetValues(release, "catalogLanguages").length === 0;
-  }
   return false;
 }
 
@@ -367,17 +368,6 @@ export function releaseMatchesLibraryFilters(
       release.releaseDate,
       filters.releaseDateFrom,
       filters.releaseDateTo,
-    )
-  ) {
-    return false;
-  }
-
-  const latestMarkedAt = getLatestMarkedAt(release.listeningEntries);
-  if (
-    !dateInRange(
-      latestMarkedAt,
-      filters.markedDateFrom,
-      filters.markedDateTo,
     )
   ) {
     return false;
