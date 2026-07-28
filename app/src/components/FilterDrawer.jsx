@@ -12,7 +12,7 @@ import { groupReleasesByArtistIdentity } from "../lib/artists.js";
 import {
   EMPTY_LIBRARY_FILTERS,
   activeFilterCount,
-  collectTrustedFacetOptions,
+  collectVisibleTrustedFacetOptions,
   filterReleases,
   sanitizeLibraryFilters,
 } from "../lib/filters.js";
@@ -173,14 +173,30 @@ export function FilterDrawer({
     );
   const facetOptions = useMemo(
     () =>
-      Object.fromEntries(
-        FACET_CONFIGS.map(([field]) => [
-          field,
-          collectTrustedFacetOptions(releases, field),
-        ]),
+      collectVisibleTrustedFacetOptions(
+        releases,
+        FACET_CONFIGS.map(([field]) => field),
       ),
     [releases],
   );
+  const availableFacetConfigs = FACET_CONFIGS.filter(
+    ([field]) => facetOptions[field]?.length > 0,
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setDraft((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const [field] of FACET_CONFIGS) {
+        if (facetOptions[field]?.length || !current[field].length) continue;
+        next[field] = [];
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [facetOptions, open]);
+
   const previewCount = useMemo(
     () => filterReleases(releases, draft, artistIdentityState).length,
     [artistIdentityState, draft, releases],
@@ -451,39 +467,42 @@ export function FilterDrawer({
             </div>
           </details>
 
-          <details>
-            <summary>
-              <Sparkle aria-hidden="true" />
-              已核验的外部资料
-            </summary>
-            <div className="filter-section-body">
-              <p className="filter-evidence-note">
-                这里只使用已有精确信源或用户确认的数据。没有依据的字段保持为空，
-                不会从标题、标签或艺人国籍自动推断。
-              </p>
-              {FACET_CONFIGS.map(([field, label, description]) => (
-                <div className="filter-field-block" key={field}>
-                  <div className="filter-field-label">
-                    <span>
-                      <strong>{label}</strong>
-                      <small>{description}</small>
-                    </span>
-                    <em>{facetOptions[field].length || "暂无"}</em>
-                  </div>
-                  <FilterChoices
-                    options={facetOptions[field].map((option) => [
-                      option.value,
-                      option.value,
-                      option.count,
-                    ])}
-                    selected={draft[field]}
-                    onToggle={(value) => updateArray(field, value)}
-                    emptyText={`暂无已核验的${label}数据，不会自动猜测。`}
-                  />
-                </div>
-              ))}
-            </div>
-          </details>
+          {availableFacetConfigs.length ? (
+            <details>
+              <summary>
+                <Sparkle aria-hidden="true" />
+                已核验的外部资料
+              </summary>
+              <div className="filter-section-body">
+                <p className="filter-evidence-note">
+                  这里只使用已有精确信源或用户确认的数据。没有依据的字段保持为空，
+                  不会从标题、标签或艺人国籍自动推断。
+                </p>
+                {availableFacetConfigs.map(
+                  ([field, label, description]) => (
+                    <div className="filter-field-block" key={field}>
+                      <div className="filter-field-label">
+                        <span>
+                          <strong>{label}</strong>
+                          <small>{description}</small>
+                        </span>
+                        <em>{facetOptions[field].length}</em>
+                      </div>
+                      <FilterChoices
+                        options={facetOptions[field].map((option) => [
+                          option.value,
+                          option.value,
+                          option.count,
+                        ])}
+                        selected={draft[field]}
+                        onToggle={(value) => updateArray(field, value)}
+                      />
+                    </div>
+                  ),
+                )}
+              </div>
+            </details>
+          ) : null}
         </div>
 
         <footer className="filter-drawer-footer">

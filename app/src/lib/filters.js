@@ -234,6 +234,18 @@ export function collectTrustedFacetOptions(releases = [], field) {
   );
 }
 
+export function collectVisibleTrustedFacetOptions(
+  releases = [],
+  fields = Object.keys(FACET_FIELD_CONFIG),
+) {
+  return Object.fromEntries(
+    fields.flatMap((field) => {
+      const options = collectTrustedFacetOptions(releases, field);
+      return options.length ? [[field, options]] : [];
+    }),
+  );
+}
+
 function releaseArtistIds(release, artistIdentityState) {
   const aliasIndex = getArtistAliasIndex(artistIdentityState);
   return new Set(

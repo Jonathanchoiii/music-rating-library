@@ -4,6 +4,7 @@ import {
   EMPTY_LIBRARY_FILTERS,
   activeFilterCount,
   collectTrustedFacetOptions,
+  collectVisibleTrustedFacetOptions,
   releaseMatchesLibraryFilters,
   sanitizeLibraryFilters,
 } from "../src/lib/filters.js";
@@ -172,6 +173,35 @@ test("unsupported inferred facets never become filter options", () => {
   assert.deepEqual(collectTrustedFacetOptions(releases, "genres"), [
     { value: "Art Pop", count: 1 },
   ]);
+});
+
+test("external filter dimensions without trusted options stay hidden", () => {
+  const releases = [
+    release({
+      genres: ["Art Pop"],
+      genreSource: "APPLE_MUSIC_EXACT",
+    }),
+    release({
+      id: "unverified-style",
+      styles: ["Dream Pop"],
+      styleSource: "FUZZY_INFERRED",
+    }),
+  ];
+
+  assert.deepEqual(
+    collectVisibleTrustedFacetOptions(releases, [
+      "genres",
+      "styles",
+      "catalogLanguages",
+      "editionTypes",
+      "releaseCountries",
+      "labels",
+      "mediaFormats",
+    ]),
+    {
+      genres: [{ value: "Art Pop", count: 1 }],
+    },
+  );
 });
 
 test("completeness filters expose missing metadata without inventing it", () => {
