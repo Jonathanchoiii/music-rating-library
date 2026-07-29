@@ -1514,6 +1514,7 @@ export async function pullNeoDbDelta(
 ) {
   const canonicalAliases = buildNeoDbCanonicalAliases(identityReleases);
   const localSourceIds = getNeoDbSourceIds(releases);
+  const identitySourceIds = getNeoDbSourceIds(identityReleases);
   const orphanLinkedSourceIds = getOrphanNeoDbLinkedSourceIds(releases);
   const auditableSourceIds = new Set([
     ...localSourceIds,
@@ -1663,10 +1664,14 @@ export async function pullNeoDbDelta(
   for (const mark of fetchedMarks) {
     const hash = neoDbMarkHash(mark);
     const needsLinkAttach = orphanLinkedSourceIds.has(mark.item.uuid);
+    const missingLocally =
+      !localSourceIds.has(mark.item.uuid) &&
+      !identitySourceIds.has(mark.item.uuid);
     if (
       forceFull ||
       previousSnapshot[mark.item.uuid] !== hash ||
-      needsLinkAttach
+      needsLinkAttach ||
+      missingLocally
     ) {
       changedMarks.push(mark);
     }

@@ -1308,6 +1308,115 @@ test("orphan NeoDB link still enriches when snapshot hash is unchanged", async (
   }
 });
 
+test("a snapshot-known NeoDB mark missing locally is retried as an addition", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "7e4XoqnbnOdt4VgFOEtVG2",
+      url: "https://neodb.social/album/7e4XoqnbnOdt4VgFOEtVG2",
+      title: "拆",
+    },
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          "7e4XoqnbnOdt4VgFOEtVG2": unchangedHash,
+        },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.additions.length, 1);
+    assert.equal(
+      result.plan.additions[0].sourceItemId,
+      "7e4XoqnbnOdt4VgFOEtVG2",
+    );
+    assert.equal(result.plan.additions[0].release.title, "拆");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a user-removed base release is not revived by snapshot recovery", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "removed-base-release",
+      url: "https://neodb.social/album/removed-base-release",
+      title: "Keep Removed",
+    },
+  };
+  const baseRelease = neoDbMarkToRelease(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          "removed-base-release": neoDbMarkHash(mark),
+        },
+        auditCursor: 0,
+      },
+      { identityReleases: [baseRelease] },
+    );
+    assert.equal(result.plan.additions.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("comment-only NeoDB changes do not request another type verification", () => {
   const existing = {
     ...neoDbMarkToRelease({
