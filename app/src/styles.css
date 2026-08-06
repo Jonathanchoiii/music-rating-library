@@ -128,17 +128,21 @@ html.is-desktop-shell .desktop-sidebar {
 .brand-mark {
   width: 48px;
   height: 48px;
-  border-radius: 14px;
-  color: white;
-  background: var(--accent);
+  border-radius: 12px;
+  background: #fff;
   display: grid;
   place-items: center;
   margin-bottom: 38px;
+  overflow: hidden;
 }
 
-.brand-mark svg {
-  width: 24px;
-  height: 24px;
+.brand-mark img {
+  display: block;
+  width: 52px;
+  height: 52px;
+  max-width: none;
+  flex: 0 0 auto;
+  object-fit: contain;
 }
 
 .desktop-sidebar nav {
@@ -1211,6 +1215,232 @@ html.is-desktop-shell .desktop-sidebar {
   gap: 5px;
 }
 
+.library-content.is-shelf-view {
+  margin-inline: calc(clamp(28px, 4vw, 64px) * -1);
+}
+
+.release-shelf-view {
+  position: relative;
+  min-height: 70vh;
+  padding: 18px clamp(28px, 4vw, 64px) 72px;
+  background: transparent;
+  overflow: visible;
+  isolation: isolate;
+}
+
+.release-shelf-view::before {
+  content: none;
+}
+
+.release-shelf-intro {
+  width: min(1180px, 100%);
+  margin: 0 auto 30px;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid rgba(17, 17, 15, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.release-shelf-intro span,
+.release-shelf-intro small {
+  color: rgba(17, 17, 15, 0.52);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.release-shelf-intro small {
+  white-space: nowrap;
+}
+
+.release-shelf-stream {
+  display: grid;
+  width: min(1240px, 100%);
+  margin: 0 auto;
+  gap: clamp(36px, 4vw, 60px);
+}
+
+.release-shelf {
+  position: relative;
+  min-height: clamp(205px, 22vw, 340px);
+  padding: 0 clamp(28px, 3.5vw, 56px) 48px;
+  isolation: isolate;
+}
+
+.release-shelf-index {
+  position: absolute;
+  top: 35%;
+  left: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: rgba(17, 17, 15, 0.46);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  line-height: 1.15;
+  writing-mode: vertical-rl;
+}
+
+.release-shelf-row {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(var(--shelf-count), minmax(0, 1fr));
+  height: 100%;
+  align-items: flex-end;
+  gap: clamp(8px, 1.35vw, 22px);
+  perspective: 1400px;
+}
+
+.release-shelf-record {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 210px;
+  justify-self: center;
+  transform: translateY(var(--shelf-rise)) rotate(var(--shelf-lean)) scale(var(--shelf-scale));
+  transform-origin: bottom center;
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.release-shelf-record:hover,
+.release-shelf-record:has(.release-shelf-cover-button:focus-visible) {
+  z-index: 8;
+  transform: translateY(calc(var(--shelf-rise) - 24px)) rotate(0deg) scale(calc(var(--shelf-scale) + 0.045));
+}
+
+.release-shelf-cover-button {
+  position: relative;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  cursor: pointer;
+}
+
+.release-shelf-sleeve {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: clamp(3px, 0.45vw, 7px);
+  background: #dddcd7;
+  box-shadow:
+    0 8px 14px rgba(28, 27, 23, 0.18),
+    0 28px 45px rgba(28, 27, 23, 0.18),
+    -1px 0 0 rgba(255, 255, 255, 0.22) inset;
+  overflow: hidden;
+}
+
+.release-shelf-sleeve::after {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08) inset;
+  content: "";
+  pointer-events: none;
+}
+
+.release-shelf-sleeve .release-cover {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.release-shelf-glare {
+  position: absolute;
+  inset: -20%;
+  background: linear-gradient(118deg, transparent 34%, rgba(255, 255, 255, 0.18) 49%, transparent 64%);
+  opacity: 0;
+  transform: translateX(-45%);
+  transition: opacity 250ms ease, transform 600ms ease;
+  pointer-events: none;
+}
+
+.release-shelf-record:hover .release-shelf-glare,
+.release-shelf-record:has(.release-shelf-cover-button:focus-visible)
+  .release-shelf-glare {
+  opacity: 1;
+  transform: translateX(42%);
+}
+
+.release-shelf-caption {
+  width: 100%;
+  padding-top: 9px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.release-shelf-record:hover .release-shelf-caption,
+.release-shelf-record:has(.release-shelf-cover-button:focus-visible)
+  .release-shelf-caption {
+  opacity: 1;
+  transform: none;
+}
+
+.release-shelf-caption > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.release-shelf-caption strong,
+.release-shelf-caption small,
+.release-shelf-caption em {
+  overflow: hidden;
+  color: rgba(17, 17, 15, 0.72);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 520;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.release-shelf-caption small {
+  color: rgba(17, 17, 15, 0.5);
+  font-weight: 450;
+}
+
+.release-shelf-caption em {
+  color: #9a6a13;
+  font-variant-numeric: tabular-nums;
+}
+
+.release-shelf-board {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 40px;
+  left: 0;
+  height: 10px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #f2f1ed 0%, #deddd8 70%, #c1c0bb 100%);
+  box-shadow:
+    0 2px 2px rgba(23, 22, 19, 0.14),
+    0 15px 24px rgba(23, 22, 19, 0.18),
+    0 42px 62px rgba(23, 22, 19, 0.13);
+}
+
+.release-shelf-board::after {
+  position: absolute;
+  top: 100%;
+  right: 7%;
+  left: 7%;
+  height: clamp(35px, 4vw, 64px);
+  background: linear-gradient(180deg, rgba(64, 62, 56, 0.28), transparent);
+  filter: blur(14px);
+  content: "";
+}
+
 .wall-item {
   min-width: 0;
 }
@@ -1551,6 +1781,11 @@ html.is-desktop-shell .desktop-sidebar {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
+}
+
+.library-content.is-shelf-view > .artist-profile > .artist-profile-back,
+.library-content.is-shelf-view > .artist-profile > header {
+  margin-inline: clamp(28px, 4vw, 64px);
 }
 
 .artist-profile h2 {
@@ -4485,6 +4720,126 @@ button.settings-entry:hover {
     gap: 3px;
   }
 
+  .library-content.is-shelf-view {
+    margin-inline: -16px;
+  }
+
+  .library-content.is-shelf-view > .artist-profile > .artist-profile-back,
+  .library-content.is-shelf-view > .artist-profile > header {
+    margin-inline: 16px;
+  }
+
+  .release-shelf-view {
+    --mobile-shelf-size: min(72vw, 282px);
+    --mobile-shelf-step: 58px;
+    padding: 8px 16px 56px;
+    border-radius: 0;
+  }
+
+  .release-shelf-intro {
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+  }
+
+  .release-shelf-intro small {
+    align-self: center;
+  }
+
+  .release-shelf-stream {
+    gap: 0;
+  }
+
+  .release-shelf {
+    min-height: 0;
+    padding: 0;
+  }
+
+  .release-shelf:has(.release-shelf-record:hover),
+  .release-shelf:has(.release-shelf-cover-button:focus-visible) {
+    z-index: 30;
+  }
+
+  .release-shelf + .release-shelf {
+    margin-top: calc(
+      var(--mobile-shelf-step) - var(--mobile-shelf-size) - 10px
+    );
+  }
+
+  .release-shelf-index,
+  .release-shelf-board {
+    display: none;
+  }
+
+  .release-shelf-row {
+    display: flex;
+    height: auto;
+    padding-bottom: 10px;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .release-shelf-record {
+    position: relative;
+    z-index: calc(var(--shelf-slot) + 1);
+    width: var(--mobile-shelf-size);
+    min-width: 0;
+    max-width: none;
+    margin-top: calc(var(--mobile-shelf-step) - var(--mobile-shelf-size));
+    transform: scale(0.86);
+    transform-origin: center;
+    transition:
+      margin 360ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .release-shelf-record:first-child {
+    margin-top: 0;
+  }
+
+  .release-shelf-record:hover,
+  .release-shelf-record:has(.release-shelf-cover-button:focus-visible) {
+    z-index: 20;
+    transform: scale(1.045);
+  }
+
+  .release-shelf-record:hover::before,
+  .release-shelf-record:has(
+      .release-shelf-cover-button:focus-visible
+    )::before {
+    position: absolute;
+    z-index: -1;
+    inset: -20px;
+    border-radius: 14px;
+    background: var(--bg);
+    content: "";
+  }
+
+  .release-shelf-caption {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    min-height: 100%;
+    padding: 45% 16px 14px;
+    align-items: end;
+    align-content: end;
+    border-radius: clamp(3px, 0.45vw, 7px);
+    background: linear-gradient(
+      180deg,
+      transparent 42%,
+      rgba(0, 0, 0, 0.78) 100%
+    );
+    pointer-events: none;
+  }
+
+  .release-shelf-caption strong,
+  .release-shelf-caption small {
+    color: white;
+  }
+
+  .release-shelf-caption em {
+    color: #ffd16b;
+  }
+
   .wall-overlay {
     display: none;
   }
@@ -5024,6 +5379,28 @@ button.settings-entry:hover {
 
   .release-grid {
     gap-inline: 7px;
+  }
+
+  .library-content.is-shelf-view {
+    margin-inline: -12px;
+  }
+
+  .release-shelf-view {
+    --mobile-shelf-size: min(68vw, 264px);
+    --mobile-shelf-step: 54px;
+  }
+
+  .library-content.is-shelf-view > .artist-profile > .artist-profile-back,
+  .library-content.is-shelf-view > .artist-profile > header {
+    margin-inline: 12px;
+  }
+
+  .view-switch button {
+    width: 34px;
+  }
+
+  .release-shelf {
+    min-height: 0;
   }
 
   .mobile-nav {

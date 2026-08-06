@@ -9,8 +9,8 @@ import {
   GridNine,
   ListBullets,
   MagnifyingGlass,
-  MusicNotes,
   Plus,
+  Rows,
   SquaresFour,
   UploadSimple,
   UsersThree,
@@ -43,6 +43,7 @@ import {
   ArtistGroups,
   ReleaseGrid,
   ReleaseList,
+  ReleaseShelf,
 } from "./components/ReleaseViews.jsx";
 import { ReleaseDetail } from "./components/ReleaseDetail.jsx";
 import { AddReleaseDialog } from "./components/AddReleaseDialog.jsx";
@@ -418,7 +419,11 @@ function LibraryApp() {
   }, [view, location.pathname, location.search]);
 
   useEffect(() => {
-    if (isArtistRoute && !selectedArtistId && view === "wall") {
+    if (
+      isArtistRoute &&
+      !selectedArtistId &&
+      ["wall", "shelf"].includes(view)
+    ) {
       setView("grid");
     }
   }, [isArtistRoute, selectedArtistId, view]);
@@ -1039,7 +1044,7 @@ function LibraryApp() {
     <div className="app-shell">
       <aside className="desktop-sidebar" aria-label="主导航">
         <Link className="brand-mark" to="/" aria-label="RecordShelf 首页">
-          <MusicNotes weight="fill" />
+          <img src="/recordshelf-logo.png" alt="" aria-hidden="true" />
         </Link>
         <nav>
           {navItems.map(({ href, label, Icon }) => {
@@ -1240,6 +1245,7 @@ function LibraryApp() {
                       ["grid", GridFour, "宫格"],
                       ["list", ListBullets, "列表"],
                       ["wall", GridNine, "唱片墙"],
+                      ["shelf", Rows, "唱片架"],
                     ]
               ).map(([value, Icon, label]) => (
                 <button
@@ -1257,7 +1263,9 @@ function LibraryApp() {
           </div>
         </section>
 
-        <section className="library-content">
+        <section
+          className={`library-content${view === "shelf" ? " is-shelf-view" : ""}`}
+        >
           {search ? (
             <header className="primary-search-heading">
               <div>
@@ -1284,6 +1292,8 @@ function LibraryApp() {
               />
             ) : view === "list" ? (
               <ReleaseList releases={displayedReleases} onOpen={openRelease} />
+            ) : view === "shelf" ? (
+              <ReleaseShelf releases={displayedReleases} onOpen={openRelease} />
             ) : (
               <ReleaseGrid
                 releases={displayedReleases}

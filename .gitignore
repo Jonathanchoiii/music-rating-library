@@ -7,6 +7,7 @@ app/desktop-release/
 app/.vite/
 app/electron/assets/*.iconset/
 app/design-qa.md
+app/design-qa-*.png
 app/implementation-*.png
 
 # Local personal library and recovery material

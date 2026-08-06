@@ -16,6 +16,7 @@ import {
 import { Rating } from "./Rating.jsx";
 
 const QUICK_RELEASE_TYPES = ["OTHER", "LP", "EP", "SINGLE"];
+const RELEASES_PER_SHELF = 5;
 
 function coverHue(release) {
   const key = `${release.title}${release.artists.join("")}`;
@@ -203,6 +204,91 @@ export function ReleaseList({ releases, onOpen }) {
   );
 }
 
+function shelfCardStyle(release, index) {
+  const seed = [...`${release.id}${release.title}`].reduce(
+    (total, character) => total + character.codePointAt(0),
+    0,
+  );
+  return {
+    "--shelf-slot": index,
+    "--shelf-lean": `${((seed % 17) - 8) / 10}deg`,
+    "--shelf-rise": `${seed % 12}px`,
+    "--shelf-scale": 0.94 + (seed % 7) / 100,
+  };
+}
+
+export function ReleaseShelf({ releases, onOpen }) {
+  const shelves = Array.from(
+    { length: Math.ceil(releases.length / RELEASES_PER_SHELF) },
+    (_, index) =>
+      releases.slice(
+        index * RELEASES_PER_SHELF,
+        (index + 1) * RELEASES_PER_SHELF,
+      ),
+  );
+
+  return (
+    <div className="release-shelf-view">
+      <header className="release-shelf-intro">
+        <span>RECORD SHELF</span>
+        <small>{releases.length} 张正在展示</small>
+      </header>
+      <div className="release-shelf-stream">
+        {shelves.map((shelf, shelfIndex) => (
+          <section
+            className="release-shelf"
+            key={shelf.map((release) => release.id).join("-")}
+            aria-label={`唱片架 ${shelfIndex + 1}`}
+            style={{ "--shelf-count": shelf.length }}
+          >
+            <span className="release-shelf-index" aria-hidden="true">
+              <span>{String(shelfIndex + 1).padStart(2, "0")}</span>
+              <span>RECORDS</span>
+            </span>
+            <div className="release-shelf-row">
+              {shelf.map((release, index) => {
+                const rating = getCurrentRating(release.listeningEntries);
+                return (
+                  <article
+                    className="release-shelf-record"
+                    key={release.id}
+                    style={shelfCardStyle(release, index)}
+                  >
+                    <button
+                      type="button"
+                      className="release-shelf-cover-button"
+                      onClick={() => onOpen(release.id)}
+                      aria-label={`打开 ${release.artists.join("、")} 的 ${release.title}`}
+                    >
+                      <span className="release-shelf-sleeve">
+                        <Cover release={release} />
+                        <span className="release-shelf-glare" aria-hidden="true" />
+                        {release.isPrivate ? (
+                          <span className="cover-lock" aria-label="私密记录">
+                            <LockSimple weight="fill" />
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="release-shelf-caption">
+                        <span>
+                          <strong>{release.title}</strong>
+                          <small>{release.artists.join("、")}</small>
+                        </span>
+                        {rating != null ? <em>{rating.toFixed(1)}</em> : null}
+                      </span>
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+            <span className="release-shelf-board" aria-hidden="true" />
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ArtistGroups({
   groups,
   selectedArtistId = "",
@@ -247,6 +333,11 @@ export function ArtistGroups({
         </header>
         {view === "list" ? (
           <ReleaseList
+            releases={selectedGroup.releases}
+            onOpen={onOpen}
+          />
+        ) : view === "shelf" ? (
+          <ReleaseShelf
             releases={selectedGroup.releases}
             onOpen={onOpen}
           />
