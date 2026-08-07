@@ -14,6 +14,8 @@ export const NEODB_OAUTH_PENDING_KEY = "recordshelf-neodb-oauth-pending-v1";
 export const NEODB_ACCESS_TOKEN_KEY = "recordshelf-neodb-access-token-v1";
 
 const PAGE_SIZE = 100;
+const KNOWN_MARK_BATCH_SIZE = 20;
+const KNOWN_MARK_AUDIT_CONCURRENCY = 6;
 const SHELF_TYPES = ["complete", "progress", "wishlist", "dropped"];
 const SYNC_SCHEMA_VERSION = 2;
 const REMOVAL_EVIDENCE_VERSION = 2;
@@ -64,6 +66,10 @@ const METADATA_FIELDS = [
   "mediaFormatSource",
   "metadataEvidence",
   "coverUrl",
+  "coverRemoteUrl",
+  "coverSource",
+  "coverMatchedFrom",
+  "coverMatchedAt",
   "isPrivate",
   "externalLinks",
   "markStatus",
@@ -594,6 +600,7 @@ export function neoDbMarkHash(mark) {
   return jsonHash({
     shelfType: mark.shelf_type,
     visibility: mark.visibility,
+    postId: mark.post_id,
     createdTime: mark.created_time,
     comment: mark.comment_text,
     rating: mark.rating_grade,
@@ -882,17 +889,39 @@ export async function verifyChangedReleaseTypes(
   };
 }
 
+function neoDbIdsFromReleaseLinks(release) {
+  return (release.externalLinks ?? [])
+    .filter((link) => link.provider === "NEODB")
+    .flatMap((link) => [
+      sourceItemIdFromUrl(link.url),
+      sourceItemIdFromUrl(link.canonicalUrl),
+      sourceItemIdFromUrl(link.originalUrl),
+    ])
+    .filter(Boolean);
+}
+
+function neoDbIdsFromReleaseEntries(release) {
+  return (release.listeningEntries ?? [])
+    .filter((entry) => entry.source === "NEODB")
+    .map(
+      (entry) =>
+        entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl),
+    )
+    .filter(Boolean);
+}
+
 export function getNeoDbSourceIds(releases = []) {
+  return new Set(releases.flatMap((release) => neoDbIdsFromReleaseEntries(release)));
+}
+
+export function getNeoDbLinkedSourceIds(releases = []) {
+  return new Set(releases.flatMap((release) => neoDbIdsFromReleaseLinks(release)));
+}
+
+export function getOrphanNeoDbLinkedSourceIds(releases = []) {
+  const entryIds = getNeoDbSourceIds(releases);
   return new Set(
-    releases.flatMap((release) =>
-      release.listeningEntries
-        .filter((entry) => entry.source === "NEODB")
-        .map(
-          (entry) =>
-            entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl),
-        )
-        .filter(Boolean),
-    ),
+    [...getNeoDbLinkedSourceIds(releases)].filter((id) => !entryIds.has(id)),
   );
 }
 
@@ -952,13 +981,14 @@ export function advanceNeoDbRemovalReview(
 }
 
 function findReleaseByNeoDbId(releases, sourceItemId) {
+  if (!sourceItemId) return null;
+  const byEntry = releases.find((release) =>
+    neoDbIdsFromReleaseEntries(release).includes(sourceItemId),
+  );
+  if (byEntry) return byEntry;
+  // Manual adds often confirm a NeoDB URL without a NEODB listening entry.
   return releases.find((release) =>
-    release.listeningEntries.some(
-      (entry) =>
-        entry.source === "NEODB" &&
-        (entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl)) ===
-          sourceItemId,
-    ),
+    neoDbIdsFromReleaseLinks(release).includes(sourceItemId),
   );
 }
 
@@ -1270,6 +1300,43 @@ async function mapWithConcurrency(items, limit, task) {
   return results;
 }
 
+async function fetchKnownMarkBatch(token, sourceItemIds) {
+  if (!sourceItemIds.length) return [];
+  const encodedIds = sourceItemIds.map(encodeURIComponent).join(",");
+  const marks = await fetchNeoDb(
+    `/api/me/shelf/items/${encodedIds}`,
+    token,
+    { allow404: true },
+  );
+  if (marks) return marks;
+  if (sourceItemIds.length === 1) return [];
+  const middle = Math.ceil(sourceItemIds.length / 2);
+  const [left, right] = await Promise.all([
+    fetchKnownMarkBatch(token, sourceItemIds.slice(0, middle)),
+    fetchKnownMarkBatch(token, sourceItemIds.slice(middle)),
+  ]);
+  return [...left, ...right];
+}
+
+async function fetchKnownMarks(token, sourceItemIds) {
+  const batches = [];
+  for (
+    let offset = 0;
+    offset < sourceItemIds.length;
+    offset += KNOWN_MARK_BATCH_SIZE
+  ) {
+    batches.push(
+      sourceItemIds.slice(offset, offset + KNOWN_MARK_BATCH_SIZE),
+    );
+  }
+  const results = await mapWithConcurrency(
+    batches,
+    KNOWN_MARK_AUDIT_CONCURRENCY,
+    (batch) => fetchKnownMarkBatch(token, batch),
+  );
+  return results.flat();
+}
+
 function shelfPagesBeyondFirst(totalPagesByShelf) {
   return SHELF_TYPES.flatMap((shelfType) =>
     Array.from(
@@ -1451,8 +1518,14 @@ export async function pullNeoDbDelta(
 ) {
   const canonicalAliases = buildNeoDbCanonicalAliases(identityReleases);
   const localSourceIds = getNeoDbSourceIds(releases);
-  const knownIds = new Set([
+  const identitySourceIds = getNeoDbSourceIds(identityReleases);
+  const orphanLinkedSourceIds = getOrphanNeoDbLinkedSourceIds(releases);
+  const auditableSourceIds = new Set([
     ...localSourceIds,
+    ...orphanLinkedSourceIds,
+  ]);
+  const knownIds = new Set([
+    ...auditableSourceIds,
     ...Object.keys(previousState.snapshot ?? {}),
   ]);
   const pageMap = new Map();
@@ -1545,24 +1618,65 @@ export async function pullNeoDbDelta(
     }
   }
 
-  const fetchedMarks = [
-    ...new Map(
-      [...pageMap.values()]
-        .flatMap((page) => page.data)
-        .sort(
-          (markA, markB) =>
-            Date.parse(markA.created_time ?? 0) -
-            Date.parse(markB.created_time ?? 0),
-        )
-        .map((mark) => [mark.item.uuid, mark]),
-    ).values(),
-  ];
+  const pagedMarks = [...pageMap.values()].flatMap((page) => page.data);
+  const pagedSourceIds = new Set(
+    pagedMarks.map((mark) => mark.item.uuid).filter(Boolean),
+  );
+  const knownSourceIdsToAudit = shouldReconcile
+    ? []
+    : [...auditableSourceIds]
+        .filter((sourceItemId) => !pagedSourceIds.has(sourceItemId))
+        .sort();
+  const knownAuditMarks = knownSourceIdsToAudit.length
+    ? await fetchKnownMarks(token, knownSourceIdsToAudit)
+    : [];
+  const fetchedMarkMap = new Map(
+    [...pagedMarks, ...knownAuditMarks]
+      .sort(
+        (markA, markB) =>
+          Date.parse(markA.created_time ?? 0) -
+          Date.parse(markB.created_time ?? 0),
+      )
+      .map((mark) => [mark.item.uuid, mark]),
+  );
+  const missingOrphanIds = [...orphanLinkedSourceIds].filter(
+    (sourceItemId) => !fetchedMarkMap.has(sourceItemId),
+  );
+  if (missingOrphanIds.length) {
+    const orphanMarks = await mapWithConcurrency(
+      missingOrphanIds,
+      4,
+      async (sourceItemId) => {
+        const mark = await fetchNeoDb(
+          `/api/me/shelf/item/${encodeURIComponent(sourceItemId)}`,
+          token,
+          { allow404: true },
+        );
+        return mark
+          ? canonicalizeNeoDbMark(mark, canonicalAliases)
+          : null;
+      },
+    );
+    for (const mark of orphanMarks) {
+      if (mark?.item?.uuid) fetchedMarkMap.set(mark.item.uuid, mark);
+    }
+  }
+  const fetchedMarks = [...fetchedMarkMap.values()];
   const previousSnapshot = previousState.snapshot ?? {};
   const snapshot = shouldReconcile ? {} : { ...previousSnapshot };
   const changedMarks = [];
   for (const mark of fetchedMarks) {
     const hash = neoDbMarkHash(mark);
-    if (forceFull || previousSnapshot[mark.item.uuid] !== hash) {
+    const needsLinkAttach = orphanLinkedSourceIds.has(mark.item.uuid);
+    const missingLocally =
+      !localSourceIds.has(mark.item.uuid) &&
+      !identitySourceIds.has(mark.item.uuid);
+    if (
+      forceFull ||
+      previousSnapshot[mark.item.uuid] !== hash ||
+      needsLinkAttach ||
+      missingLocally
+    ) {
       changedMarks.push(mark);
     }
     snapshot[mark.item.uuid] = hash;
@@ -1571,7 +1685,11 @@ export async function pullNeoDbDelta(
     changedMarks,
     5,
     (mark) =>
-      enrichChangedMark(mark, token, !localSourceIds.has(mark.item.uuid)),
+      enrichChangedMark(
+        mark,
+        token,
+        !localSourceIds.has(mark.item.uuid),
+      ),
   );
 
   const remoteIds = shouldReconcile
@@ -1606,6 +1724,10 @@ export async function pullNeoDbDelta(
     plan,
     nextState,
     fetchedPages: [...pageMap.keys()].sort(),
+    knownAuditCount: knownSourceIdsToAudit.length,
+    knownAuditBatchCount: Math.ceil(
+      knownSourceIdsToAudit.length / KNOWN_MARK_BATCH_SIZE,
+    ),
     fullReconcile: shouldReconcile,
     remoteSourceIds: shouldReconcile ? [...remoteIds] : null,
   };

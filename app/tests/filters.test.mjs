@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   EMPTY_LIBRARY_FILTERS,
+  activeFilterCount,
   collectTrustedFacetOptions,
+  collectVisibleTrustedFacetOptions,
   releaseMatchesLibraryFilters,
+  sanitizeLibraryFilters,
 } from "../src/lib/filters.js";
 import { DEFAULT_ARTIST_IDENTITY_STATE } from "../src/lib/artists.js";
 
@@ -121,6 +124,36 @@ test("unknown dates are excluded only when a date range is active", () => {
   );
 });
 
+test("legacy marked-date filters are discarded in favor of listened time", () => {
+  const filters = sanitizeLibraryFilters({
+    markedDateFrom: "2025-01-01",
+    markedDateTo: "2025-12-31",
+    listenedDateFrom: "2025-03-01",
+    listenedDateTo: "2025-03-01",
+  });
+
+  assert.equal("markedDateFrom" in filters, false);
+  assert.equal("markedDateTo" in filters, false);
+  assert.equal(activeFilterCount(filters), 1);
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      release(),
+      filters,
+      DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    true,
+  );
+});
+
+test("legacy missing-language completeness filters are discarded", () => {
+  const filters = sanitizeLibraryFilters({
+    completeness: ["MISSING_LANGUAGE", "MISSING_GENRE"],
+  });
+
+  assert.deepEqual(filters.completeness, ["MISSING_GENRE"]);
+  assert.equal(activeFilterCount(filters), 1);
+});
+
 test("unsupported inferred facets never become filter options", () => {
   const releases = [
     release({
@@ -142,10 +175,39 @@ test("unsupported inferred facets never become filter options", () => {
   ]);
 });
 
+test("external filter dimensions without trusted options stay hidden", () => {
+  const releases = [
+    release({
+      genres: ["Art Pop"],
+      genreSource: "APPLE_MUSIC_EXACT",
+    }),
+    release({
+      id: "unverified-style",
+      styles: ["Dream Pop"],
+      styleSource: "FUZZY_INFERRED",
+    }),
+  ];
+
+  assert.deepEqual(
+    collectVisibleTrustedFacetOptions(releases, [
+      "genres",
+      "styles",
+      "catalogLanguages",
+      "editionTypes",
+      "releaseCountries",
+      "labels",
+      "mediaFormats",
+    ]),
+    {
+      genres: [{ value: "Art Pop", count: 1 }],
+    },
+  );
+});
+
 test("completeness filters expose missing metadata without inventing it", () => {
   const filters = {
     ...EMPTY_LIBRARY_FILTERS,
-    completeness: ["MISSING_GENRE", "MISSING_LANGUAGE"],
+    completeness: ["MISSING_GENRE"],
   };
   assert.equal(
     releaseMatchesLibraryFilters(

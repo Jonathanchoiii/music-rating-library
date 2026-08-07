@@ -136,22 +136,32 @@ const statusCounts = releases.reduce((counts, release) => {
   return counts;
 }, {});
 
-console.log(
-  JSON.stringify(
-    {
-      inputRows: parsed.data.length,
-      releases: releases.length,
-      listeningEntries: listeningEntryCount,
-      statusCounts,
-      spotifyLinks: releases.filter((release) =>
-        release.externalLinks.some((link) => link.provider === "SPOTIFY"),
-      ).length,
-      appleMusicLinks: releases.filter((release) =>
-        release.externalLinks.some((link) => link.provider === "APPLE_MUSIC"),
-      ).length,
-      outputPath,
+const summary = {
+  inputRows: parsed.data.length,
+  releases: releases.length,
+  listeningEntries: listeningEntryCount,
+  statusCounts,
+  spotifyLinks: releases.filter((release) =>
+    release.externalLinks.some((link) => link.provider === "SPOTIFY"),
+  ).length,
+  appleMusicLinks: releases.filter((release) =>
+    release.externalLinks.some((link) => link.provider === "APPLE_MUSIC"),
+  ).length,
+  outputPath,
+};
+
+if (!process.argv.includes("--skip-covers")) {
+  const { runCoverEnrichment } = await import("./enrich-cover-art.mjs");
+  summary.coverEnrichment = await runCoverEnrichment({
+    libraryPath: outputPath,
+    concurrency: 6,
+    cacheLocal: true,
+    onProgress: ({ processed, targets, matched, cached, unresolved }) => {
+      console.log(
+        `Covers ${processed}/${targets} · matched ${matched} · cached ${cached} · unresolved ${unresolved}`,
+      );
     },
-    null,
-    2,
-  ),
-);
+  });
+}
+
+console.log(JSON.stringify(summary, null, 2));

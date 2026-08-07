@@ -64,6 +64,37 @@ function changedValues(previous, next) {
   return changes;
 }
 
+export function reconcileSharedStateResponse(
+  requestStorage,
+  currentStorage,
+  authoritativeStorage,
+) {
+  const storage = {};
+  let appliedRemoteChanges = false;
+
+  for (const key of SHARED_LOCAL_STORAGE_KEYS) {
+    const requestedValue = requestStorage[key] ?? null;
+    const currentValue = currentStorage[key] ?? null;
+    const authoritativeValue = authoritativeStorage[key] ?? null;
+    const changedDuringRequest = currentValue !== requestedValue;
+    const nextValue = changedDuringRequest
+      ? currentValue
+      : authoritativeValue;
+
+    if (!changedDuringRequest && nextValue !== currentValue) {
+      appliedRemoteChanges = true;
+    }
+    if (typeof nextValue === "string") storage[key] = nextValue;
+  }
+
+  return {
+    storage,
+    appliedRemoteChanges,
+    hasPendingChanges:
+      Object.keys(changedValues(authoritativeStorage, storage)).length > 0,
+  };
+}
+
 function applyRemoteStorage(storage = {}) {
   for (const key of SHARED_LOCAL_STORAGE_KEYS) {
     const value = storage[key];
@@ -109,9 +140,22 @@ async function pushChanges(
   return state;
 }
 
-function reconcileWithAuthoritativeState(state) {
+function reconcileWithAuthoritativeState(
+  state,
+  requestStorage = null,
+) {
   if (!state?.storage) return false;
   const current = localSnapshot();
+  if (requestStorage) {
+    const reconciliation = reconcileSharedStateResponse(
+      requestStorage,
+      current,
+      state.storage,
+    );
+    applyRemoteStorage(reconciliation.storage);
+    lastSnapshot = { ...state.storage };
+    return reconciliation.appliedRemoteChanges;
+  }
   if (!Object.keys(changedValues(current, state.storage)).length) {
     lastSnapshot = current;
     return false;
@@ -166,27 +210,38 @@ export async function bootstrapSharedLocalState() {
 export function flushSharedLocalState() {
   if (!canWriteSharedState()) return Promise.resolve();
   if (syncInFlight) return syncInFlight;
-  const nextSnapshot = localSnapshot();
-  const changes = changedValues(lastSnapshot, nextSnapshot);
-  if (!Object.keys(changes).length) return Promise.resolve();
-  const previousSnapshot = lastSnapshot;
-  lastSnapshot = nextSnapshot;
-  syncInFlight = pushChanges(changes, {
-    baseStorage: Object.fromEntries(
-      Object.keys(changes).map((key) => [
-        key,
-        previousSnapshot[key] ?? null,
-      ]),
-    ),
-  })
-    .then((state) => {
-      if (reconcileWithAuthoritativeState(state)) {
-        window.location.reload();
+
+  let shouldReload = false;
+  syncInFlight = (async () => {
+    while (true) {
+      const requestSnapshot = localSnapshot();
+      const changes = changedValues(lastSnapshot, requestSnapshot);
+      const changedKeys = Object.keys(changes);
+      if (!changedKeys.length) break;
+
+      const previousSnapshot = lastSnapshot;
+      try {
+        const state = await pushChanges(changes, {
+          baseStorage: Object.fromEntries(
+            changedKeys.map((key) => [
+              key,
+              previousSnapshot[key] ?? null,
+            ]),
+          ),
+        });
+        shouldReload =
+          reconcileWithAuthoritativeState(state, requestSnapshot) ||
+          shouldReload;
+      } catch (error) {
+        lastSnapshot = previousSnapshot;
+        throw error;
       }
-    })
+    }
+
+    if (shouldReload) window.location.reload();
+  })()
     .catch((error) => {
       console.warn("RecordShelf 本地修改将在稍后重试", error);
-      lastSnapshot = previousSnapshot;
     })
     .finally(() => {
       syncInFlight = null;

@@ -57,7 +57,7 @@ function MergeChoice({
         <strong>{release.title}</strong>
         <span>{release.artists.join("、")}</span>
         <span>
-          {release.listeningEntries.length} 条收听记录
+          {release.listeningEntries?.length ?? 0} 条收听记录
           {markedAt ? ` · 最近 ${displayDate(markedAt)}` : ""}
         </span>
         <em>{comment ? `“${comment}”` : "尚无评论"}</em>
@@ -71,6 +71,38 @@ function MergeChoice({
   );
 }
 
+function MergeSearchResult({ release, selected, onSelect }) {
+  const markedAt = getLatestMarkedAt(release.listeningEntries);
+  return (
+    <button
+      type="button"
+      className={`release-merge-search-result${selected ? " is-selected" : ""}`}
+      aria-pressed={selected}
+      onClick={() => onSelect(release.id)}
+    >
+      {release.coverUrl ? (
+        <img
+          src={release.coverUrl}
+          alt={`${release.artists.join("、")}《${release.title}》封面`}
+        />
+      ) : (
+        <span className="release-merge-cover-placeholder" aria-hidden="true">
+          {release.title?.[0] ?? "♪"}
+        </span>
+      )}
+      <span>
+        <strong>{release.title}</strong>
+        <small>{release.artists.join("、")}</small>
+        <small>
+          {release.listeningEntries?.length ?? 0} 条收听记录
+          {markedAt ? ` · 最近 ${displayDate(markedAt)}` : ""}
+        </small>
+      </span>
+      <em>{selected ? "已选择" : "选择这条"}</em>
+    </button>
+  );
+}
+
 export function ReleaseMergePanel({
   release,
   onFindCandidate,
@@ -79,12 +111,14 @@ export function ReleaseMergePanel({
   const [isOpen, setIsOpen] = useState(false);
   const [inputUrl, setInputUrl] = useState("");
   const [lookupResult, setLookupResult] = useState(null);
+  const [candidateReleaseId, setCandidateReleaseId] = useState("");
   const [keepReleaseId, setKeepReleaseId] = useState("");
 
   useEffect(() => {
     setIsOpen(false);
     setInputUrl("");
     setLookupResult(null);
+    setCandidateReleaseId("");
     setKeepReleaseId("");
   }, [release.id]);
 
@@ -92,6 +126,7 @@ export function ReleaseMergePanel({
     setIsOpen(false);
     setInputUrl("");
     setLookupResult(null);
+    setCandidateReleaseId("");
     setKeepReleaseId("");
   }
 
@@ -99,27 +134,48 @@ export function ReleaseMergePanel({
     event.preventDefault();
     const result = onFindCandidate?.(release.id, inputUrl.trim());
     setLookupResult(result);
+    setCandidateReleaseId(
+      result?.status === "FOUND" ? result.candidate.id : "",
+    );
     setKeepReleaseId("");
   }
 
   function confirmMerge() {
-    if (lookupResult?.status !== "FOUND" || !keepReleaseId) return;
+    const candidates =
+      lookupResult?.status === "FOUND"
+        ? [lookupResult.candidate]
+        : (lookupResult?.matches ?? []);
+    const candidate = candidates.find(
+      (item) => item.id === candidateReleaseId,
+    );
+    if (!candidate || !keepReleaseId) return;
     const keptRelease =
-      keepReleaseId === release.id ? release : lookupResult.candidate;
+      keepReleaseId === release.id ? release : candidate;
     const removedRelease =
-      keepReleaseId === release.id ? lookupResult.candidate : release;
+      keepReleaseId === release.id ? candidate : release;
     const confirmed = window.confirm(
       `确认保留《${keptRelease.title}》，并删除《${removedRelease.title}》这条发行？\n\n被删除发行中独有的收听历史、评分、评论和不冲突的外链会先合并到保留项。这个操作会立即写入本地音乐库。`,
     );
     if (!confirmed) return;
     onMerge?.({
       currentReleaseId: release.id,
-      candidateReleaseId: lookupResult.candidate.id,
+      candidateReleaseId: candidate.id,
       keepReleaseId,
       provider: lookupResult.provider,
     });
     closeEditor();
   }
+
+  const lookupCandidates =
+    lookupResult?.status === "FOUND"
+      ? [lookupResult.candidate]
+      : (lookupResult?.matches ?? []);
+  const selectedCandidate = lookupCandidates.find(
+    (candidate) => candidate.id === candidateReleaseId,
+  );
+  const hasSelectableMatches =
+    lookupResult?.status === "TITLE_MATCHES" ||
+    lookupResult?.status === "AMBIGUOUS";
 
   return (
     <section className="release-merge-panel" aria-labelledby="release-merge-title">
@@ -128,7 +184,7 @@ export function ReleaseMergePanel({
           <div>
             <span>数据整理</span>
             <h3 id="release-merge-title">发现这是另一条记录的重复内容？</h3>
-            <p>粘贴另一条发行详情或同平台唱片链接，再选择保留项。</p>
+            <p>输入专辑名、专辑 ID、发行详情或同平台链接，再选择保留项。</p>
           </div>
           <button
             type="button"
@@ -146,8 +202,8 @@ export function ReleaseMergePanel({
               <span>手动合并</span>
               <h3 id="release-merge-title">找到需要合并的另一条记录</h3>
               <p>
-                支持 RecordShelf 发行详情、NeoDB、Apple Music 和 Spotify
-                唱片链接。
+                支持专辑名、专辑 ID、RecordShelf 发行详情、NeoDB、Apple
+                Music 和 Spotify 唱片链接。
               </p>
             </div>
             <button
@@ -161,19 +217,20 @@ export function ReleaseMergePanel({
           </header>
           <form onSubmit={findCandidate}>
             <label htmlFor={`merge-url-${release.id}`}>
-              另一条记录的链接
+              另一条记录的专辑名、专辑 ID 或链接
             </label>
             <div>
               <input
                 id={`merge-url-${release.id}`}
-                type="url"
+                type="text"
                 value={inputUrl}
                 onChange={(event) => {
                   setInputUrl(event.target.value);
                   setLookupResult(null);
+                  setCandidateReleaseId("");
                   setKeepReleaseId("");
                 }}
-                placeholder="http://127.0.0.1:4173/releases/..."
+                placeholder="例如：安和桥北、release-import-neodb-… 或 https://…"
                 required
               />
               <button
@@ -187,16 +244,37 @@ export function ReleaseMergePanel({
             </div>
           </form>
 
-          {lookupResult && lookupResult.status !== "FOUND" ? (
+          {lookupResult &&
+          lookupResult.status !== "FOUND" &&
+          !hasSelectableMatches ? (
             <p className="release-merge-error" role="alert">
               {lookupResult.message}
             </p>
           ) : null}
 
-          {lookupResult?.status === "FOUND" ? (
+          {hasSelectableMatches ? (
+            <div className="release-merge-search-results">
+              <p>{lookupResult.message}</p>
+              <div>
+                {lookupCandidates.map((candidate) => (
+                  <MergeSearchResult
+                    key={candidate.id}
+                    release={candidate}
+                    selected={candidateReleaseId === candidate.id}
+                    onSelect={(releaseId) => {
+                      setCandidateReleaseId(releaseId);
+                      setKeepReleaseId("");
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {selectedCandidate ? (
             <div className="release-merge-confirmation">
               <p>
-                已通过 {lookupResult.providerLabel} 精确找到另一条记录。请选择最终保留项：
+                已通过 {lookupResult.providerLabel} 找到另一条记录。请选择最终保留项：
               </p>
               <div className="release-merge-choices">
                 <MergeChoice
@@ -207,9 +285,9 @@ export function ReleaseMergePanel({
                   onSelect={setKeepReleaseId}
                 />
                 <MergeChoice
-                  release={lookupResult.candidate}
-                  label="链接命中的条目"
-                  selected={keepReleaseId === lookupResult.candidate.id}
+                  release={selectedCandidate}
+                  label="选中的待合并条目"
+                  selected={keepReleaseId === selectedCandidate.id}
                   inputName={`merge-keep-${release.id}`}
                   onSelect={setKeepReleaseId}
                 />

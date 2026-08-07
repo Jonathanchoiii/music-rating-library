@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   AppleLogo,
   ArrowSquareOut,
@@ -15,14 +16,54 @@ import {
   getLatestMarkedAt,
   getReleaseKindLabel,
 } from "../lib/music.js";
+import { markCoverLoadFailed } from "../lib/coverStatus.js";
 import { Rating } from "./Rating.jsx";
 import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
 
-const providerConfig = {
-  APPLE_MUSIC: { label: "在 Apple Music 打开", Icon: AppleLogo },
-  SPOTIFY: { label: "在 Spotify 打开", Icon: SpotifyLogo },
-  NEODB: { label: "查看 NeoDB 记录", Icon: LinkSimple },
+const PLATFORM_SLOTS = [
+  {
+    provider: "NEODB",
+    label: "查看 NeoDB 记录",
+    addLabel: "添加 NeoDB 链接",
+    Icon: LinkSimple,
+  },
+  {
+    provider: "APPLE_MUSIC",
+    label: "在 Apple Music 打开",
+    addLabel: "添加 Apple Music 链接",
+    Icon: AppleLogo,
+  },
+  {
+    provider: "SPOTIFY",
+    label: "在 Spotify 打开",
+    addLabel: "添加 Spotify 链接",
+    Icon: SpotifyLogo,
+  },
+];
+
+const GENRE_SOURCE_LABELS = {
+  APPLE_LOOKUP: "Apple Music",
+  APPLE_MUSIC: "Apple Music",
+  APPLE_MUSIC_EXACT: "Apple Music",
+  MUSICBRAINZ: "MusicBrainz",
+  MUSICBRAINZ_EXACT: "MusicBrainz",
 };
+
+function genreSourceLabels(release) {
+  const evidenceSources =
+    release.metadataEvidence?.genres?.sources?.map((source) => source.source) ??
+    [];
+  const sourceValues = evidenceSources.length
+    ? evidenceSources
+    : String(release.genreSource ?? "").split("_AND_");
+  return [
+    ...new Set(
+      sourceValues
+        .map((source) => GENRE_SOURCE_LABELS[source])
+        .filter(Boolean),
+    ),
+  ];
+}
 
 export function ReleaseDetail({
   release,
@@ -30,10 +71,23 @@ export function ReleaseDetail({
   onClose,
   onAddListening,
   onChangeType,
+  onUpdatePlatformLink,
   onFindMergeCandidate,
   onMergeRelease,
   onOpenArtist,
 }) {
+  const [editingProvider, setEditingProvider] = useState(null);
+  const [draftUrl, setDraftUrl] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const [coverLoadFailed, setCoverLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setEditingProvider(null);
+    setDraftUrl("");
+    setLinkError("");
+    setCoverLoadFailed(false);
+  }, [release?.id, release?.coverUrl]);
+
   if (!release) return null;
   const rating = getCurrentRating(release.listeningEntries);
   const latest = getLatestListenedAt(release.listeningEntries);
@@ -43,19 +97,17 @@ export function ReleaseDetail({
       Date.parse(b.ratedAt ?? b.createdAt) -
       Date.parse(a.ratedAt ?? a.createdAt),
   );
-  const confirmedLinks = release.externalLinks.filter((link) =>
-    ["CONFIRMED", "AUTO_CONFIRMED"].includes(link.status),
+  const confirmedLinks = new Map(
+    (release.externalLinks ?? [])
+      .filter((link) =>
+        ["CONFIRMED", "AUTO_CONFIRMED"].includes(link.status),
+      )
+      .filter((link) =>
+        PLATFORM_SLOTS.some((slot) => slot.provider === link.provider),
+      )
+      .map((link) => [link.provider, link]),
   );
-  const displayedLinks = [
-    ...new Map(
-      confirmedLinks
-        .filter((link) => providerConfig[link.provider])
-        .map((link) => [link.provider, link]),
-    ).values(),
-  ];
-  const hasStreamingLink = confirmedLinks.some((link) =>
-    ["APPLE_MUSIC", "SPOTIFY"].includes(link.provider),
-  );
+  const genreSources = genreSourceLabels(release);
   const titleAliases = [
     ...new Map(
       [release.translatedTitle, ...(release.titleAliases ?? [])]
@@ -78,6 +130,40 @@ export function ReleaseDetail({
         ]),
     ).values(),
   ];
+  const editingSlot = PLATFORM_SLOTS.find(
+    (slot) => slot.provider === editingProvider,
+  );
+
+  function closeLinkEditor() {
+    setEditingProvider(null);
+    setDraftUrl("");
+    setLinkError("");
+  }
+
+  function openLinkEditor(provider) {
+    setEditingProvider(provider);
+    setDraftUrl("");
+    setLinkError("");
+  }
+
+  function savePlatformLink(event) {
+    event.preventDefault();
+    if (!editingProvider) return;
+    const saved = onUpdatePlatformLink?.(
+      release.id,
+      editingProvider,
+      draftUrl.trim(),
+    );
+    if (saved !== true) {
+      setLinkError(
+        typeof saved === "string"
+          ? saved
+          : "请粘贴该平台的精确专辑链接",
+      );
+      return;
+    }
+    closeLinkEditor();
+  }
 
   return (
     <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
@@ -96,10 +182,14 @@ export function ReleaseDetail({
           </button>
         </div>
         <div className="detail-hero">
-          {release.coverUrl ? (
+          {release.coverUrl && !coverLoadFailed ? (
             <img
               src={release.coverUrl}
               alt={`${release.artists.join("、")}《${release.title}》封面`}
+              onError={() => {
+                setCoverLoadFailed(true);
+                markCoverLoadFailed(release.id);
+              }}
             />
           ) : (
             <div className="detail-cover-placeholder">{release.title[0]}</div>
@@ -137,6 +227,16 @@ export function ReleaseDetail({
                 : release.artists.join("、")}
             </p>
             <Rating score={rating} />
+            <div className="detail-facts">
+              <span>
+                <CalendarBlank aria-hidden="true" />
+                最近听过 {latest ? displayDate(latest) : "未记录"}
+              </span>
+              <span>
+                <ClockCounterClockwise aria-hidden="true" />
+                {release.listeningEntries.length} 次记录
+              </span>
+            </div>
           </div>
           <div className="detail-type-editor">
             <span>发行类型</span>
@@ -158,45 +258,85 @@ export function ReleaseDetail({
               ))}
             </div>
           </div>
-          <div className="detail-facts">
-            <span>
-              <CalendarBlank aria-hidden="true" />
-              最近听过 {latest ? displayDate(latest) : "未记录"}
-            </span>
-            <span>
-              <ClockCounterClockwise aria-hidden="true" />
-              {release.listeningEntries.length} 次记录
-            </span>
-          </div>
         </div>
         {release.genres.length ? (
-          <div className="genre-row">
-            {release.genres.map((genre) => (
-              <span key={genre}>{genre}</span>
-            ))}
+          <div className="detail-genres">
+            <div className="genre-row">
+              {release.genres.map((genre) => (
+                <span key={genre}>{genre}</span>
+              ))}
+            </div>
+            {genreSources.length ? (
+              <p className="genre-source">
+                精确信源：{genreSources.join("、")}
+              </p>
+            ) : null}
           </div>
         ) : null}
         <div className="platform-row">
-          {displayedLinks.map((link) => {
-            const config = providerConfig[link.provider];
-            const Icon = config.Icon;
-            return (
-              <a
-                href={link.url}
-                target="_blank"
-                rel="noreferrer"
-                key={link.provider}
-              >
-                <Icon weight="fill" aria-hidden="true" />
-                {config.label}
-                <ArrowSquareOut aria-hidden="true" />
-              </a>
-            );
-          })}
-          {!hasStreamingLink ? (
-            <span className="match-pending">
-              尚未确认 Apple Music / Spotify 链接
-            </span>
+          <div className="platform-row-slots">
+            {PLATFORM_SLOTS.map((slot) => {
+              const link = confirmedLinks.get(slot.provider);
+              const Icon = slot.Icon;
+              if (link) {
+                return (
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    key={slot.provider}
+                  >
+                    <Icon weight="fill" aria-hidden="true" />
+                    {slot.label}
+                    <ArrowSquareOut aria-hidden="true" />
+                  </a>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  key={slot.provider}
+                  className={`platform-link-missing${
+                    editingProvider === slot.provider ? " is-editing" : ""
+                  }`}
+                  onClick={() => openLinkEditor(slot.provider)}
+                >
+                  <Plus aria-hidden="true" />
+                  {slot.addLabel}
+                </button>
+              );
+            })}
+          </div>
+          {editingSlot ? (
+            <form className="platform-link-editor" onSubmit={savePlatformLink}>
+              <label htmlFor={`platform-link-${release.id}`}>
+                粘贴精确的 {editingSlot.addLabel.replace(/^添加 /, "")}
+              </label>
+              <div>
+                <input
+                  id={`platform-link-${release.id}`}
+                  type="url"
+                  value={draftUrl}
+                  placeholder="https://"
+                  autoFocus
+                  onChange={(event) => {
+                    setDraftUrl(event.target.value);
+                    setLinkError("");
+                  }}
+                />
+                <button type="submit" className="secondary-button">
+                  保存链接
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={closeLinkEditor}
+                >
+                  取消
+                </button>
+              </div>
+              {linkError ? <p className="platform-link-error">{linkError}</p> : null}
+            </form>
           ) : null}
         </div>
         <div className="timeline-header">

@@ -419,6 +419,78 @@ export function normalizeSupportedReleaseUrl(value = "") {
   }
 }
 
+export function upsertConfirmedExternalLink(
+  release,
+  url,
+  expectedProvider,
+) {
+  const normalized = normalizeSupportedReleaseUrl(String(url ?? "").trim());
+  const providerLabels = {
+    NEODB: "NeoDB",
+    APPLE_MUSIC: "Apple Music",
+    SPOTIFY: "Spotify",
+  };
+  const expectedLabel = providerLabels[expectedProvider] ?? expectedProvider;
+  if (!normalized) {
+    return {
+      release,
+      error: `请粘贴精确的 ${expectedLabel} 专辑链接`,
+    };
+  }
+  if (normalized.provider !== expectedProvider) {
+    return {
+      release,
+      error: `请粘贴 ${expectedLabel} 专辑链接，而不是 ${normalized.providerLabel}`,
+    };
+  }
+  const nextLink = {
+    provider: normalized.provider,
+    url: normalized.normalizedUrl,
+    status: "CONFIRMED",
+  };
+  const externalLinks = [
+    ...(release.externalLinks ?? []).filter(
+      (link) => link.provider !== expectedProvider,
+    ),
+    nextLink,
+  ];
+  return {
+    release: {
+      ...release,
+      externalLinks,
+    },
+    error: null,
+  };
+}
+
+export function buildConfirmedExternalLinks(values = {}) {
+  const fields = [
+    ["neodbUrl", "NEODB"],
+    ["spotifyUrl", "SPOTIFY"],
+    ["appleMusicUrl", "APPLE_MUSIC"],
+  ];
+  let release = { externalLinks: [] };
+  const errors = {};
+  for (const [field, provider] of fields) {
+    const url = String(values[field] ?? "").trim();
+    if (!url) continue;
+    const result = upsertConfirmedExternalLink(
+      release,
+      url,
+      provider,
+    );
+    if (result.error) {
+      errors[field] = result.error;
+    } else {
+      release = result.release;
+    }
+  }
+  return {
+    externalLinks: release.externalLinks,
+    errors,
+  };
+}
+
 export function getRecordShelfReleaseId(value = "", currentOrigin = "") {
   const rawValue = String(value).trim();
   if (!rawValue) return null;
@@ -471,6 +543,35 @@ export function findReleaseByReferenceUrl(
   inputUrl,
   currentOrigin = "",
 ) {
+  const rawReference = String(inputUrl ?? "").trim();
+  const idCandidate = releases.find(
+    (release) => release.id === rawReference,
+  );
+  if (idCandidate) {
+    if (idCandidate.id === currentReleaseId) {
+      return {
+        status: "CURRENT_URL",
+        provider: "RECORDSHELF_ID",
+        providerLabel: "专辑 ID",
+        message: "这个专辑 ID 指向当前发行，请粘贴另一条记录的 ID。",
+      };
+    }
+    return {
+      status: "FOUND",
+      provider: "RECORDSHELF_ID",
+      providerLabel: "专辑 ID",
+      normalizedUrl: idCandidate.id,
+      candidate: idCandidate,
+    };
+  }
+  if (/^release-[A-Za-z0-9._:-]+$/.test(rawReference)) {
+    return {
+      status: "NOT_FOUND",
+      provider: "RECORDSHELF_ID",
+      providerLabel: "专辑 ID",
+      message: "该专辑 ID 对应的发行不在当前音乐库中。",
+    };
+  }
   const internalReleaseId = getRecordShelfReleaseId(inputUrl, currentOrigin);
   if (internalReleaseId) {
     if (internalReleaseId === currentReleaseId) {
@@ -502,10 +603,60 @@ export function findReleaseByReferenceUrl(
   }
   const platform = normalizeSupportedReleaseUrl(inputUrl);
   if (!platform) {
+    const looksLikeUrl = /^(?:https?:\/\/|\/)/i.test(rawReference);
+    if (!looksLikeUrl) {
+      const query = normalizeText(rawReference);
+      const titleMatches = query
+        ? releases
+            .filter((release) => release.id !== currentReleaseId)
+            .map((release) => {
+              const titles = [
+                release.title,
+                release.translatedTitle,
+                ...(release.titleAliases ?? []),
+              ]
+                .map((title) => normalizeText(title))
+                .filter(Boolean);
+              const exact = titles.some((title) => title === query);
+              const startsWith = titles.some((title) =>
+                title.startsWith(query),
+              );
+              const includes = titles.some((title) => title.includes(query));
+              return {
+                release,
+                rank: exact ? 0 : startsWith ? 1 : includes ? 2 : 3,
+              };
+            })
+            .filter((match) => match.rank < 3)
+            .sort(
+              (matchA, matchB) =>
+                matchA.rank - matchB.rank ||
+                normalizeText(matchA.release.title).localeCompare(
+                  normalizeText(matchB.release.title),
+                ),
+            )
+            .map((match) => match.release)
+        : [];
+      if (titleMatches.length) {
+        return {
+          status: "TITLE_MATCHES",
+          provider: "RECORDSHELF_TITLE",
+          providerLabel: "专辑名",
+          matches: titleMatches,
+          message: `按专辑名找到 ${titleMatches.length} 条记录，请选择需要对照合并的条目。`,
+        };
+      }
+      return {
+        status: "NOT_FOUND",
+        provider: "RECORDSHELF_TITLE",
+        providerLabel: "专辑名",
+        message: "没有找到标题或译名包含该文字的其他发行。",
+      };
+    }
     return {
       status: "UNSUPPORTED_URL",
       message:
-        "请输入 RecordShelf 发行详情、NeoDB、Apple Music 或 Spotify 的唱片链接。",
+        "请输入专辑名、专辑 ID，或 RecordShelf 发行详情、NeoDB、Apple Music、Spotify 的唱片链接。",
     };
   }
   const currentRelease = releases.find(
@@ -774,6 +925,45 @@ export function getReleaseKindLabel(release) {
       wishlist: "想听",
     }[release.markStatus] ?? "未分类"
   );
+}
+
+export function getMarkStatusLabel(markStatus) {
+  return (
+    {
+      complete: "听过",
+      progress: "在听",
+      wishlist: "想听",
+      dropped: "搁置",
+    }[markStatus] ?? "未标记"
+  );
+}
+
+export function getEffectiveMarkStatus(release) {
+  if (release?.markStatus) return release.markStatus;
+  const entryStatus = [...(release?.listeningEntries ?? [])]
+    .filter((entry) => entry.markStatus)
+    .sort(
+      (left, right) =>
+        Date.parse(
+          right.markedAt ??
+            right.listenedAt ??
+            right.ratedAt ??
+            right.createdAt ??
+            0,
+        ) -
+        Date.parse(
+          left.markedAt ??
+            left.listenedAt ??
+            left.ratedAt ??
+            left.createdAt ??
+            0,
+        ),
+    )[0]?.markStatus;
+  if (entryStatus) return entryStatus;
+  return getLatestListenedAt(release?.listeningEntries) ||
+    getCurrentRating(release?.listeningEntries) != null
+    ? "complete"
+    : null;
 }
 
 export function scoreToStars(score) {

@@ -14,6 +14,7 @@ import {
   Database,
   DownloadSimple,
   IdentificationCard,
+  ImageSquare,
   LinkSimple,
   Plus,
   SpinnerGap,
@@ -39,6 +40,27 @@ import {
 import { normalizeText } from "../lib/music.js";
 import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "../lib/sharedStorageKeys.js";
 import { notifySharedLocalStateChanged } from "../lib/sharedLocalState.js";
+import {
+  clearCoverLoadFailures,
+  getFailedCoverReleaseIds,
+} from "../lib/coverStatus.js";
+
+const COVER_UPDATE_BATCH_SIZE = 40;
+
+function coverLookupRecord(release, loadFailed = false) {
+  return {
+    id: release.id,
+    title: release.title,
+    artists: release.artists,
+    coverUrl: loadFailed ? "" : release.coverUrl ?? "",
+    coverRemoteUrl: release.coverRemoteUrl ?? "",
+    coverSource: release.coverSource ?? "",
+    coverMatchedFrom: release.coverMatchedFrom ?? "",
+    externalLinks: (release.externalLinks ?? []).filter((link) =>
+      ["CONFIRMED", "AUTO_CONFIRMED"].includes(link.status),
+    ),
+  };
+}
 
 function updatedState(state, updater) {
   return {
@@ -89,6 +111,7 @@ export function SettingsDialog({
   onMergeBackup,
   onRestore,
   onToast,
+  onApplyCoverUpdates,
 }) {
   return (
     <div
@@ -116,6 +139,7 @@ export function SettingsDialog({
           />
         ) : (
           <SettingsHome
+            releases={releases}
             identityState={identityState}
             onOpenArtistManager={onOpenArtistManager}
             duplicateGroupCount={duplicateGroupCount}
@@ -128,6 +152,7 @@ export function SettingsDialog({
             onMergeBackup={onMergeBackup}
             onRestore={onRestore}
             onToast={onToast}
+            onApplyCoverUpdates={onApplyCoverUpdates}
           />
         )}
       </section>
@@ -136,6 +161,7 @@ export function SettingsDialog({
 }
 
 function SettingsHome({
+  releases,
   identityState,
   onOpenArtistManager,
   duplicateGroupCount,
@@ -148,12 +174,125 @@ function SettingsHome({
   onMergeBackup,
   onRestore,
   onToast,
+  onApplyCoverUpdates,
 }) {
   const mergeBackupInputRef = useRef(null);
+  const [coverUpdate, setCoverUpdate] = useState({
+    running: false,
+    processed: 0,
+    total: 0,
+    updated: 0,
+    unresolved: 0,
+    message: "",
+  });
   const aliasCount = (identityState.identities ?? []).reduce(
     (sum, identity) => sum + identity.aliases.length,
     0,
   );
+
+  async function updateAlbumCovers() {
+    if (coverUpdate.running) return;
+    const failedIds = new Set(getFailedCoverReleaseIds());
+    const priority = releases.filter(
+      (release) => !release.coverUrl || failedIds.has(release.id),
+    );
+    const priorityIds = new Set(priority.map((release) => release.id));
+    const remote = releases.filter(
+      (release) =>
+        !priorityIds.has(release.id) &&
+        /^https?:\/\//i.test(String(release.coverUrl ?? "")),
+    );
+    const targets = [...priority, ...remote];
+    if (!targets.length) {
+      const message = "没有发现空缺、加载失败或尚未本地缓存的封面";
+      setCoverUpdate((current) => ({ ...current, message }));
+      onToast?.(message);
+      return;
+    }
+
+    setCoverUpdate({
+      running: true,
+      processed: 0,
+      total: targets.length,
+      updated: 0,
+      unresolved: 0,
+      message: priority.length
+        ? `优先处理 ${priority.length} 张空缺或加载失败的封面`
+        : "正在缓存仍引用远程地址的封面",
+    });
+
+    let processed = 0;
+    let updated = 0;
+    let unresolved = 0;
+    try {
+      for (
+        let offset = 0;
+        offset < targets.length;
+        offset += COVER_UPDATE_BATCH_SIZE
+      ) {
+        const batch = targets.slice(offset, offset + COVER_UPDATE_BATCH_SIZE);
+        const response = await fetch("/api/local-enrich-covers", {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            releases: batch.map((release) =>
+              coverLookupRecord(release, failedIds.has(release.id)),
+            ),
+            cacheLocal: true,
+            wait: true,
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(
+            result.error === "COVER_ENRICH_FAILED"
+              ? "封面更新服务暂时不可用"
+              : result.error || "封面更新失败",
+          );
+        }
+        const updates = result.coverUpdates ?? [];
+        onApplyCoverUpdates?.(updates);
+        clearCoverLoadFailures(updates.map((update) => update.id));
+        processed += batch.length;
+        const originals = new Map(
+          batch.map((release) => [release.id, release.coverUrl ?? ""]),
+        );
+        updated += updates.filter(
+          (update) =>
+            update.coverUrl && update.coverUrl !== originals.get(update.id),
+        ).length;
+        unresolved += result.unresolved ?? 0;
+        setCoverUpdate({
+          running: true,
+          processed,
+          total: targets.length,
+          updated,
+          unresolved,
+          message: `已检查 ${processed} / ${targets.length} 张`,
+        });
+      }
+      const message = `封面更新完成：更新 ${updated} 张${
+        unresolved ? `，${unresolved} 张没有找到可靠图片` : ""
+      }`;
+      setCoverUpdate((current) => ({
+        ...current,
+        running: false,
+        message,
+      }));
+      onToast?.(message);
+    } catch (error) {
+      const message = error.message || "封面更新失败，请稍后再试";
+      setCoverUpdate((current) => ({
+        ...current,
+        running: false,
+        message,
+      }));
+      onToast?.(message);
+    }
+  }
   return (
     <>
       <header>
@@ -208,6 +347,32 @@ function SettingsHome({
           <span className="settings-entry-arrow" aria-hidden="true">
             →
           </span>
+        </button>
+        <button
+          type="button"
+          className="settings-entry"
+          onClick={updateAlbumCovers}
+          disabled={coverUpdate.running}
+        >
+          <span className="settings-entry-icon">
+            {coverUpdate.running ? (
+              <SpinnerGap className="spin" aria-hidden="true" />
+            ) : (
+              <ImageSquare weight="fill" aria-hidden="true" />
+            )}
+          </span>
+          <span>
+            <strong>更新专辑封面图</strong>
+            <small>
+              {coverUpdate.message ||
+                "优先修复空缺与加载失败封面，再缓存精确平台图片"}
+            </small>
+          </span>
+          {!coverUpdate.running ? (
+            <span className="settings-entry-arrow" aria-hidden="true">
+              →
+            </span>
+          ) : null}
         </button>
         <div className="settings-entry is-coming">
           <span className="settings-entry-icon">

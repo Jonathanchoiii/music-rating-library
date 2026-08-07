@@ -258,6 +258,33 @@ export function NeoDbSyncDialog({
         });
         setPhase("done");
 
+        const coverTargetIds = [
+          ...new Set([
+            ...additionReleaseIds,
+            ...result.plan.updates.map((item) => item.releaseId),
+          ]),
+        ].filter((releaseId) => {
+          const release = nextReleases.find((item) => item.id === releaseId);
+          if (!release) return false;
+          return (
+            !release.coverUrl ||
+            /^https?:\/\//i.test(release.coverUrl)
+          );
+        });
+        if (coverTargetIds.length) {
+          fetch("/api/local-enrich-covers", {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              releaseIds: coverTargetIds,
+              cacheLocal: true,
+            }),
+          }).catch(() => {});
+        }
+
         const changed = changeCount(result.plan);
         const needsTypeReview =
           typeVerification.unresolved + typeVerification.conflicts;
@@ -494,7 +521,11 @@ export function NeoDbSyncDialog({
                         ? "新增、评分、评论与时间变化已先写入"
                         : lastResult.fullReconcile
                         ? "已完整核对全部记录"
-                        : `本轮只读取 ${lastResult.fetchedPages.length} 个增量页面`}
+                        : `已批量核对 ${
+                            lastResult.knownAuditCount ?? 0
+                          } 条已知记录，并读取 ${
+                            lastResult.fetchedPages.length
+                          } 个发现页面`}
                     </span>
                   </div>
                 </div>
@@ -659,11 +690,11 @@ export function NeoDbSyncDialog({
               </button>
             </div>
             <p className="sync-footnote">
-              快速同步只读取四个最新首页和一个轮换审计页，按 NeoDB ID
-              与内容指纹对账，并在本机保留最近 20 份去重 CSV 快照。
-              评分、评论或收听时间单独变化不会重查类型；标题、来源类型、
-              精确外链和规范地址未变时直接复用上次证据。完整核对仅在你
-              主动选择或远端总数减少时运行。
+              快速同步会读取四个最新首页和一个轮换发现页，同时通过 NeoDB
+              官方批量接口核对全部已知条目的内容指纹，因此旧唱片的评分、
+              评论、时间或资料变化也能在本轮发现。只有确有变化的条目才会
+              读取评论详情或重新写入；类型证据不受影响时继续复用缓存。
+              完整核对仅在你主动选择或远端总数减少时运行。
             </p>
           </>
         )}

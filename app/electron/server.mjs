@@ -5,6 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import worker from "../worker/index.js";
 import { handleSharedStateRequest } from "../shared-state/index.mjs";
+import {
+  handleLocalCoverEnrichRequest,
+  handlePrivateCoverStatic,
+} from "../scripts/private-covers-http.mjs";
 
 const CLIENT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -134,6 +138,12 @@ export async function startRecordShelfServer(port = 4173) {
   const origin = `http://127.0.0.1:${port}`;
   const server = createServer(async (request, response) => {
     try {
+      if (await handlePrivateCoverStatic(request, response)) {
+        return;
+      }
+      if (await handleLocalCoverEnrichRequest(request, response)) {
+        return;
+      }
       if (await handleSharedStateRequest(request, response)) {
         return;
       }

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyCanonicalTitleEvidence,
+  buildConfirmedExternalLinks,
   classifyImportedRelease,
   compareReleaseDates,
   csvRowToRelease,
@@ -9,8 +10,10 @@ import {
   findExactNeoDbDuplicateGroups,
   findReleaseByReferenceUrl,
   getCurrentRating,
+  getEffectiveMarkStatus,
   getDatePrecision,
   getLatestMarkedAt,
+  getMarkStatusLabel,
   getNextVisibleLimit,
   getRecordShelfReleaseId,
   getReleaseContextMatches,
@@ -22,6 +25,7 @@ import {
   normalizeNeoDbUrl,
   normalizeSupportedReleaseUrl,
   normalizeReleaseType,
+  upsertConfirmedExternalLink,
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
   reconcileCanonicalTitleOverride,
@@ -42,6 +46,7 @@ import {
   buildNeoDbSyncPlan,
   buildVerifiedNeoDbRemovalCandidates,
   dedupeEquivalentListeningEntries,
+  getOrphanNeoDbLinkedSourceIds,
   getReleaseTypeVerificationFingerprint,
   neoDbMarkHash,
   neoDbMarkToRelease,
@@ -92,6 +97,84 @@ test("NeoDB CSV snapshots keep stable source ids and row fingerprints", () => {
   assert.match(snapshot.csv, /content_hash/);
   const [, dataRow] = snapshot.csv.trim().split("\n");
   assert.ok(dataRow.split(",").at(-1));
+});
+
+test("upsertConfirmedExternalLink accepts matching platform album URLs", () => {
+  const release = {
+    id: "release-links",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/source-one",
+        status: "CONFIRMED",
+      },
+    ],
+  };
+  const result = upsertConfirmedExternalLink(
+    release,
+    "https://music.apple.com/cn/album/example/1234567890",
+    "APPLE_MUSIC",
+  );
+  assert.equal(result.error, null);
+  assert.deepEqual(
+    result.release.externalLinks.map((link) => link.provider).sort(),
+    ["APPLE_MUSIC", "NEODB"],
+  );
+  assert.equal(
+    result.release.externalLinks.find(
+      (link) => link.provider === "APPLE_MUSIC",
+    )?.status,
+    "CONFIRMED",
+  );
+});
+
+test("upsertConfirmedExternalLink rejects wrong provider and non-album URLs", () => {
+  const release = { id: "release-links", externalLinks: [] };
+  const wrongProvider = upsertConfirmedExternalLink(
+    release,
+    "https://open.spotify.com/album/platform-one",
+    "APPLE_MUSIC",
+  );
+  assert.match(wrongProvider.error, /Apple Music/);
+  assert.equal(wrongProvider.release, release);
+
+  const nonAlbum = upsertConfirmedExternalLink(
+    release,
+    "https://open.spotify.com/track/song-one",
+    "SPOTIFY",
+  );
+  assert.match(nonAlbum.error, /Spotify/);
+  assert.equal(nonAlbum.release, release);
+});
+
+test("manual add builds all confirmed platform links and reports field errors", () => {
+  const valid = buildConfirmedExternalLinks({
+    neodbUrl:
+      "https://neodb.social/album/4RXOw79OuQvsatSQu74qzA?from=share",
+    spotifyUrl:
+      "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa?si=tracking",
+    appleMusicUrl:
+      "https://music.apple.com/cn/album/example/1234567890?l=zh",
+  });
+  assert.deepEqual(valid.errors, {});
+  assert.deepEqual(
+    valid.externalLinks.map((link) => link.provider),
+    ["NEODB", "SPOTIFY", "APPLE_MUSIC"],
+  );
+  assert.ok(
+    valid.externalLinks.every((link) => link.status === "CONFIRMED"),
+  );
+  assert.ok(
+    valid.externalLinks.every((link) => !link.url.includes("?")),
+  );
+
+  const invalid = buildConfirmedExternalLinks({
+    spotifyUrl: "https://open.spotify.com/track/not-an-album",
+    appleMusicUrl: "https://open.spotify.com/album/wrong-provider",
+  });
+  assert.equal(invalid.externalLinks.length, 0);
+  assert.match(invalid.errors.spotifyUrl, /Spotify/);
+  assert.match(invalid.errors.appleMusicUrl, /Apple Music/);
 });
 
 test("supported release links normalize only exact album platforms", () => {
@@ -214,6 +297,95 @@ test("detail merge lookup accepts another RecordShelf release URL", () => {
       "http://127.0.0.1:4173",
     ).status,
     "CURRENT_URL",
+  );
+});
+
+test("detail merge lookup accepts an exact copied release id", () => {
+  const releases = [
+    { id: "release-current", externalLinks: [], listeningEntries: [] },
+    { id: "release-candidate", externalLinks: [], listeningEntries: [] },
+  ];
+
+  const found = findReleaseByReferenceUrl(
+    releases,
+    "release-current",
+    "release-candidate",
+  );
+  assert.equal(found.status, "FOUND");
+  assert.equal(found.provider, "RECORDSHELF_ID");
+  assert.equal(found.providerLabel, "专辑 ID");
+  assert.equal(found.candidate.id, "release-candidate");
+
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "release-current",
+    ).status,
+    "CURRENT_URL",
+  );
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "release-missing",
+    ).status,
+    "NOT_FOUND",
+  );
+});
+
+test("detail merge lookup lists every title and alias match for manual choice", () => {
+  const releases = [
+    {
+      id: "release-current",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-same-title",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-title-suffix",
+      title: "安和桥北（纪念版）",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-alias",
+      title: "Anheqiao North",
+      translatedTitle: "安和桥北",
+      artists: ["Song Dongye"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+  ];
+
+  const result = findReleaseByReferenceUrl(
+    releases,
+    "release-current",
+    "安和桥北",
+  );
+  assert.equal(result.status, "TITLE_MATCHES");
+  assert.equal(result.providerLabel, "专辑名");
+  assert.deepEqual(
+    result.matches.map((release) => release.id),
+    ["release-alias", "release-same-title", "release-title-suffix"],
+  );
+
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "https://example.com/not-supported",
+    ).status,
+    "UNSUPPORTED_URL",
   );
 });
 
@@ -400,6 +572,44 @@ test("exact edition evidence keeps Deluxe in the primary title", () => {
 test("9/10 maps to 4.5 stars", () => {
   assert.equal(scoreToStars(9), 4.5);
   assert.equal(scoreToStars(null), null);
+});
+
+test("mark status labels cover every NeoDB shelf state", () => {
+  assert.equal(getMarkStatusLabel("complete"), "听过");
+  assert.equal(getMarkStatusLabel("progress"), "在听");
+  assert.equal(getMarkStatusLabel("wishlist"), "想听");
+  assert.equal(getMarkStatusLabel("dropped"), "搁置");
+  assert.equal(getMarkStatusLabel(""), "未标记");
+});
+
+test("missing release status falls back to the latest entry or heard history", () => {
+  assert.equal(
+    getEffectiveMarkStatus({
+      markStatus: null,
+      listeningEntries: [
+        {
+          markedAt: "2026-07-20T00:00:00Z",
+          markStatus: "wishlist",
+        },
+        {
+          markedAt: "2026-07-21T00:00:00Z",
+          markStatus: "progress",
+        },
+      ],
+    }),
+    "progress",
+  );
+  assert.equal(
+    getEffectiveMarkStatus({
+      listeningEntries: [
+        {
+          listenedAt: "2026-07-21T00:00:00Z",
+          rating10: 8,
+        },
+      ],
+    }),
+    "complete",
+  );
 });
 
 test("automatic pagination advances one bounded batch at a time", () => {
@@ -1055,6 +1265,247 @@ test("NeoDB sync appends changed history instead of overwriting an old entry", (
   assert.equal(next[0].listeningEntries[1].comment, "短评\n\n长评");
 });
 
+test("manual release with confirmed NeoDB link updates instead of adding a duplicate", () => {
+  const manual = {
+    id: "release-manual-less-than-a-lover",
+    title: "Less than a Lover",
+    artists: ["JENNIE"],
+    releaseType: "SINGLE",
+    coverUrl: "https://example.com/cover.jpg",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/neodb-album-1",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-manual-1",
+        listenedAt: "2026-07-26",
+        listenedAtPrecision: "DAY",
+        ratedAt: "2026-07-26T09:36:39.132Z",
+        rating10: 7,
+        comment: "手动短评",
+        source: "MANUAL",
+        sourceUrl: null,
+        markedAt: "2026-07-26T09:36:39.132Z",
+        createdAt: "2026-07-26T09:36:39.132Z",
+      },
+    ],
+  };
+  assert.deepEqual(
+    [...getOrphanNeoDbLinkedSourceIds([manual])],
+    ["neodb-album-1"],
+  );
+  const plan = buildNeoDbSyncPlan(
+    [manual],
+    [{ mark: neoDbMark, review: null, logs: [] }],
+  );
+  assert.equal(plan.additions.length, 0);
+  assert.equal(plan.updates.length, 1);
+  assert.equal(plan.updates[0].releaseId, manual.id);
+  const next = applyNeoDbSyncPlan([manual], plan);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].id, manual.id);
+  assert.equal(next[0].listeningEntries.length, 2);
+  assert.equal(next[0].listeningEntries[0].source, "MANUAL");
+  assert.equal(next[0].listeningEntries[1].source, "NEODB");
+  assert.equal(next[0].listeningEntries[1].sourceItemId, "neodb-album-1");
+  assert.equal(next[0].neodbSourceTitle, "Heaven or Las Vegas");
+});
+
+test("orphan NeoDB link still enriches when snapshot hash is unchanged", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "3KJmAMZWxECFhVBSl4Chba",
+      url: "https://neodb.social/album/3KJmAMZWxECFhVBSl4Chba",
+      title: "Less than a Lover",
+    },
+  };
+  const manual = {
+    id: "release-c55a5951-8105-4ec8-9223-d8ba5a9bf050",
+    title: "Less than a Lover",
+    artists: ["JENNIE"],
+    releaseType: "SINGLE",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/3KJmAMZWxECFhVBSl4Chba",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-manual",
+        rating10: 7,
+        comment: "手动短评",
+        source: "MANUAL",
+        createdAt: "2026-07-26T09:36:39.132Z",
+      },
+    ],
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      return new Response(
+        JSON.stringify({ data: [mark], pages: 1, count: 1 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me")) {
+      return new Response(
+        JSON.stringify({ username: "tester" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [manual],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: { "3KJmAMZWxECFhVBSl4Chba": unchangedHash },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(
+      result.plan.updates[0].releaseId,
+      "release-c55a5951-8105-4ec8-9223-d8ba5a9bf050",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a snapshot-known NeoDB mark missing locally is retried as an addition", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "7e4XoqnbnOdt4VgFOEtVG2",
+      url: "https://neodb.social/album/7e4XoqnbnOdt4VgFOEtVG2",
+      title: "拆",
+    },
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          "7e4XoqnbnOdt4VgFOEtVG2": unchangedHash,
+        },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.additions.length, 1);
+    assert.equal(
+      result.plan.additions[0].sourceItemId,
+      "7e4XoqnbnOdt4VgFOEtVG2",
+    );
+    assert.equal(result.plan.additions[0].release.title, "拆");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a user-removed base release is not revived by snapshot recovery", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "removed-base-release",
+      url: "https://neodb.social/album/removed-base-release",
+      title: "Keep Removed",
+    },
+  };
+  const baseRelease = neoDbMarkToRelease(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          "removed-base-release": neoDbMarkHash(mark),
+        },
+        auditCursor: 0,
+      },
+      { identityReleases: [baseRelease] },
+    );
+    assert.equal(result.plan.additions.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("comment-only NeoDB changes do not request another type verification", () => {
   const existing = {
     ...neoDbMarkToRelease({
@@ -1458,6 +1909,72 @@ test("ordinary NeoDB sync reads one global rotating audit page", async () => {
       [["complete", 2]],
     );
     assert.equal(result.nextState.auditCursor, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ordinary NeoDB sync batch-checks an older known mark outside fetched pages", async () => {
+  const olderMark = {
+    ...neoDbMark,
+    comment_text: "修改后的旧条目评论",
+    item: {
+      ...neoDbMark.item,
+      uuid: "older-known-mark-1",
+      url: "https://neodb.social/album/older-known-mark-1",
+      title: "Older Known Album",
+    },
+  };
+  const existing = neoDbMarkToRelease({
+    ...olderMark,
+    comment_text: "修改前的旧条目评论",
+  });
+  const originalFetch = globalThis.fetch;
+  const requestedBatchIds = [];
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/api/me/shelf/items/")) {
+      requestedBatchIds.push(
+        ...decodeURIComponent(parsed.pathname.split("/").at(-1)).split(","),
+      );
+      return Response.json([olderMark]);
+    }
+    if (
+      parsed.pathname.includes("/api/me/shelf/") &&
+      parsed.searchParams.has("page")
+    ) {
+      return Response.json({ data: [], pages: 1, count: 1 });
+    }
+    if (parsed.pathname.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [existing],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          [olderMark.item.uuid]: neoDbMarkHash({
+            ...olderMark,
+            comment_text: "修改前的旧条目评论",
+          }),
+          "removed-snapshot-only": "old-hash",
+        },
+        auditCursor: 0,
+      },
+    );
+
+    assert.deepEqual(requestedBatchIds, [olderMark.item.uuid]);
+    assert.equal(result.knownAuditCount, 1);
+    assert.equal(result.knownAuditBatchCount, 1);
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(result.plan.updates[0].releaseId, existing.id);
   } finally {
     globalThis.fetch = originalFetch;
   }

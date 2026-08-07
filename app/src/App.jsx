@@ -9,8 +9,8 @@ import {
   GridNine,
   ListBullets,
   MagnifyingGlass,
-  MusicNotes,
   Plus,
+  Rows,
   SquaresFour,
   UploadSimple,
   UsersThree,
@@ -37,11 +37,13 @@ import {
   reconcileCanonicalExternalLinkOverride,
   reconcileCanonicalTitleOverride,
   releaseMatchesPrimarySearch,
+  upsertConfirmedExternalLink,
 } from "./lib/music.js";
 import {
   ArtistGroups,
   ReleaseGrid,
   ReleaseList,
+  ReleaseShelf,
 } from "./components/ReleaseViews.jsx";
 import { ReleaseDetail } from "./components/ReleaseDetail.jsx";
 import { AddReleaseDialog } from "./components/AddReleaseDialog.jsx";
@@ -417,7 +419,11 @@ function LibraryApp() {
   }, [view, location.pathname, location.search]);
 
   useEffect(() => {
-    if (isArtistRoute && !selectedArtistId && view === "wall") {
+    if (
+      isArtistRoute &&
+      !selectedArtistId &&
+      ["wall", "shelf"].includes(view)
+    ) {
       setView("grid");
     }
   }, [isArtistRoute, selectedArtistId, view]);
@@ -773,6 +779,89 @@ function LibraryApp() {
     );
   }
 
+  function updateReleasePlatformLink(releaseId, provider, url) {
+    const providerLabels = {
+      NEODB: "NeoDB",
+      APPLE_MUSIC: "Apple Music",
+      SPOTIFY: "Spotify",
+    };
+    const currentRelease = releases.find(
+      (release) => release.id === releaseId,
+    );
+    if (!currentRelease) return "未找到发行记录";
+    const result = upsertConfirmedExternalLink(
+      currentRelease,
+      url,
+      provider,
+    );
+    if (result.error) {
+      setToast(result.error);
+      return result.error;
+    }
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId ? result.release : release,
+      ),
+    );
+    setToast(
+      `已为《${currentRelease.title}》保存 ${
+        providerLabels[provider] ?? provider
+      } 链接`,
+    );
+    return true;
+  }
+
+  async function copyReleaseId(releaseId, releaseTitle) {
+    try {
+      await navigator.clipboard.writeText(releaseId);
+    } catch {
+      const fallback = document.createElement("textarea");
+      fallback.value = releaseId;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      const copied = document.execCommand("copy");
+      fallback.remove();
+      if (!copied) {
+        setToast("复制失败，请稍后再试");
+        return false;
+      }
+    }
+    setToast(`已复制《${releaseTitle}》的专辑 ID`);
+    return true;
+  }
+
+  function applyCoverUpdates(updates = []) {
+    const updatesById = new Map(
+      updates
+        .filter(
+          (update) =>
+            update?.id &&
+            (String(update.coverUrl ?? "").startsWith("/private-covers/") ||
+              /^https?:\/\//i.test(String(update.coverUrl ?? ""))),
+        )
+        .map((update) => [update.id, update]),
+    );
+    if (!updatesById.size) return;
+    setReleases((current) =>
+      current.map((release) => {
+        const update = updatesById.get(release.id);
+        if (!update) return release;
+        return {
+          ...release,
+          coverUrl: update.coverUrl,
+          coverRemoteUrl: update.coverRemoteUrl ?? release.coverRemoteUrl,
+          coverSource: update.coverSource ?? release.coverSource,
+          coverMatchedFrom:
+            update.coverMatchedFrom ?? release.coverMatchedFrom,
+          coverMatchedAt: update.coverMatchedAt ?? release.coverMatchedAt,
+        };
+      }),
+    );
+  }
+
   function findMergeCandidate(releaseId, inputUrl) {
     return findReleaseByReferenceUrl(
       releases,
@@ -1006,7 +1095,7 @@ function LibraryApp() {
     <div className="app-shell">
       <aside className="desktop-sidebar" aria-label="主导航">
         <Link className="brand-mark" to="/" aria-label="RecordShelf 首页">
-          <MusicNotes weight="fill" />
+          <img src="/recordshelf-logo.png" alt="" aria-hidden="true" />
         </Link>
         <nav>
           {navItems.map(({ href, label, Icon }) => {
@@ -1207,6 +1296,7 @@ function LibraryApp() {
                       ["grid", GridFour, "宫格"],
                       ["list", ListBullets, "列表"],
                       ["wall", GridNine, "唱片墙"],
+                      ["shelf", Rows, "唱片架"],
                     ]
               ).map(([value, Icon, label]) => (
                 <button
@@ -1224,7 +1314,9 @@ function LibraryApp() {
           </div>
         </section>
 
-        <section className="library-content">
+        <section
+          className={`library-content${view === "shelf" ? " is-shelf-view" : ""}`}
+        >
           {search ? (
             <header className="primary-search-heading">
               <div>
@@ -1248,14 +1340,26 @@ function LibraryApp() {
                 onClearArtist={clearSelectedArtist}
                 onOpen={openRelease}
                 onChangeType={updateReleaseType}
+                onCopyReleaseId={copyReleaseId}
               />
             ) : view === "list" ? (
-              <ReleaseList releases={displayedReleases} onOpen={openRelease} />
+              <ReleaseList
+                releases={displayedReleases}
+                onOpen={openRelease}
+                onCopyReleaseId={copyReleaseId}
+              />
+            ) : view === "shelf" ? (
+              <ReleaseShelf
+                releases={displayedReleases}
+                onOpen={openRelease}
+                onCopyReleaseId={copyReleaseId}
+              />
             ) : (
               <ReleaseGrid
                 releases={displayedReleases}
                 onOpen={openRelease}
                 onChangeType={updateReleaseType}
+                onCopyReleaseId={copyReleaseId}
                 wall={view === "wall"}
               />
             )
@@ -1370,6 +1474,7 @@ function LibraryApp() {
         onClose={() => navigate(`${activeBasePath}?view=${view}`)}
         onAddListening={(releaseId) => setListeningReleaseId(releaseId)}
         onChangeType={updateReleaseType}
+        onUpdatePlatformLink={updateReleasePlatformLink}
         onFindMergeCandidate={findMergeCandidate}
         onMergeRelease={mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
@@ -1429,6 +1534,7 @@ function LibraryApp() {
           onMergeBackup={mergeJsonBackup}
           onRestore={restoreFactorySettings}
           onToast={setToast}
+          onApplyCoverUpdates={applyCoverUpdates}
         />
       ) : null}
       <FilterDrawer
