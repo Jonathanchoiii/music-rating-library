@@ -26,7 +26,7 @@ function sendJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
-async function readJsonBody(request, limit = 1_000_000) {
+async function readJsonBody(request, limit = 4_000_000) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -151,6 +151,33 @@ export async function handleLocalCoverEnrichRequest(request, response) {
   const releaseIds = Array.isArray(payload.releaseIds)
     ? payload.releaseIds.map(String).filter(Boolean).slice(0, 500)
     : null;
+  const releases = Array.isArray(payload.releases)
+    ? payload.releases
+        .filter((release) => release && typeof release === "object")
+        .slice(0, 500)
+        .map((release) => ({
+          id: String(release.id ?? ""),
+          title: String(release.title ?? ""),
+          artists: Array.isArray(release.artists)
+            ? release.artists.map(String).filter(Boolean)
+            : [],
+          coverUrl: String(release.coverUrl ?? ""),
+          coverRemoteUrl: String(release.coverRemoteUrl ?? ""),
+          coverSource: String(release.coverSource ?? ""),
+          coverMatchedFrom: String(release.coverMatchedFrom ?? ""),
+          externalLinks: Array.isArray(release.externalLinks)
+            ? release.externalLinks
+                .filter((link) => link && typeof link === "object")
+                .map((link) => ({
+                  provider: String(link.provider ?? ""),
+                  url: String(link.url ?? ""),
+                  canonicalUrl: String(link.canonicalUrl ?? ""),
+                  status: String(link.status ?? ""),
+                }))
+            : [],
+        }))
+        .filter((release) => release.id)
+    : null;
   const force = Boolean(payload.force);
   const cacheLocal = payload.cacheLocal !== false;
   const limit = Number.isInteger(payload.limit) ? payload.limit : null;
@@ -164,7 +191,9 @@ export async function handleLocalCoverEnrichRequest(request, response) {
         cacheLocal,
         limit,
         concurrency: 4,
-        releaseIds,
+        releaseIds: releases?.length ? null : releaseIds,
+        libraryReleases: releases?.length ? releases : null,
+        coverDirectory: getPrivateCoverDirectory(),
       });
     } finally {
       enrichRunning = false;

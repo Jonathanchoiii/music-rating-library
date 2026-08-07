@@ -51,17 +51,10 @@ async function fetchWithTimeout(url, options = {}) {
 }
 
 function linkFor(release, provider) {
-  return (release.externalLinks ?? []).find(
+  const link = (release.externalLinks ?? []).find(
     (link) => link.provider === provider,
-  )?.url;
-}
-
-function normalizeMatchText(value) {
-  return String(value ?? "")
-    .normalize("NFKD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLocaleLowerCase()
-    .replace(/[^\p{Letter}\p{Number}]+/gu, "");
+  );
+  return link?.canonicalUrl || link?.url;
 }
 
 function extensionForContentType(contentType = "") {
@@ -162,62 +155,12 @@ async function coverFromMusicBrainz(release) {
   };
 }
 
-async function coverFromMusicBrainzSearch(release) {
-  const artistName = (release.artists?.[0] ?? "").split("/")[0].trim();
-  if (!artistName || !release.title) return null;
-  const endpoint = new URL("https://musicbrainz.org/ws/2/release-group/");
-  endpoint.searchParams.set(
-    "query",
-    `releasegroup:"${release.title.replaceAll('"', '\\"')}" AND artist:"${artistName.replaceAll('"', '\\"')}"`,
-  );
-  endpoint.searchParams.set("fmt", "json");
-  endpoint.searchParams.set("limit", "5");
-  const response = await fetchWithTimeout(endpoint, {
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) return null;
-  const titleKey = normalizeMatchText(release.title);
-  const artistKeys = release.artists[0]
-    .split("/")
-    .map(normalizeMatchText)
-    .filter(Boolean);
-  const result = (await response.json())["release-groups"]?.find((item) => {
-    const resultTitle = normalizeMatchText(item.title);
-    const resultArtists = (item["artist-credit"] ?? [])
-      .map((credit) => normalizeMatchText(credit.artist?.name))
-      .filter(Boolean);
-    return (
-      resultTitle === titleKey &&
-      artistKeys.some((artistKey) =>
-        resultArtists.some(
-          (resultArtist) =>
-            resultArtist.includes(artistKey) ||
-            artistKey.includes(resultArtist),
-        ),
-      )
-    );
-  });
-  if (!result?.id) return null;
-  const coverEndpoint = `https://coverartarchive.org/release-group/${result.id}/front-500`;
-  const coverResponse = await fetchWithTimeout(coverEndpoint, {
-    headers: { Accept: "image/*" },
-  });
-  if (!coverResponse.ok) return null;
-  await coverResponse.body?.cancel();
-  return {
-    url: coverResponse.url,
-    source: "MUSICBRAINZ_PRECISE_SEARCH",
-    matchedFrom: `https://musicbrainz.org/release-group/${result.id}`,
-  };
-}
-
 async function findCover(release) {
   const resolvers = [
     coverFromAppleMusic,
     coverFromSpotify,
     coverFromNeoDb,
     coverFromMusicBrainz,
-    coverFromMusicBrainzSearch,
   ];
   for (const resolver of resolvers) {
     try {
@@ -283,6 +226,7 @@ function needsCoverWork(release, { force = false, cacheLocal = true } = {}) {
 export async function runCoverEnrichment({
   libraryPath = DEFAULT_LIBRARY_PATH,
   coverDirectory = DEFAULT_COVER_DIRECTORY,
+  libraryReleases = null,
   force = false,
   cacheLocal = true,
   limit = null,
@@ -290,7 +234,10 @@ export async function runCoverEnrichment({
   releaseIds = null,
   onProgress = null,
 } = {}) {
-  const releases = JSON.parse(await fs.readFile(libraryPath, "utf8"));
+  const usesProvidedLibrary = Array.isArray(libraryReleases);
+  const releases = usesProvidedLibrary
+    ? libraryReleases
+    : JSON.parse(await fs.readFile(libraryPath, "utf8"));
   const releaseIdSet = releaseIds?.length ? new Set(releaseIds) : null;
   const batchPauseMs = concurrency === 1 ? 1_100 : 180;
   const candidates = [];
@@ -313,6 +260,7 @@ export async function runCoverEnrichment({
   let failed = 0;
 
   async function saveLibrary() {
+    if (usesProvidedLibrary) return;
     await fs.writeFile(libraryPath, `${JSON.stringify(releases, null, 2)}\n`);
   }
 
@@ -389,6 +337,16 @@ export async function runCoverEnrichment({
   }
 
   await saveLibrary();
+  const coverUpdates = targets
+    .filter((release) => release.coverUrl)
+    .map((release) => ({
+      id: release.id,
+      coverUrl: release.coverUrl,
+      coverRemoteUrl: release.coverRemoteUrl ?? null,
+      coverSource: release.coverSource ?? null,
+      coverMatchedFrom: release.coverMatchedFrom ?? null,
+      coverMatchedAt: release.coverMatchedAt ?? null,
+    }));
   return {
     releases: releases.length,
     targets: targets.length,
@@ -396,6 +354,7 @@ export async function runCoverEnrichment({
     cached,
     unresolved: failed,
     sourceCounts,
+    coverUpdates,
     libraryPath,
     coverDirectory,
   };

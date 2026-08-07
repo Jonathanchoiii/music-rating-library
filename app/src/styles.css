@@ -1784,7 +1784,8 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .library-content.is-shelf-view > .artist-profile > .artist-profile-back,
-.library-content.is-shelf-view > .artist-profile > header {
+.library-content.is-shelf-view > .artist-profile > header,
+.library-content.is-shelf-view > .primary-search-heading {
   margin-inline: clamp(28px, 4vw, 64px);
 }
 
@@ -2712,7 +2713,7 @@ html.is-desktop-shell .desktop-sidebar {
   gap: 8px;
 }
 
-.release-merge-editor input[type="url"] {
+.release-merge-editor input[type="text"] {
   width: 100%;
   min-width: 0;
   height: 44px;
@@ -2731,6 +2732,86 @@ html.is-desktop-shell .desktop-sidebar {
   background: color-mix(in srgb, var(--danger) 8%, white);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.release-merge-search-results {
+  margin-top: 14px;
+}
+
+.release-merge-search-results > p {
+  margin: 0 0 8px;
+  color: var(--muted-dark);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.release-merge-search-results > div {
+  max-height: 310px;
+  padding-right: 3px;
+  display: grid;
+  gap: 7px;
+  overflow-y: auto;
+}
+
+.release-merge-search-result {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--surface);
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.release-merge-search-result:hover,
+.release-merge-search-result.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+}
+
+.release-merge-search-result > img,
+.release-merge-search-result > .release-merge-cover-placeholder {
+  width: 52px;
+  aspect-ratio: 1;
+  border-radius: var(--radius-cover);
+  object-fit: cover;
+}
+
+.release-merge-search-result > span:not(.release-merge-cover-placeholder) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.release-merge-search-result strong,
+.release-merge-search-result small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.release-merge-search-result strong {
+  font-size: 13px;
+}
+
+.release-merge-search-result small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.release-merge-search-result em {
+  color: var(--accent);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .release-merge-confirmation {
@@ -3268,6 +3349,15 @@ button.settings-entry:hover {
 .settings-entry-icon svg {
   width: 21px;
   height: 21px;
+}
+
+.settings-entry-icon .spin {
+  animation: sync-spin 0.9s linear infinite;
+}
+
+button.settings-entry:disabled {
+  cursor: progress;
+  opacity: 0.78;
 }
 
 .settings-entry > span:nth-child(2) {
@@ -4421,6 +4511,96 @@ button.settings-entry:hover {
   display: none;
 }
 
+.release-card,
+.release-list-row,
+.release-shelf-record,
+.wall-item {
+  -webkit-touch-callout: none;
+}
+
+.release-id-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 230;
+  background: transparent;
+}
+
+.release-id-menu {
+  position: fixed;
+  width: min(286px, calc(100vw - 24px));
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 18px 48px rgba(34, 34, 34, 0.2);
+  backdrop-filter: blur(18px);
+  animation: release-id-menu-enter 130ms ease-out both;
+}
+
+.release-id-menu-heading {
+  padding: 5px 7px 9px;
+}
+
+.release-id-menu-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.release-id-menu-heading strong,
+.release-id-menu-heading code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.release-id-menu-heading strong {
+  font-size: 13px;
+}
+
+.release-id-menu-heading code {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+.release-id-copy-action svg {
+  width: 18px;
+  height: 18px;
+}
+
+.release-id-copy-action {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--accent-soft);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.release-id-copy-action:hover {
+  color: white;
+  background: var(--accent);
+}
+
+@keyframes release-id-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .scroll-top-button {
   position: fixed;
   right: clamp(18px, 2.2vw, 32px);
@@ -4725,7 +4905,8 @@ button.settings-entry:hover {
   }
 
   .library-content.is-shelf-view > .artist-profile > .artist-profile-back,
-  .library-content.is-shelf-view > .artist-profile > header {
+  .library-content.is-shelf-view > .artist-profile > header,
+  .library-content.is-shelf-view > .primary-search-heading {
     margin-inline: 16px;
   }
 
@@ -5103,6 +5284,19 @@ button.settings-entry:hover {
     width: 100%;
   }
 
+  .release-merge-search-result {
+    grid-template-columns: 46px minmax(0, 1fr);
+  }
+
+  .release-merge-search-result > img,
+  .release-merge-search-result > .release-merge-cover-placeholder {
+    width: 46px;
+  }
+
+  .release-merge-search-result > em {
+    display: none;
+  }
+
   .release-merge-choice {
     grid-template-columns: 18px 54px minmax(0, 1fr) auto;
     gap: 9px;
@@ -5391,7 +5585,8 @@ button.settings-entry:hover {
   }
 
   .library-content.is-shelf-view > .artist-profile > .artist-profile-back,
-  .library-content.is-shelf-view > .artist-profile > header {
+  .library-content.is-shelf-view > .artist-profile > header,
+  .library-content.is-shelf-view > .primary-search-heading {
     margin-inline: 12px;
   }
 

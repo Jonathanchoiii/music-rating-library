@@ -811,6 +811,57 @@ function LibraryApp() {
     return true;
   }
 
+  async function copyReleaseId(releaseId, releaseTitle) {
+    try {
+      await navigator.clipboard.writeText(releaseId);
+    } catch {
+      const fallback = document.createElement("textarea");
+      fallback.value = releaseId;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      const copied = document.execCommand("copy");
+      fallback.remove();
+      if (!copied) {
+        setToast("复制失败，请稍后再试");
+        return false;
+      }
+    }
+    setToast(`已复制《${releaseTitle}》的专辑 ID`);
+    return true;
+  }
+
+  function applyCoverUpdates(updates = []) {
+    const updatesById = new Map(
+      updates
+        .filter(
+          (update) =>
+            update?.id &&
+            (String(update.coverUrl ?? "").startsWith("/private-covers/") ||
+              /^https?:\/\//i.test(String(update.coverUrl ?? ""))),
+        )
+        .map((update) => [update.id, update]),
+    );
+    if (!updatesById.size) return;
+    setReleases((current) =>
+      current.map((release) => {
+        const update = updatesById.get(release.id);
+        if (!update) return release;
+        return {
+          ...release,
+          coverUrl: update.coverUrl,
+          coverRemoteUrl: update.coverRemoteUrl ?? release.coverRemoteUrl,
+          coverSource: update.coverSource ?? release.coverSource,
+          coverMatchedFrom:
+            update.coverMatchedFrom ?? release.coverMatchedFrom,
+          coverMatchedAt: update.coverMatchedAt ?? release.coverMatchedAt,
+        };
+      }),
+    );
+  }
+
   function findMergeCandidate(releaseId, inputUrl) {
     return findReleaseByReferenceUrl(
       releases,
@@ -1289,16 +1340,26 @@ function LibraryApp() {
                 onClearArtist={clearSelectedArtist}
                 onOpen={openRelease}
                 onChangeType={updateReleaseType}
+                onCopyReleaseId={copyReleaseId}
               />
             ) : view === "list" ? (
-              <ReleaseList releases={displayedReleases} onOpen={openRelease} />
+              <ReleaseList
+                releases={displayedReleases}
+                onOpen={openRelease}
+                onCopyReleaseId={copyReleaseId}
+              />
             ) : view === "shelf" ? (
-              <ReleaseShelf releases={displayedReleases} onOpen={openRelease} />
+              <ReleaseShelf
+                releases={displayedReleases}
+                onOpen={openRelease}
+                onCopyReleaseId={copyReleaseId}
+              />
             ) : (
               <ReleaseGrid
                 releases={displayedReleases}
                 onOpen={openRelease}
                 onChangeType={updateReleaseType}
+                onCopyReleaseId={copyReleaseId}
                 wall={view === "wall"}
               />
             )
@@ -1473,6 +1534,7 @@ function LibraryApp() {
           onMergeBackup={mergeJsonBackup}
           onRestore={restoreFactorySettings}
           onToast={setToast}
+          onApplyCoverUpdates={applyCoverUpdates}
         />
       ) : null}
       <FilterDrawer

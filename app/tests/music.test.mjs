@@ -300,6 +300,95 @@ test("detail merge lookup accepts another RecordShelf release URL", () => {
   );
 });
 
+test("detail merge lookup accepts an exact copied release id", () => {
+  const releases = [
+    { id: "release-current", externalLinks: [], listeningEntries: [] },
+    { id: "release-candidate", externalLinks: [], listeningEntries: [] },
+  ];
+
+  const found = findReleaseByReferenceUrl(
+    releases,
+    "release-current",
+    "release-candidate",
+  );
+  assert.equal(found.status, "FOUND");
+  assert.equal(found.provider, "RECORDSHELF_ID");
+  assert.equal(found.providerLabel, "专辑 ID");
+  assert.equal(found.candidate.id, "release-candidate");
+
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "release-current",
+    ).status,
+    "CURRENT_URL",
+  );
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "release-missing",
+    ).status,
+    "NOT_FOUND",
+  );
+});
+
+test("detail merge lookup lists every title and alias match for manual choice", () => {
+  const releases = [
+    {
+      id: "release-current",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-same-title",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-title-suffix",
+      title: "安和桥北（纪念版）",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-alias",
+      title: "Anheqiao North",
+      translatedTitle: "安和桥北",
+      artists: ["Song Dongye"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+  ];
+
+  const result = findReleaseByReferenceUrl(
+    releases,
+    "release-current",
+    "安和桥北",
+  );
+  assert.equal(result.status, "TITLE_MATCHES");
+  assert.equal(result.providerLabel, "专辑名");
+  assert.deepEqual(
+    result.matches.map((release) => release.id),
+    ["release-alias", "release-same-title", "release-title-suffix"],
+  );
+
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "https://example.com/not-supported",
+    ).status,
+    "UNSUPPORTED_URL",
+  );
+});
+
 test("exact title evidence promotes the release-language title and preserves the localized alias", () => {
   const release = applyCanonicalTitleEvidence(
     {

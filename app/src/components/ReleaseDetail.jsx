@@ -16,6 +16,7 @@ import {
   getLatestMarkedAt,
   getReleaseKindLabel,
 } from "../lib/music.js";
+import { markCoverLoadFailed } from "../lib/coverStatus.js";
 import { Rating } from "./Rating.jsx";
 import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
 
@@ -78,12 +79,14 @@ export function ReleaseDetail({
   const [editingProvider, setEditingProvider] = useState(null);
   const [draftUrl, setDraftUrl] = useState("");
   const [linkError, setLinkError] = useState("");
+  const [coverLoadFailed, setCoverLoadFailed] = useState(false);
 
   useEffect(() => {
     setEditingProvider(null);
     setDraftUrl("");
     setLinkError("");
-  }, [release?.id]);
+    setCoverLoadFailed(false);
+  }, [release?.id, release?.coverUrl]);
 
   if (!release) return null;
   const rating = getCurrentRating(release.listeningEntries);
@@ -179,10 +182,14 @@ export function ReleaseDetail({
           </button>
         </div>
         <div className="detail-hero">
-          {release.coverUrl ? (
+          {release.coverUrl && !coverLoadFailed ? (
             <img
               src={release.coverUrl}
               alt={`${release.artists.join("、")}《${release.title}》封面`}
+              onError={() => {
+                setCoverLoadFailed(true);
+                markCoverLoadFailed(release.id);
+              }}
             />
           ) : (
             <div className="detail-cover-placeholder">{release.title[0]}</div>

@@ -543,6 +543,35 @@ export function findReleaseByReferenceUrl(
   inputUrl,
   currentOrigin = "",
 ) {
+  const rawReference = String(inputUrl ?? "").trim();
+  const idCandidate = releases.find(
+    (release) => release.id === rawReference,
+  );
+  if (idCandidate) {
+    if (idCandidate.id === currentReleaseId) {
+      return {
+        status: "CURRENT_URL",
+        provider: "RECORDSHELF_ID",
+        providerLabel: "专辑 ID",
+        message: "这个专辑 ID 指向当前发行，请粘贴另一条记录的 ID。",
+      };
+    }
+    return {
+      status: "FOUND",
+      provider: "RECORDSHELF_ID",
+      providerLabel: "专辑 ID",
+      normalizedUrl: idCandidate.id,
+      candidate: idCandidate,
+    };
+  }
+  if (/^release-[A-Za-z0-9._:-]+$/.test(rawReference)) {
+    return {
+      status: "NOT_FOUND",
+      provider: "RECORDSHELF_ID",
+      providerLabel: "专辑 ID",
+      message: "该专辑 ID 对应的发行不在当前音乐库中。",
+    };
+  }
   const internalReleaseId = getRecordShelfReleaseId(inputUrl, currentOrigin);
   if (internalReleaseId) {
     if (internalReleaseId === currentReleaseId) {
@@ -574,10 +603,60 @@ export function findReleaseByReferenceUrl(
   }
   const platform = normalizeSupportedReleaseUrl(inputUrl);
   if (!platform) {
+    const looksLikeUrl = /^(?:https?:\/\/|\/)/i.test(rawReference);
+    if (!looksLikeUrl) {
+      const query = normalizeText(rawReference);
+      const titleMatches = query
+        ? releases
+            .filter((release) => release.id !== currentReleaseId)
+            .map((release) => {
+              const titles = [
+                release.title,
+                release.translatedTitle,
+                ...(release.titleAliases ?? []),
+              ]
+                .map((title) => normalizeText(title))
+                .filter(Boolean);
+              const exact = titles.some((title) => title === query);
+              const startsWith = titles.some((title) =>
+                title.startsWith(query),
+              );
+              const includes = titles.some((title) => title.includes(query));
+              return {
+                release,
+                rank: exact ? 0 : startsWith ? 1 : includes ? 2 : 3,
+              };
+            })
+            .filter((match) => match.rank < 3)
+            .sort(
+              (matchA, matchB) =>
+                matchA.rank - matchB.rank ||
+                normalizeText(matchA.release.title).localeCompare(
+                  normalizeText(matchB.release.title),
+                ),
+            )
+            .map((match) => match.release)
+        : [];
+      if (titleMatches.length) {
+        return {
+          status: "TITLE_MATCHES",
+          provider: "RECORDSHELF_TITLE",
+          providerLabel: "专辑名",
+          matches: titleMatches,
+          message: `按专辑名找到 ${titleMatches.length} 条记录，请选择需要对照合并的条目。`,
+        };
+      }
+      return {
+        status: "NOT_FOUND",
+        provider: "RECORDSHELF_TITLE",
+        providerLabel: "专辑名",
+        message: "没有找到标题或译名包含该文字的其他发行。",
+      };
+    }
     return {
       status: "UNSUPPORTED_URL",
       message:
-        "请输入 RecordShelf 发行详情、NeoDB、Apple Music 或 Spotify 的唱片链接。",
+        "请输入专辑名、专辑 ID，或 RecordShelf 发行详情、NeoDB、Apple Music、Spotify 的唱片链接。",
     };
   }
   const currentRelease = releases.find(
