@@ -13,8 +13,8 @@ import {
   Copy,
   Database,
   DownloadSimple,
-  IdentificationCard,
   ImageSquare,
+  Key,
   LinkSimple,
   Plus,
   SpinnerGap,
@@ -185,10 +185,128 @@ function SettingsHome({
     unresolved: 0,
     message: "",
   });
+  const [guideProvider, setGuideProvider] = useState({
+    loading: true,
+    activeProvider: "OPENAI",
+    providers: {
+      OPENAI: { configured: false, model: "gpt-5.6-terra", label: "OpenAI" },
+      GEMINI: { configured: false, model: "gemini-3.6-flash", label: "Google Gemini" },
+    },
+    configured: false,
+    model: "",
+    editing: false,
+    saving: false,
+    message: "",
+  });
+  const [providerKeyDraft, setProviderKeyDraft] = useState("");
+  const [providerModelDraft, setProviderModelDraft] = useState("gpt-5.6-terra");
   const aliasCount = (identityState.identities ?? []).reduce(
     (sum, identity) => sum + identity.aliases.length,
     0,
   );
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/listening-guides/provider", { headers: { accept: "application/json" } })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!active) return;
+        setGuideProvider((current) => ({
+          ...current,
+          loading: false,
+          activeProvider: payload.activeProvider ?? "OPENAI",
+          providers: payload.providers ?? current.providers,
+          configured: Boolean(payload.configured),
+          model: payload.model ?? "",
+        }));
+        setProviderModelDraft(payload.model ?? "gpt-5.6-terra");
+      })
+      .catch(() => {
+        if (!active) return;
+        setGuideProvider((current) => ({ ...current, loading: false }));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function selectGuideProvider(provider) {
+    const details = guideProvider.providers[provider] ?? {};
+    setProviderKeyDraft("");
+    setProviderModelDraft(
+      details.model || (provider === "GEMINI" ? "gemini-3.6-flash" : "gpt-5.6-terra"),
+    );
+    setGuideProvider((current) => ({
+      ...current,
+      activeProvider: provider,
+      configured: Boolean(details.configured),
+      model: details.model ?? "",
+      message: "",
+    }));
+  }
+
+  async function saveGuideProvider() {
+    const currentProvider = guideProvider.activeProvider;
+    const currentDetails = guideProvider.providers[currentProvider] ?? {};
+    if (!providerKeyDraft.trim() && !currentDetails.configured) return;
+    setGuideProvider((current) => ({ ...current, saving: true, message: "" }));
+    const response = await fetch("/api/listening-guides/provider", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: currentProvider,
+        apiKey: providerKeyDraft.trim() || undefined,
+        model: providerModelDraft.trim(),
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setGuideProvider((current) => ({
+        ...current,
+        saving: false,
+        message:
+          payload.error === "INVALID_PROVIDER_API_KEY"
+            ? "密钥格式不完整"
+            : payload.error === "INVALID_PROVIDER_MODEL"
+              ? "模型名称格式不正确"
+              : "保存失败，请检查密钥与模型名称",
+      }));
+      return;
+    }
+    setProviderKeyDraft("");
+    setGuideProvider((current) => ({
+      ...current,
+      saving: false,
+      activeProvider: payload.activeProvider,
+      providers: payload.providers,
+      configured: Boolean(payload.configured),
+      model: payload.model ?? "",
+      editing: false,
+      message: "已仅保存在本机私人目录",
+    }));
+    onToast?.(`${currentDetails.label || currentProvider} 聆听指南已连接`);
+  }
+
+  async function removeGuideProvider() {
+    const currentProvider = guideProvider.activeProvider;
+    const currentDetails = guideProvider.providers[currentProvider] ?? {};
+    const response = await fetch(
+      `/api/listening-guides/provider?provider=${encodeURIComponent(currentProvider)}`,
+      { method: "DELETE" },
+    );
+    const payload = await response.json().catch(() => ({}));
+    setProviderKeyDraft("");
+    setGuideProvider((current) => ({
+      ...current,
+      providers: payload.providers ?? current.providers,
+      configured: Boolean(payload.configured),
+      editing: false,
+      message: payload.configured
+        ? "环境变量仍提供连接，需在启动环境中移除"
+        : "本机密钥已移除",
+    }));
+    onToast?.(`已断开 ${currentDetails.label || currentProvider} 聆听指南`);
+  }
 
   async function updateAlbumCovers() {
     if (coverUpdate.running) return;
@@ -374,16 +492,99 @@ function SettingsHome({
             </span>
           ) : null}
         </button>
-        <div className="settings-entry is-coming">
+      </div>
+
+      <div className="settings-section">
+        <p className="settings-section-label">AI 服务</p>
+        <button
+          type="button"
+          className="settings-entry"
+          onClick={() =>
+            setGuideProvider((current) => ({ ...current, editing: !current.editing }))
+          }
+        >
           <span className="settings-entry-icon">
-            <IdentificationCard aria-hidden="true" />
+            <Key weight="fill" aria-hidden="true" />
           </span>
           <span>
-            <strong>外部 ID 与字段</strong>
-            <small>以后可在这里维护唱片、厂牌与其他资料字段</small>
+            <strong>AI 聆听指南</strong>
+            <small>
+              {guideProvider.loading
+                ? "正在读取本机配置"
+                : guideProvider.configured
+                  ? `已连接 ${guideProvider.providers[guideProvider.activeProvider]?.label || guideProvider.activeProvider} · ${guideProvider.model} · 手动更新时联网`
+                  : "支持 OpenAI 与 Gemini；连接后可手动联网研究与更新"}
+            </small>
           </span>
-          <span className="settings-coming-label">后续</span>
-        </div>
+          <span className="settings-entry-arrow" aria-hidden="true">→</span>
+        </button>
+        {guideProvider.editing ? (
+          <div className="settings-provider-form">
+            <label htmlFor="recordshelf-ai-provider">模型提供商</label>
+            <select
+              id="recordshelf-ai-provider"
+              value={guideProvider.activeProvider}
+              onChange={(event) => selectGuideProvider(event.target.value)}
+            >
+              <option value="OPENAI">OpenAI</option>
+              <option value="GEMINI">Google Gemini</option>
+            </select>
+            <label htmlFor="recordshelf-provider-model">模型名称</label>
+            <input
+              id="recordshelf-provider-model"
+              type="text"
+              autoComplete="off"
+              value={providerModelDraft}
+              placeholder={
+                guideProvider.activeProvider === "GEMINI"
+                  ? "gemini-3.6-flash"
+                  : "gpt-5.6-terra"
+              }
+              onChange={(event) => setProviderModelDraft(event.target.value)}
+            />
+            <label htmlFor="recordshelf-provider-key">
+              {guideProvider.providers[guideProvider.activeProvider]?.label || "AI"} API Key
+            </label>
+            <input
+              id="recordshelf-provider-key"
+              type="password"
+              autoComplete="new-password"
+              value={providerKeyDraft}
+              placeholder={
+                guideProvider.providers[guideProvider.activeProvider]?.configured
+                  ? "留空则继续使用本机已保存的密钥"
+                  : guideProvider.activeProvider === "GEMINI"
+                    ? "输入 Gemini API Key"
+                    : "sk-…"
+              }
+              onChange={(event) => setProviderKeyDraft(event.target.value)}
+            />
+            <p>
+              密钥分别保存在这台 Mac 的私人目录，页面不会读回明文；不进入音乐数据库、备份、日志、安装包或 Git。为防止密钥被转发，暂不支持任意自定义接口地址。
+            </p>
+            {guideProvider.message ? <small>{guideProvider.message}</small> : null}
+            <div>
+              {guideProvider.providers[guideProvider.activeProvider]?.configured ? (
+                <button type="button" className="secondary-button" onClick={removeGuideProvider}>
+                  断开
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="primary-button"
+                disabled={
+                  guideProvider.saving ||
+                  !providerModelDraft.trim() ||
+                  (!providerKeyDraft.trim() &&
+                    !guideProvider.providers[guideProvider.activeProvider]?.configured)
+                }
+                onClick={saveGuideProvider}
+              >
+                {guideProvider.saving ? "正在保存" : "保存并连接"}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="settings-section">
@@ -409,8 +610,8 @@ function SettingsHome({
             <DownloadSimple aria-hidden="true" />
           </span>
           <span>
-            <strong>导出完整 JSON</strong>
-            <small>包含唱片、每次收听、评论与平台链接</small>
+            <strong>备份音乐库</strong>
+            <small>下载完整 JSON，包含唱片、收听记录、评论与平台链接</small>
           </span>
           <span className="settings-entry-arrow" aria-hidden="true">
             →
@@ -425,8 +626,8 @@ function SettingsHome({
             <UploadSimple aria-hidden="true" />
           </span>
           <span>
-            <strong>合并 JSON 备份</strong>
-            <small>只增量合并新增或不同内容，不会清空现有资料</small>
+            <strong>导入音乐库备份</strong>
+            <small>从 RecordShelf JSON 备份增量合并，不覆盖现有资料</small>
           </span>
           <span className="settings-entry-arrow" aria-hidden="true">
             →

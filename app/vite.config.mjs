@@ -7,6 +7,7 @@ import {
   verifyReleaseTypes,
 } from "./worker/index.js";
 import { handleSharedStateRequest } from "./shared-state/index.mjs";
+import { handleListeningGuideRequest } from "./listening-guides/index.mjs";
 import {
   handleLocalCoverEnrichRequest,
   handlePrivateCoverStatic,
@@ -94,6 +95,7 @@ function neoDbCanonicalizeDevApi() {
       server.middlewares.use(async (request, response, next) => {
         if (await handlePrivateCoverStatic(request, response)) return;
         if (await handleLocalCoverEnrichRequest(request, response)) return;
+        if (await handleListeningGuideRequest(request, response)) return;
         if (await handleSharedStateRequest(request, response)) return;
         next();
       });

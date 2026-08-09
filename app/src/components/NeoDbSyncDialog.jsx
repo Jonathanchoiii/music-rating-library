@@ -25,6 +25,7 @@ import {
   verifyChangedReleaseTypes,
 } from "../lib/neodbSync.js";
 import { findExactNeoDbDuplicateGroups } from "../lib/music.js";
+import { backfillListeningGuideCache } from "../lib/listeningGuides.js";
 
 let callbackLoginPromise = null;
 
@@ -223,6 +224,24 @@ export function NeoDbSyncDialog({
           onApply(nextReleases);
         }
 
+        const guideTargetIds = new Set([
+          ...additionReleaseIds,
+          ...result.plan.updates.map((item) => item.releaseId),
+          ...canonicalResult.changedReleaseIds,
+        ]);
+        let listeningGuideBackfill = null;
+        if (guideTargetIds.size) {
+          try {
+            listeningGuideBackfill = await backfillListeningGuideCache(
+              nextReleases.filter((release) => guideTargetIds.has(release.id)),
+            );
+          } catch (guideError) {
+            listeningGuideBackfill = {
+              error: guideError.message || "聆听指南缓存更新失败",
+            };
+          }
+        }
+
         const nextState = {
           ...quickState,
           pendingRemovals: removals,
@@ -254,6 +273,7 @@ export function NeoDbSyncDialog({
           typeVerification,
           snapshotResult,
           removalReviewCandidates,
+          listeningGuideBackfill,
           backgroundPending: false,
         });
         setPhase("done");
@@ -500,7 +520,7 @@ export function NeoDbSyncDialog({
                   <strong>收藏变化已经写入</strong>
                   <span>
                     正在保存本地 CSV 快照、轮换抽查旧地址，并只核验
-                    类型相关的变化。
+                    类型相关的变化；新增唱片同时建立一次聆听指南缓存。
                   </span>
                 </div>
               </div>
@@ -565,6 +585,14 @@ export function NeoDbSyncDialog({
                             : "已保存"
                         }：${lastResult.snapshotResult.fileName}`
                       : "当前环境不支持自动保存本地 CSV 快照；同步数据仍已正常写入。"}
+                  </p>
+                ) : null}
+                {lastResult.listeningGuideBackfill &&
+                !lastResult.backgroundPending ? (
+                  <p className="sync-cache-summary">
+                    {lastResult.listeningGuideBackfill.error
+                      ? `聆听指南缓存暂未更新：${lastResult.listeningGuideBackfill.error}`
+                      : `聆听指南缓存：新增 ${lastResult.listeningGuideBackfill.created} 张，身份更新 ${lastResult.listeningGuideBackfill.identityUpdated} 张，已有 ${lastResult.listeningGuideBackfill.existing} 张保持不变。`}
                   </p>
                 ) : null}
               </div>
@@ -694,6 +722,8 @@ export function NeoDbSyncDialog({
               官方批量接口核对全部已知条目的内容指纹，因此旧唱片的评分、
               评论、时间或资料变化也能在本轮发现。只有确有变化的条目才会
               读取评论详情或重新写入；类型证据不受影响时继续复用缓存。
+              新增或公开身份变化的唱片会建立/更新一次指南档案，但已有指南
+              只有你主动点击更新时才会重新联网研究。
               完整核对仅在你主动选择或远端总数减少时运行。
             </p>
           </>

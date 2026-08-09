@@ -880,6 +880,42 @@ export function displayDate(value, precision = getDatePrecision(value)) {
   return String(value).slice(0, 10);
 }
 
+function timestampOrMinimum(value) {
+  const timestamp = Date.parse(value ?? "");
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
+
+function firstValidTimestamp(...values) {
+  for (const value of values) {
+    const timestamp = timestampOrMinimum(value);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return Number.NEGATIVE_INFINITY;
+}
+
+function listeningEntryPrimaryTimestamp(entry = {}) {
+  return firstValidTimestamp(
+    entry.listenedAt,
+    entry.ratedAt,
+    entry.markedAt,
+    entry.updatedAt,
+    entry.createdAt,
+  );
+}
+
+export function sortListeningEntriesNewestFirst(entries = []) {
+  return [...entries].sort((a, b) => {
+    const primaryDifference =
+      listeningEntryPrimaryTimestamp(b) - listeningEntryPrimaryTimestamp(a);
+    if (primaryDifference) return primaryDifference;
+    const secondaryDifference =
+      firstValidTimestamp(b.updatedAt, b.createdAt, b.ratedAt) -
+      firstValidTimestamp(a.updatedAt, a.createdAt, a.ratedAt);
+    if (secondaryDifference) return secondaryDifference;
+    return String(a.id ?? "").localeCompare(String(b.id ?? ""));
+  });
+}
+
 export function getCurrentRating(entries = []) {
   const rated = entries
     .filter((entry) => Number.isInteger(entry.rating10))

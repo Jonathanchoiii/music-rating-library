@@ -1014,13 +1014,13 @@ function LibraryApp() {
     );
   }
 
-  function restoreFactorySettings() {
+  async function restoreFactorySettings() {
     const acknowledged = window.confirm(
-      "恢复出厂设置会清除 Web 与 Mac 共用的手动添加、编辑、删除、重复项取舍、艺人映射、筛选条件和 NeoDB 同步状态，并恢复初始音乐库。\n\n是否继续？",
+      "恢复出厂设置会清除 Web 与 Mac 共用的手动添加、编辑、删除、重复项取舍、艺人映射、筛选条件、NeoDB 同步状态和本机 AI 模型连接，并恢复初始音乐库。\n\n是否继续？",
     );
     if (!acknowledged) return;
     const finallyConfirmed = window.confirm(
-      "最后确认：恢复出厂设置后，本地修改无法撤销。建议先导出完整 JSON 备份。\n\n确定恢复出厂设置？",
+      "最后确认：恢复出厂设置后，本地修改无法撤销。建议先在设置中备份音乐库。\n\n确定恢复出厂设置？",
     );
     if (!finallyConfirmed) return;
 
@@ -1038,6 +1038,9 @@ function LibraryApp() {
     notifySharedLocalStateChanged();
     [NEODB_ACCESS_TOKEN_KEY, NEODB_OAUTH_PENDING_KEY].forEach((key) =>
       window.sessionStorage.removeItem(key),
+    );
+    await fetch("/api/listening-guides/provider", { method: "DELETE" }).catch(
+      () => {},
     );
 
     setReleases(seedReleases);

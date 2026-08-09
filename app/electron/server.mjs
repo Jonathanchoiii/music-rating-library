@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import worker from "../worker/index.js";
 import { handleSharedStateRequest } from "../shared-state/index.mjs";
+import { handleListeningGuideRequest } from "../listening-guides/index.mjs";
 import {
   handleLocalCoverEnrichRequest,
   handlePrivateCoverStatic,
@@ -142,6 +143,9 @@ export async function startRecordShelfServer(port = 4173) {
         return;
       }
       if (await handleLocalCoverEnrichRequest(request, response)) {
+        return;
+      }
+      if (await handleListeningGuideRequest(request, response)) {
         return;
       }
       if (await handleSharedStateRequest(request, response)) {

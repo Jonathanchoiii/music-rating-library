@@ -2597,6 +2597,10 @@ html.is-desktop-shell .desktop-sidebar {
   padding: 0 0 18px 25px;
 }
 
+.timeline.is-single li {
+  padding-left: 0;
+}
+
 .timeline li::before {
   content: "";
   position: absolute;
@@ -2620,6 +2624,10 @@ html.is-desktop-shell .desktop-sidebar {
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.timeline.is-single .timeline-dot {
+  display: none;
 }
 
 .timeline-card {
@@ -2648,10 +2656,307 @@ html.is-desktop-shell .desktop-sidebar {
   color: var(--muted);
 }
 
-.release-merge-panel {
+.listening-guide {
+  margin-top: 12px;
+  padding: 28px 0 26px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.listening-guide-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.listening-guide-header h3 {
+  margin: 0;
+  font-size: 21px;
+  letter-spacing: -0.025em;
+}
+
+.listening-guide-header p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.listening-guide-update {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--muted-dark);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.listening-guide-update:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.listening-guide-update:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.listening-guide-update svg {
+  width: 19px;
+  height: 19px;
+}
+
+.listening-guide-update.is-saving svg {
+  animation: guide-spin 0.8s linear infinite;
+}
+
+.listening-guide-body {
   margin-top: 18px;
+}
+
+.listening-guide-body.is-empty {
+  display: none;
+}
+
+.listening-guide-status,
+.listening-guide-pilot-note {
+  min-height: 58px;
+  color: var(--muted-dark);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.listening-guide-spinner {
+  width: 17px;
+  height: 17px;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: guide-spin 0.8s linear infinite;
+}
+
+@keyframes guide-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.listening-guide-pilot-note {
+  align-items: flex-start;
+  padding: 15px 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-control);
+}
+
+.listening-guide-pilot-note span {
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: none;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.listening-guide-pilot-note p {
+  margin: 1px 0 0;
+  line-height: 1.55;
+}
+
+.listening-guide-summary {
+  max-width: 46em;
+  margin: 0;
+  color: var(--text);
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 15px;
+  line-height: 1.8;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.listening-guide-summary.is-expanded {
+  display: block;
+}
+
+.listening-guide-highlights {
+  margin-top: 17px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.listening-guide-highlights > span {
+  padding-top: 4px;
+  color: var(--muted);
+  flex: none;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.listening-guide-highlights > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.listening-guide-highlights > div span {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #efefec;
+  color: var(--muted-dark);
+  font-size: 11px;
+}
+
+.listening-guide-article {
+  max-width: 46em;
+  margin-top: 26px;
+}
+
+.listening-guide-article > section {
+  padding: 0 0 22px;
+}
+
+.listening-guide-article > section + section {
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.listening-guide-article h4 {
+  margin: 0 0 9px;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.listening-guide-article p {
+  margin: 0;
+  color: var(--muted-dark);
+  font-size: 14px;
+  line-height: 1.82;
+}
+
+.listening-guide-track-notes ul {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+  list-style: none;
+}
+
+.listening-guide-track-notes li {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.listening-guide-track-notes strong {
+  font-size: 12px;
+}
+
+.listening-guide-track-notes span {
+  color: var(--muted-dark);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.listening-guide-sources {
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.listening-guide-sources summary {
+  min-height: 44px;
+  color: var(--muted-dark);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.listening-guide-sources ol {
+  margin: 2px 0 0;
+  padding: 0 0 0 20px;
+}
+
+.listening-guide-sources li {
+  padding: 8px 0;
+}
+
+.listening-guide-sources a {
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.listening-guide-sources a:hover {
+  color: var(--accent);
+}
+
+.listening-guide-sources a svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.listening-guide-sources small {
+  margin-top: 3px;
+  color: var(--muted);
+  display: block;
+  font-size: 10px;
+}
+
+.listening-guide-expand {
+  min-height: 44px;
+  margin-top: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.listening-guide-expand svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 160ms ease;
+}
+
+.listening-guide-expand[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.listening-guide-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.release-merge-panel {
+  margin-top: 24px;
   padding-top: 24px;
   border-top: 1px solid var(--line);
+}
+
+.listening-guide + .release-merge-panel {
+  border-top: 0;
 }
 
 .release-merge-entry,
@@ -3382,16 +3687,50 @@ button.settings-entry:disabled {
   font-size: 20px;
 }
 
-.settings-entry.is-coming {
-  color: var(--muted-dark);
+.settings-provider-form {
+  margin-top: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
 }
 
-.settings-coming-label {
-  padding: 4px 7px;
-  border-radius: 999px;
+.settings-provider-form label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-provider-form input + label,
+.settings-provider-form select + label {
+  margin-top: 12px;
+}
+
+.settings-provider-form input,
+.settings-provider-form select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+}
+
+.settings-provider-form p,
+.settings-provider-form > small {
+  margin: 7px 0 0;
   color: var(--muted);
-  background: var(--line);
-  font-size: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-provider-form > div {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .settings-reset-zone {
@@ -5259,6 +5598,62 @@ button.settings-entry:disabled {
   .timeline-meta {
     flex-direction: column;
     gap: 3px;
+  }
+
+  .listening-guide {
+    margin-top: 8px;
+    padding: 24px 0;
+  }
+
+  .listening-guide-header {
+    gap: 12px;
+  }
+
+  .listening-guide-header h3 {
+    font-size: 20px;
+  }
+
+  .listening-guide-update {
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .listening-guide-update svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .listening-guide-summary,
+  .listening-guide-article {
+    max-width: none;
+  }
+
+  .listening-guide-summary {
+    font-size: 15px;
+    line-height: 1.78;
+    -webkit-line-clamp: 6;
+  }
+
+  .listening-guide-highlights {
+    display: grid;
+    gap: 7px;
+  }
+
+  .listening-guide-highlights > span {
+    padding-top: 0;
+  }
+
+  .listening-guide-article p {
+    font-size: 15px;
+    line-height: 1.82;
+  }
+
+  .listening-guide-track-notes li {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .release-merge-entry,

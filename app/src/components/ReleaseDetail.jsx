@@ -15,10 +15,12 @@ import {
   getLatestListenedAt,
   getLatestMarkedAt,
   getReleaseKindLabel,
+  sortListeningEntriesNewestFirst,
 } from "../lib/music.js";
 import { markCoverLoadFailed } from "../lib/coverStatus.js";
 import { Rating } from "./Rating.jsx";
 import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
+import { ListeningGuideSection } from "./ListeningGuideSection.jsx";
 
 const PLATFORM_SLOTS = [
   {
@@ -92,11 +94,7 @@ export function ReleaseDetail({
   const rating = getCurrentRating(release.listeningEntries);
   const latest = getLatestListenedAt(release.listeningEntries);
   const latestMarkedAt = getLatestMarkedAt(release.listeningEntries);
-  const entries = [...release.listeningEntries].sort(
-    (a, b) =>
-      Date.parse(b.ratedAt ?? b.createdAt) -
-      Date.parse(a.ratedAt ?? a.createdAt),
-  );
+  const entries = sortListeningEntriesNewestFirst(release.listeningEntries);
   const confirmedLinks = new Map(
     (release.externalLinks ?? [])
       .filter((link) =>
@@ -353,7 +351,7 @@ export function ReleaseDetail({
             记录这次收听
           </button>
         </div>
-        <ol className="timeline">
+        <ol className={`timeline${entries.length < 2 ? " is-single" : ""}`}>
           {entries.map((entry) => (
             <li key={entry.id}>
               <div className="timeline-dot" aria-hidden="true" />
@@ -376,6 +374,7 @@ export function ReleaseDetail({
             </li>
           ))}
         </ol>
+        <ListeningGuideSection release={release} />
         <ReleaseMergePanel
           release={release}
           onFindCandidate={onFindMergeCandidate}

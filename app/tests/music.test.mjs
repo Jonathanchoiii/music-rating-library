@@ -35,6 +35,7 @@ import {
   releaseImportIdentityKey,
   releasesHaveConflictingSourceIdentities,
   scoreToStars,
+  sortListeningEntriesNewestFirst,
 } from "../src/lib/music.js";
 import {
   advanceNeoDbRemovalReview,
@@ -654,6 +655,48 @@ test("current rating uses the latest rated entry and preserves history", () => {
   ];
   assert.equal(getCurrentRating(entries), 9);
   assert.equal(entries.length, 2);
+});
+
+test("listening timeline sorts the newest listening event first without mutating history", () => {
+  const entries = [
+    {
+      id: "old-listen",
+      listenedAt: "2024-01-01T00:00:00Z",
+      createdAt: "2026-08-03T00:00:00Z",
+    },
+    {
+      id: "same-day-older-edit",
+      listenedAt: "2026-08-02T00:00:00Z",
+      updatedAt: "2026-08-02T08:00:00Z",
+    },
+    {
+      id: "same-day-newer-edit",
+      listenedAt: "2026-08-02T00:00:00Z",
+      updatedAt: "2026-08-02T09:00:00Z",
+    },
+    {
+      id: "rated-only",
+      listenedAt: "",
+      ratedAt: "2025-07-01T00:00:00Z",
+    },
+    { id: "unknown-date" },
+  ];
+  const originalOrder = entries.map((entry) => entry.id);
+
+  assert.deepEqual(
+    sortListeningEntriesNewestFirst(entries).map((entry) => entry.id),
+    [
+      "same-day-newer-edit",
+      "same-day-older-edit",
+      "rated-only",
+      "old-listen",
+      "unknown-date",
+    ],
+  );
+  assert.deepEqual(
+    entries.map((entry) => entry.id),
+    originalOrder,
+  );
 });
 
 test("release type aliases normalize to PRD values", () => {

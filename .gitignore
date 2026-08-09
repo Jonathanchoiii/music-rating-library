@@ -24,6 +24,12 @@ app/.env
 app/.env.*
 !.env.example
 !app/.env.example
+openai-api-key
+gemini-api-key
+listening-guide-provider.json
+app/openai-api-key
+app/gemini-api-key
+app/listening-guide-provider.json
 
 # Logs and editor state
 *.log
