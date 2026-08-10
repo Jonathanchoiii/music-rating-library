@@ -131,6 +131,7 @@ export function FilterDrawer({
   releases,
   filters,
   artistIdentityState,
+  listeningGuideStatuses,
   onApply,
   onClose,
 }) {
@@ -198,8 +199,14 @@ export function FilterDrawer({
   }, [facetOptions, open]);
 
   const previewCount = useMemo(
-    () => filterReleases(releases, draft, artistIdentityState).length,
-    [artistIdentityState, draft, releases],
+    () =>
+      filterReleases(
+        releases,
+        draft,
+        artistIdentityState,
+        listeningGuideStatuses,
+      ).length,
+    [artistIdentityState, draft, listeningGuideStatuses, releases],
   );
 
   if (!open) return null;
@@ -262,20 +269,8 @@ export function FilterDrawer({
                   )
                 }
               />
-              <div className="filter-listened-heading">
-                <span>听过时间</span>
-                <select
-                  value={draft.listenedDateMode}
-                  onChange={(event) =>
-                    update("listenedDateMode", event.target.value)
-                  }
-                >
-                  <option value="LATEST">最近一次</option>
-                  <option value="FIRST">第一次</option>
-                </select>
-              </div>
               <DateRange
-                label=""
+                label="听过时间"
                 from={draft.listenedDateFrom}
                 to={draft.listenedDateTo}
                 onChange={(edge, value) =>
@@ -457,6 +452,27 @@ export function FilterDrawer({
                 />
               </div>
               <div className="filter-field-block">
+                <strong>专辑聆听指南</strong>
+                <div className="filter-segmented">
+                  {[
+                    ["ANY", "全部"],
+                    ["WITH_GUIDE", "已有指南"],
+                    ["WITHOUT_GUIDE", "待生成"],
+                  ].map(([value, label]) => (
+                    <button
+                      type="button"
+                      key={value}
+                      className={
+                        draft.listeningGuideState === value ? "is-active" : ""
+                      }
+                      onClick={() => update("listeningGuideState", value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="filter-field-block">
                 <strong>数据可信度</strong>
                 <FilterChoices
                   options={CONFIDENCE_OPTIONS}
@@ -596,7 +612,7 @@ export function ActiveFilterChips({
           });
         }}
       >
-        {filters.listenedDateMode === "FIRST" ? "首次听过" : "最近听过"}
+        听过时间
       </FilterChip>,
     );
   }
@@ -671,6 +687,16 @@ export function ActiveFilterChips({
         onRemove={() => clearField("commentState")}
       >
         {filters.commentState === "WITH_COMMENT" ? "有评论" : "无评论"}
+      </FilterChip>,
+    );
+  }
+  if (filters.listeningGuideState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="listening-guide"
+        onRemove={() => clearField("listeningGuideState")}
+      >
+        {filters.listeningGuideState === "WITH_GUIDE" ? "已有聆听指南" : "待生成指南"}
       </FilterChip>,
     );
   }

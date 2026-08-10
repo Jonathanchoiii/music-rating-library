@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -312,6 +312,7 @@ function LibraryApp() {
   );
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(loadLibraryFilters);
+  const [listeningGuideStatuses, setListeningGuideStatuses] = useState({});
   const [showFilters, setShowFilters] = useState(false);
   const [sort, setSort] = useState("listened_desc");
   const [artistSort, setArtistSort] = useState("average_desc");
@@ -321,6 +322,19 @@ function LibraryApp() {
   const [listeningReleaseId, setListeningReleaseId] = useState(null);
   const loadMoreSentinelRef = useRef(null);
   const libraryWorkspaceReturnRef = useRef(null);
+
+  const refreshListeningGuideStatuses = useCallback(async () => {
+    try {
+      const response = await fetch("/api/listening-guides/statuses", {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      setListeningGuideStatuses(payload.statuses ?? {});
+    } catch {
+      // The filter remains usable with an empty local index while the service starts.
+    }
+  }, []);
 
   const isArtistRoute = location.pathname === "/artists";
   const isAddRoute = location.pathname === "/admin/add";
@@ -383,6 +397,31 @@ function LibraryApp() {
   useEffect(() => {
     saveLibraryFilters(filters);
   }, [filters]);
+
+  useEffect(() => {
+    refreshListeningGuideStatuses();
+    const handleGuideChange = (event) => {
+      const releaseId = event.detail?.releaseId;
+      if (!releaseId) {
+        refreshListeningGuideStatuses();
+        return;
+      }
+      setListeningGuideStatuses((current) => ({
+        ...current,
+        [releaseId]: event.detail?.status ?? "EMPTY",
+      }));
+    };
+    window.addEventListener("recordshelf-listening-guide-changed", handleGuideChange);
+    return () =>
+      window.removeEventListener(
+        "recordshelf-listening-guide-changed",
+        handleGuideChange,
+      );
+  }, [refreshListeningGuideStatuses]);
+
+  useEffect(() => {
+    if (showFilters) refreshListeningGuideStatuses();
+  }, [refreshListeningGuideStatuses, showFilters]);
 
   useEffect(() => {
     setReleases((current) => {
@@ -453,6 +492,7 @@ function LibraryApp() {
         release,
         filters,
         artistIdentityState,
+        listeningGuideStatuses,
       ),
     );
     const sortReleases = (releaseA, releaseB) => {
@@ -506,7 +546,14 @@ function LibraryApp() {
         sortReleases(resultA.release, resultB.release),
       );
     return { primary, contextual };
-  }, [artistIdentityState, filters, releases, search, sort]);
+  }, [
+    artistIdentityState,
+    filters,
+    listeningGuideStatuses,
+    releases,
+    search,
+    sort,
+  ]);
   const visibleReleases = searchResults.primary;
   const contextualSearchResults = searchResults.contextual;
 
@@ -1545,6 +1592,7 @@ function LibraryApp() {
         releases={releases}
         filters={filters}
         artistIdentityState={artistIdentityState}
+        listeningGuideStatuses={listeningGuideStatuses}
         onApply={(nextFilters) => {
           setFilters(nextFilters);
           setShowFilters(false);

@@ -7,6 +7,7 @@ import {
   backfillListeningGuides,
   createFallbackGuide,
   createPilotGuide,
+  getCodexListeningGuideJob,
   isPilotIdentity,
   normalizedResearchGuide,
   normalizedCodexResearchGuide,
@@ -17,6 +18,7 @@ import {
   saveCodexResearchGuide,
   savePilotGuide,
   saveProviderConfig,
+  startCodexListeningGuideJob,
 } from "../listening-guides/index.mjs";
 
 const PILOT = {
@@ -320,6 +322,95 @@ test("Codex research persists a source-grounded guide and does not overwrite REA
   assert.equal(first.cached, false);
   assert.equal(second.cached, true);
   assert.equal(second.guide.summary, "verified summary");
+
+  const refreshed = await saveCodexResearchGuide(
+    "release-pilot",
+    PILOT,
+    { ...payload, summary: "manually refreshed" },
+    { storePath, force: true },
+  );
+  const refreshedStore = await readListeningGuideStore(storePath);
+  assert.equal(refreshed.cached, false);
+  assert.equal(refreshed.guide.summary, "manually refreshed");
+  assert.equal(refreshedStore.history["release-pilot"][0].summary, "verified summary");
+});
+
+test("manual Codex job runs asynchronously and writes the shared guide cache", async (context) => {
+  const { directory, storePath } = await temporaryStore();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const releaseId = `release-manual-${Date.now()}`;
+  const payload = {
+    status: "READY",
+    reason: null,
+    releaseIdentity: {
+      originalTitle: PILOT.originalTitle,
+      artists: PILOT.artists,
+      releaseYear: "2025",
+      edition: null,
+    },
+    summary: "manual Codex summary",
+    sections: [
+      "orientation",
+      "origin",
+      "sound",
+      "emotion_lyrics",
+      "visual",
+      "reception",
+      "recommendation",
+    ].map((key) => ({
+      key,
+      title: key,
+      body: `manual ${key}`,
+      sourceIds: ["S1", "S2"],
+    })),
+    highlightTracks: [],
+    credits: {
+      releaseDate: "2025-04-11",
+      label: null,
+      producers: [],
+      songwriters: [],
+      recordingStudios: [],
+    },
+    reception: { professional: null, audience: null, awardsAndCharts: null },
+    sources: [
+      {
+        id: "S1",
+        title: "Official",
+        publisher: "Artist",
+        author: null,
+        publishedAt: null,
+        url: "https://artist.example/manual",
+        sourceType: "OFFICIAL",
+        supports: ["orientation"],
+      },
+      {
+        id: "S2",
+        title: "Review",
+        publisher: "Review",
+        author: null,
+        publishedAt: null,
+        url: "https://review.example/manual",
+        sourceType: "PROFESSIONAL_REVIEW",
+        supports: ["sound"],
+      },
+    ],
+    confidence: "HIGH",
+  };
+
+  const started = startCodexListeningGuideJob(releaseId, PILOT, {
+    storePath,
+    runner: async () => payload,
+  });
+  assert.equal(started.status, "RUNNING");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (getCodexListeningGuideJob(releaseId)?.status !== "RUNNING") break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const finished = getCodexListeningGuideJob(releaseId);
+  const store = await readListeningGuideStore(storePath);
+  assert.equal(finished.status, "COMPLETED");
+  assert.equal(store.guides[releaseId].summary, "manual Codex summary");
+  assert.equal(store.guides[releaseId].provider, "CODEX_CHATGPT_WEB_RESEARCH");
 });
 
 test("provider config stores only provider metadata in a private local file", async (context) => {
@@ -360,15 +451,15 @@ test("Gemini research uses only the fixed Google host and returns grounded sourc
         ok: true,
         status: 200,
         json: async () => ({
-          responseId: "gemini-response",
-          candidates: [
+          id: "gemini-response",
+          steps: [
             {
-              content: { parts: [{ text: '{"status":"INSUFFICIENT_SOURCES"}' }] },
-              groundingMetadata: {
-                groundingChunks: [
-                  { web: { uri: "https://artist.example/release", title: "Artist" } },
-                ],
-              },
+              type: "google_search_result",
+              result: [{ url: "https://artist.example/release", title: "Artist" }],
+            },
+            {
+              type: "model_output",
+              content: [{ type: "text", text: '{"status":"INSUFFICIENT_SOURCES"}' }],
             },
           ],
         }),
@@ -379,14 +470,32 @@ test("Gemini research uses only the fixed Google host and returns grounded sourc
 
   assert.equal(
     capturedUrl,
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
   );
   assert.equal(capturedOptions.headers["x-goog-api-key"], fakeKey);
   assert.equal(capturedOptions.body.includes(fakeKey), false);
-  assert.deepEqual(body.tools, [{ googleSearch: {} }]);
-  assert.equal(body.generationConfig.responseFormat.text.mimeType, "application/json");
+  assert.equal(body.model, "gemini-3.6-flash");
+  assert.deepEqual(body.tools, [{ type: "google_search" }]);
+  assert.equal(body.response_format.mime_type, "application/json");
   assert.equal(result.providerMetadata.provider, "GEMINI_GOOGLE_SEARCH");
   assert.deepEqual(result.providerMetadata.searchedSources, [
     { url: "https://artist.example/release", title: "Artist" },
   ]);
+});
+
+test("Gemini research preserves quota failures instead of reporting missing sources", async () => {
+  await assert.rejects(
+    requestGeminiResearch({
+      key: "test-gemini-key-that-is-never-persisted",
+      model: "gemini-3.6-flash",
+      prompt: "research this release",
+      fetchImpl: async () => ({
+        ok: false,
+        status: 429,
+        json: async () => ({ error: { code: "too_many_requests" } }),
+      }),
+    }),
+    (error) =>
+      error.message === "GEMINI_QUOTA_EXCEEDED" && error.statusCode === 429,
+  );
 });

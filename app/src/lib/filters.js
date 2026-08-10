@@ -1,6 +1,5 @@
 import {
   getCurrentRating,
-  getLatestListenedAt,
   normalizeText,
   splitArtistCredits,
 } from "./music.js";
@@ -17,7 +16,6 @@ export const EMPTY_LIBRARY_FILTERS = {
   releaseDateTo: "",
   listenedDateFrom: "",
   listenedDateTo: "",
-  listenedDateMode: "LATEST",
   artistIds: [],
   releaseTypes: [],
   ratingState: "ANY",
@@ -25,6 +23,7 @@ export const EMPTY_LIBRARY_FILTERS = {
   ratingMax: "",
   markStatuses: [],
   commentState: "ANY",
+  listeningGuideState: "ANY",
   listenCount: "ANY",
   platforms: [],
   completeness: [],
@@ -95,6 +94,9 @@ export function sanitizeLibraryFilters(filters = {}) {
   sanitized.completeness = sanitized.completeness.filter(
     (value) => value !== "MISSING_LANGUAGE",
   );
+  if (!["ANY", "WITH_GUIDE", "WITHOUT_GUIDE"].includes(sanitized.listeningGuideState)) {
+    sanitized.listeningGuideState = "ANY";
+  }
   return sanitized;
 }
 
@@ -139,6 +141,7 @@ export function activeFilterCount(filters = {}) {
       value.ratingMax !== "",
     value.markStatuses.length,
     value.commentState !== "ANY",
+    value.listeningGuideState !== "ANY",
     value.listenCount !== "ANY",
     value.platforms.length,
     value.completeness.length,
@@ -169,14 +172,9 @@ function dateInRange(value, from, to) {
   return true;
 }
 
-function earliestListenedAt(entries = []) {
-  return (
-    entries
-      .map((entry) => entry.listenedAt)
-      .filter(Boolean)
-      .sort((dateA, dateB) => Date.parse(dateA) - Date.parse(dateB))[0] ??
-    null
-  );
+function hasListenedDateInRange(entries = [], from, to) {
+  if (!from && !to) return true;
+  return entries.some((entry) => dateInRange(entry.listenedAt, from, to));
 }
 
 export function getTrustedFacetValues(release, field) {
@@ -373,6 +371,7 @@ export function releaseMatchesLibraryFilters(
   release,
   rawFilters,
   artistIdentityState,
+  listeningGuideStatuses = {},
 ) {
   const filters = sanitizeLibraryFilters(rawFilters);
   if (
@@ -385,13 +384,9 @@ export function releaseMatchesLibraryFilters(
     return false;
   }
 
-  const listenedAt =
-    filters.listenedDateMode === "FIRST"
-      ? earliestListenedAt(release.listeningEntries)
-      : getLatestListenedAt(release.listeningEntries);
   if (
-    !dateInRange(
-      listenedAt,
+    !hasListenedDateInRange(
+      release.listeningEntries,
       filters.listenedDateFrom,
       filters.listenedDateTo,
     )
@@ -455,6 +450,13 @@ export function releaseMatchesLibraryFilters(
   ) {
     return false;
   }
+  const hasListeningGuide = listeningGuideStatuses[release.id] === "READY";
+  if (filters.listeningGuideState === "WITH_GUIDE" && !hasListeningGuide) {
+    return false;
+  }
+  if (filters.listeningGuideState === "WITHOUT_GUIDE" && hasListeningGuide) {
+    return false;
+  }
   if (!matchesListenCount(release, filters.listenCount)) return false;
 
   if (
@@ -494,8 +496,14 @@ export function filterReleases(
   releases = [],
   filters,
   artistIdentityState,
+  listeningGuideStatuses = {},
 ) {
   return releases.filter((release) =>
-    releaseMatchesLibraryFilters(release, filters, artistIdentityState),
+    releaseMatchesLibraryFilters(
+      release,
+      filters,
+      artistIdentityState,
+      listeningGuideStatuses,
+    ),
   );
 }

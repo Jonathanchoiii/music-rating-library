@@ -597,15 +597,13 @@ html.is-desktop-shell .desktop-sidebar {
   gap: 7px;
 }
 
-.filter-date-range > span,
-.filter-listened-heading > span {
+.filter-date-range > span {
   color: var(--muted-dark);
   font-size: 11px;
   font-weight: 650;
 }
 
 .filter-date-range input,
-.filter-listened-heading select,
 .filter-rating-row select,
 .filter-wide-select,
 .filter-artist-search {
@@ -628,26 +626,6 @@ html.is-desktop-shell .desktop-sidebar {
   font-size: 10px;
   font-style: normal;
   text-align: center;
-}
-
-.filter-listened-heading {
-  margin-top: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.filter-listened-heading select {
-  width: 104px;
-  height: 34px;
-  padding: 0 8px;
-  font-size: 11px;
-}
-
-.filter-listened-heading + .filter-date-range {
-  margin-top: 7px;
-  grid-template-columns: 70px minmax(0, 1fr) 16px minmax(0, 1fr);
 }
 
 .filter-helper,
@@ -5856,10 +5834,6 @@ button.settings-entry:disabled {
   .filter-date-range input {
     padding-inline: 5px;
     font-size: 10px;
-  }
-
-  .filter-listened-heading + .filter-date-range {
-    grid-template-columns: 60px minmax(0, 1fr) 14px minmax(0, 1fr);
   }
 
   .filter-choice-grid {

@@ -145,6 +145,28 @@ test("legacy marked-date filters are discarded in favor of listened time", () =>
   );
 });
 
+test("listened date range matches any listening event", () => {
+  const item = release({
+    listeningEntries: [
+      { listenedAt: "2023-01-01T00:00:00Z" },
+      { listenedAt: "2024-06-15T00:00:00Z" },
+      { listenedAt: "2025-12-31T00:00:00Z" },
+    ],
+  });
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      item,
+      {
+        ...EMPTY_LIBRARY_FILTERS,
+        listenedDateFrom: "2024-06-01",
+        listenedDateTo: "2024-06-30",
+      },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    true,
+  );
+});
+
 test("legacy missing-language completeness filters are discarded", () => {
   const filters = sanitizeLibraryFilters({
     completeness: ["MISSING_LANGUAGE", "MISSING_GENRE"],
@@ -214,6 +236,39 @@ test("completeness filters expose missing metadata without inventing it", () => 
       release(),
       filters,
       DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    true,
+  );
+});
+
+test("listening guide availability filters use the persisted guide status index", () => {
+  const item = release({ id: "with-guide" });
+  const statuses = { "with-guide": "READY", "without-guide": "INSUFFICIENT_SOURCES" };
+
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      item,
+      { ...EMPTY_LIBRARY_FILTERS, listeningGuideState: "WITH_GUIDE" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+      statuses,
+    ),
+    true,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      item,
+      { ...EMPTY_LIBRARY_FILTERS, listeningGuideState: "WITHOUT_GUIDE" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+      statuses,
+    ),
+    false,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      release({ id: "without-guide" }),
+      { ...EMPTY_LIBRARY_FILTERS, listeningGuideState: "WITHOUT_GUIDE" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+      statuses,
     ),
     true,
   );

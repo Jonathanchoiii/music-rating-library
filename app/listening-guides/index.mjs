@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SCHEMA_VERSION = 1;
 const PROMPT_VERSION = "listening-guide.v1";
@@ -24,7 +26,14 @@ export const LISTENING_GUIDE_PROVIDERS = Object.freeze({
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_HISTORY_VERSIONS = 3;
 const PILOT_IDENTITY = "sable, fable|bon iver";
+const CODEX_RESEARCH_TIMEOUT_MS = 12 * 60 * 1000;
+const STORE_LOCK_TIMEOUT_MS = 30 * 1000;
+const STORE_LOCK_STALE_MS = 20 * 60 * 1000;
+const CODEX_JOB_RETENTION_MS = 60 * 60 * 1000;
+const MODULE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const APP_DIRECTORY = path.resolve(MODULE_DIRECTORY, "..");
 let storeWriteQueue = Promise.resolve();
+const codexResearchJobs = new Map();
 
 const NULLABLE_STRING = { type: ["string", "null"] };
 const STRING_ARRAY = { type: "array", items: { type: "string" } };
@@ -578,8 +587,47 @@ function fingerprint(identity) {
   return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
 
-function withStoreLock(task) {
-  const pending = storeWriteQueue.then(task, task);
+async function acquireStoreFileLock(storePath) {
+  const lockPath = `${storePath}.lock`;
+  const startedAt = Date.now();
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  while (Date.now() - startedAt < STORE_LOCK_TIMEOUT_MS) {
+    try {
+      const handle = await fs.open(lockPath, "wx", 0o600);
+      await handle.writeFile(`${process.pid}\n`, "utf8");
+      return async () => {
+        await handle.close().catch(() => {});
+        await fs.rm(lockPath, { force: true }).catch(() => {});
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        const details = await fs.stat(lockPath);
+        if (Date.now() - details.mtimeMs > STORE_LOCK_STALE_MS) {
+          await fs.rm(lockPath, { force: true });
+          continue;
+        }
+      } catch (statError) {
+        if (statError?.code !== "ENOENT") throw statError;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  const error = new Error("LISTENING_GUIDE_STORE_BUSY");
+  error.statusCode = 503;
+  throw error;
+}
+
+function withStoreLock(storePath, task) {
+  const run = async () => {
+    const release = await acquireStoreFileLock(storePath);
+    try {
+      return await task();
+    } finally {
+      await release();
+    }
+  };
+  const pending = storeWriteQueue.then(run, run);
   storeWriteQueue = pending.catch(() => {});
   return pending;
 }
@@ -692,7 +740,7 @@ export async function savePilotGuide(
   identity,
   { refresh = false, storePath = getListeningGuidePath(), now = new Date() } = {},
 ) {
-  return withStoreLock(async () => {
+  return withStoreLock(storePath, async () => {
     const store = await readListeningGuideStore(storePath);
     const current = store.guides[releaseId] ?? null;
     if (current && !refresh) return { guide: current, cached: true };
@@ -736,6 +784,17 @@ function extractSearchSources(responsePayload) {
 }
 
 function extractGeminiResponseText(responsePayload) {
+  if (typeof responsePayload?.output_text === "string") {
+    return responsePayload.output_text.trim();
+  }
+  const interactionText = (responsePayload?.steps ?? [])
+    .filter((step) => step?.type === "model_output")
+    .flatMap((step) => step?.content ?? step?.output ?? [])
+    .map((item) => (typeof item?.text === "string" ? item.text : ""))
+    .filter(Boolean)
+    .join("")
+    .trim();
+  if (interactionText) return interactionText;
   return (responsePayload?.candidates ?? [])
     .flatMap((candidate) => candidate?.content?.parts ?? [])
     .map((part) => (typeof part?.text === "string" ? part.text : ""))
@@ -746,6 +805,27 @@ function extractGeminiResponseText(responsePayload) {
 
 function extractGeminiSearchSources(responsePayload) {
   const sources = [];
+  const addSource = (source) => {
+    const url = source?.url ?? source?.uri;
+    if (!url) return;
+    sources.push({
+      url,
+      title: cleanText(source?.title, 500) || url,
+    });
+  };
+  for (const step of responsePayload?.steps ?? []) {
+    if (step?.type === "google_search_result") {
+      for (const source of step?.result ?? step?.results ?? []) addSource(source);
+    }
+    if (step?.type !== "model_output") continue;
+    for (const content of step?.content ?? step?.output ?? []) {
+      for (const annotation of content?.annotations ?? []) {
+        if (annotation?.type === "url_citation") {
+          addSource(annotation?.url_citation ?? annotation);
+        }
+      }
+    }
+  }
   for (const candidate of responsePayload?.candidates ?? []) {
     for (const chunk of candidate?.groundingMetadata?.groundingChunks ?? []) {
       if (!chunk?.web?.uri) continue;
@@ -923,12 +1003,14 @@ export async function saveCodexResearchGuide(
   releaseId,
   rawIdentity,
   payload,
-  { storePath = getListeningGuidePath(), now = new Date() } = {},
+  { storePath = getListeningGuidePath(), now = new Date(), force = false } = {},
 ) {
-  return withStoreLock(async () => {
+  return withStoreLock(storePath, async () => {
     const store = await readListeningGuideStore(storePath);
     const current = store.guides[releaseId] ?? null;
-    if (current?.status === "READY") return { guide: current, cached: true };
+    if (current?.status === "READY" && !force) {
+      return { guide: current, cached: true };
+    }
     const guide = normalizedCodexResearchGuide(releaseId, rawIdentity, payload, now);
     if (current) {
       guide.previousVersionId = current.id;
@@ -942,6 +1024,195 @@ export async function saveCodexResearchGuide(
     await writeStore(storePath, store);
     return { guide, cached: false };
   });
+}
+
+async function resolveCodexExecutable() {
+  const configured = cleanText(process.env.RECORDSHELF_CODEX_CLI, 1000);
+  const candidates = [
+    configured,
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "/Applications/Codex.app/Contents/Resources/codex",
+    "/opt/homebrew/bin/codex",
+    "/usr/local/bin/codex",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next trusted local installation path.
+    }
+  }
+  return "codex";
+}
+
+function codexPrompt(identity, template) {
+  return `${template
+    .replace("{{RELEASE_IDENTITY_JSON}}", JSON.stringify(identity, null, 2))
+    .replace("{{SOURCE_BUNDLE_JSON}}", "[]")}\n\n额外执行要求：使用本次 Codex 任务提供的实时网页搜索完成研究。只研究这一张发行；不要读取或修改 RecordShelf 文件，不要使用用户评分、评论或听过时间。来源 URL 必须是你实际搜索并打开核验过的页面。最终只返回符合指定 JSON Schema 的 JSON。`;
+}
+
+export async function requestCodexResearch({
+  identity: rawIdentity,
+  timeoutMs = CODEX_RESEARCH_TIMEOUT_MS,
+  executable,
+} = {}) {
+  const identity = sanitizeIdentity(rawIdentity);
+  if (!identity.originalTitle || !identity.artists.length) {
+    throw providerRequestError("INVALID_RELEASE_IDENTITY", 400);
+  }
+  const temporaryDirectory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "recordshelf-codex-guide-manual-"),
+  );
+  const schemaPath = path.join(temporaryDirectory, "schema.json");
+  const outputPath = path.join(temporaryDirectory, "result.json");
+  const promptTemplate = await fs.readFile(
+    path.join(APP_DIRECTORY, "prompts", "listening-guide.v1.md"),
+    "utf8",
+  );
+  const cliPath = executable || (await resolveCodexExecutable());
+  const args = [
+    "--search",
+    "exec",
+    "--ephemeral",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+    "--output-schema",
+    schemaPath,
+    "--output-last-message",
+    outputPath,
+    "-C",
+    temporaryDirectory,
+  ];
+  if (process.env.RECORDSHELF_CODEX_MODEL) {
+    args.push("--model", process.env.RECORDSHELF_CODEX_MODEL);
+  }
+  args.push("-");
+
+  try {
+    await fs.writeFile(schemaPath, `${JSON.stringify(LISTENING_GUIDE_SCHEMA)}\n`, {
+      mode: 0o600,
+    });
+    await new Promise((resolve, reject) => {
+      const child = spawn(cliPath, args, {
+        cwd: temporaryDirectory,
+        env: { ...process.env, NO_COLOR: "1" },
+        stdio: ["pipe", "ignore", "pipe"],
+      });
+      let stderr = "";
+      let settled = false;
+      const finish = (callback) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback();
+      };
+      child.stderr.on("data", (chunk) => {
+        stderr = `${stderr}${chunk}`.slice(-8000);
+      });
+      const timer = setTimeout(() => {
+        child.kill("SIGTERM");
+        finish(() => reject(providerRequestError("CODEX_RESEARCH_TIMEOUT", 504)));
+      }, timeoutMs);
+      child.once("error", (error) => {
+        const code = error?.code === "ENOENT" ? "CODEX_CLI_UNAVAILABLE" : "CODEX_RESEARCH_FAILED";
+        finish(() => reject(providerRequestError(code, 503)));
+      });
+      child.once("exit", (code) => {
+        if (code === 0) {
+          finish(resolve);
+          return;
+        }
+        const errorCode = /login|auth|sign.?in|unauthorized/i.test(stderr)
+          ? "CODEX_AUTH_REQUIRED"
+          : "CODEX_RESEARCH_FAILED";
+        finish(() => reject(providerRequestError(errorCode, 502)));
+      });
+      child.stdin.end(codexPrompt(identity, promptTemplate));
+    });
+    return JSON.parse(await fs.readFile(outputPath, "utf8"));
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function publicCodexJob(job) {
+  if (!job) return null;
+  return {
+    id: job.id,
+    releaseId: job.releaseId,
+    status: job.status,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt ?? null,
+    error: job.error ?? null,
+  };
+}
+
+function pruneCodexJobs() {
+  const cutoff = Date.now() - CODEX_JOB_RETENTION_MS;
+  for (const [releaseId, job] of codexResearchJobs) {
+    if (job.status !== "RUNNING" && Date.parse(job.finishedAt ?? 0) < cutoff) {
+      codexResearchJobs.delete(releaseId);
+    }
+  }
+}
+
+export function getCodexListeningGuideJob(releaseId) {
+  pruneCodexJobs();
+  return publicCodexJob(codexResearchJobs.get(cleanText(releaseId, 200)));
+}
+
+export function startCodexListeningGuideJob(
+  releaseId,
+  rawIdentity,
+  { runner = requestCodexResearch, storePath = getListeningGuidePath(), now = () => new Date() } = {},
+) {
+  const safeReleaseId = cleanText(releaseId, 200);
+  const identity = sanitizeIdentity(rawIdentity);
+  if (!safeReleaseId || !identity.originalTitle || !identity.artists.length) {
+    throw providerRequestError("INVALID_RELEASE_IDENTITY", 400);
+  }
+  const existing = codexResearchJobs.get(safeReleaseId);
+  if (existing?.status === "RUNNING") return publicCodexJob(existing);
+
+  const startedAt = now().toISOString();
+  const job = {
+    id: `codex-guide-job-${randomUUID()}`,
+    releaseId: safeReleaseId,
+    status: "RUNNING",
+    startedAt,
+    finishedAt: null,
+    error: null,
+  };
+  codexResearchJobs.set(safeReleaseId, job);
+  job.promise = Promise.resolve()
+    .then(() => runner({ identity }))
+    .then((payload) =>
+      saveCodexResearchGuide(safeReleaseId, identity, payload, {
+        storePath,
+        now: now(),
+        force: true,
+      }),
+    )
+    .then(() => {
+      job.status = "COMPLETED";
+      job.finishedAt = now().toISOString();
+    })
+    .catch((error) => {
+      const safeErrors = new Set([
+        "CODEX_CLI_UNAVAILABLE",
+        "CODEX_AUTH_REQUIRED",
+        "CODEX_RESEARCH_TIMEOUT",
+        "INVALID_RELEASE_IDENTITY",
+      ]);
+      job.status = "FAILED";
+      job.finishedAt = now().toISOString();
+      job.error = safeErrors.has(error?.message)
+        ? error.message
+        : "CODEX_RESEARCH_FAILED";
+    });
+  return publicCodexJob(job);
 }
 
 export async function researchListeningGuide(releaseId, rawIdentity, options = {}) {
@@ -980,8 +1251,8 @@ export async function researchListeningGuide(releaseId, rawIdentity, options = {
     research.providerMetadata,
   );
 
-  return withStoreLock(async () => {
-    const storePath = options.storePath ?? getListeningGuidePath();
+  const storePath = options.storePath ?? getListeningGuidePath();
+  return withStoreLock(storePath, async () => {
     const store = await readListeningGuideStore(storePath);
     const current = store.guides[releaseId] ?? null;
     if (current) {
@@ -1051,7 +1322,7 @@ export async function requestGeminiResearch({ key, model, prompt, fetchImpl = fe
   if (!/^[a-zA-Z0-9._:-]{3,120}$/.test(safeModel)) {
     throw providerRequestError("INVALID_PROVIDER_MODEL", 400);
   }
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(safeModel)}:generateContent`;
+  const endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions";
   const apiResponse = await fetchImpl(endpoint, {
     method: "POST",
     headers: {
@@ -1059,21 +1330,31 @@ export async function requestGeminiResearch({ key, model, prompt, fetchImpl = fe
       "x-goog-api-key": key,
     },
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      tools: [{ googleSearch: {} }],
-      generationConfig: {
-        responseFormat: {
-          text: {
-            mimeType: "application/json",
-            schema: LISTENING_GUIDE_SCHEMA,
-          },
-        },
+      model: safeModel,
+      input: prompt,
+      tools: [{ type: "google_search" }],
+      response_format: {
+        type: "text",
+        mime_type: "application/json",
+        schema: LISTENING_GUIDE_SCHEMA,
       },
     }),
   });
   const responsePayload = await apiResponse.json().catch(() => ({}));
   if (!apiResponse.ok) {
-    throw providerRequestError("GEMINI_REQUEST_FAILED", apiResponse.status);
+    const errorCode =
+      apiResponse.status === 429
+        ? "GEMINI_QUOTA_EXCEEDED"
+        : [401, 403].includes(apiResponse.status)
+          ? "GEMINI_API_KEY_INVALID"
+          : apiResponse.status === 404
+            ? "GEMINI_MODEL_UNAVAILABLE"
+            : apiResponse.status === 400
+              ? "GEMINI_REQUEST_INVALID"
+              : apiResponse.status >= 500
+                ? "GEMINI_TEMPORARILY_UNAVAILABLE"
+                : "GEMINI_REQUEST_FAILED";
+    throw providerRequestError(errorCode, apiResponse.status);
   }
   const outputText = extractGeminiResponseText(responsePayload);
   if (!outputText) throw providerRequestError("GEMINI_EMPTY_RESPONSE", 502);
@@ -1083,7 +1364,7 @@ export async function requestGeminiResearch({ key, model, prompt, fetchImpl = fe
     providerMetadata: {
       provider: "GEMINI_GOOGLE_SEARCH",
       model: safeModel,
-      responseId: responsePayload?.responseId,
+      responseId: responsePayload?.id ?? responsePayload?.responseId,
       searchedSources: extractGeminiSearchSources(responsePayload),
     },
   };
@@ -1093,7 +1374,7 @@ export async function backfillListeningGuides(
   releases,
   { storePath = getListeningGuidePath(), now = new Date() } = {},
 ) {
-  return withStoreLock(async () => {
+  return withStoreLock(storePath, async () => {
     const store = await readListeningGuideStore(storePath);
     const result = {
       total: Array.isArray(releases) ? releases.length : 0,
@@ -1185,6 +1466,23 @@ async function requestJson(request) {
 
 export async function handleListeningGuideRequest(request, response) {
   const url = new URL(request.url, "http://127.0.0.1:4173");
+  if (url.pathname === "/api/listening-guides/statuses") {
+    if (request.method !== "GET") {
+      json(response, 405, { error: "METHOD_NOT_ALLOWED" });
+      return true;
+    }
+    const store = await readListeningGuideStore();
+    json(response, 200, {
+      updatedAt: store.updatedAt,
+      statuses: Object.fromEntries(
+        Object.entries(store.guides).map(([releaseId, guide]) => [
+          releaseId,
+          guide?.status ?? "EMPTY",
+        ]),
+      ),
+    });
+    return true;
+  }
   if (url.pathname === "/api/listening-guides/provider") {
     try {
       if (request.method === "GET") {
@@ -1259,7 +1557,7 @@ export async function handleListeningGuideRequest(request, response) {
     }
   }
   const match = url.pathname.match(
-    /^\/api\/releases\/([^/]+)\/listening-guide(?:\/(generate|refresh))?$/,
+    /^\/api\/releases\/([^/]+)\/listening-guide(?:\/(generate|refresh|codex-refresh))?$/,
   );
   if (!match) return false;
   const releaseId = decodeURIComponent(match[1]);
@@ -1274,8 +1572,20 @@ export async function handleListeningGuideRequest(request, response) {
       json(response, 200, {
         status: store.guides[releaseId]?.status ?? "EMPTY",
         guide: store.guides[releaseId] ?? null,
+        codexJob: getCodexListeningGuideJob(releaseId),
         pilotEligible: isPilotIdentity(identity),
         phase: "CACHE_V1",
+      });
+      return true;
+    }
+    if (action === "codex-refresh" && request.method === "POST") {
+      const payload = await requestJson(request);
+      const currentStore = await readListeningGuideStore();
+      const job = startCodexListeningGuideJob(releaseId, payload);
+      json(response, 202, {
+        guide: currentStore.guides[releaseId] ?? null,
+        codexJob: job,
+        phase: "CODEX_LOCAL_V1",
       });
       return true;
     }

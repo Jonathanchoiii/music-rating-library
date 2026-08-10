@@ -284,7 +284,7 @@ function SettingsHome({
       editing: false,
       message: "已仅保存在本机私人目录",
     }));
-    onToast?.(`${currentDetails.label || currentProvider} 聆听指南已连接`);
+    onToast?.(`${currentDetails.label || currentProvider} 密钥已安全保存在本机`);
   }
 
   async function removeGuideProvider() {
@@ -507,13 +507,13 @@ function SettingsHome({
             <Key weight="fill" aria-hidden="true" />
           </span>
           <span>
-            <strong>AI 聆听指南</strong>
+            <strong>备用 AI 接口</strong>
             <small>
               {guideProvider.loading
                 ? "正在读取本机配置"
                 : guideProvider.configured
-                  ? `已连接 ${guideProvider.providers[guideProvider.activeProvider]?.label || guideProvider.activeProvider} · ${guideProvider.model} · 手动更新时联网`
-                  : "支持 OpenAI 与 Gemini；连接后可手动联网研究与更新"}
+                  ? `刷新默认使用本机 Codex · 已保留 ${guideProvider.providers[guideProvider.activeProvider]?.label || guideProvider.activeProvider} 备用配置`
+                  : "刷新默认使用本机 Codex；可在此保留 OpenAI 或 Gemini 备用配置"}
             </small>
           </span>
           <span className="settings-entry-arrow" aria-hidden="true">→</span>
@@ -561,6 +561,7 @@ function SettingsHome({
             />
             <p>
               密钥分别保存在这台 Mac 的私人目录，页面不会读回明文；不进入音乐数据库、备份、日志、安装包或 Git。为防止密钥被转发，暂不支持任意自定义接口地址。
+              详情页刷新不会自动调用这里的 API。
             </p>
             {guideProvider.message ? <small>{guideProvider.message}</small> : null}
             <div>

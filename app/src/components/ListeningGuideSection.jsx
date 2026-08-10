@@ -19,6 +19,44 @@ function sourceMeta(source) {
     .join(" · ");
 }
 
+const GENERATION_ERROR_MESSAGES = Object.freeze({
+  RESEARCH_PROVIDER_UNAVAILABLE:
+    "尚未配置联网研究服务；现有档案与正文没有被改动",
+  GEMINI_QUOTA_EXCEEDED:
+    "Gemini 当前配额不足或请求过于频繁；请在 Google AI Studio 检查额度后重试",
+  GEMINI_API_KEY_INVALID:
+    "Gemini 密钥无效或没有调用权限；请前往设置重新填写",
+  GEMINI_MODEL_UNAVAILABLE:
+    "当前 Gemini 模型不可用；请前往设置更换模型后重试",
+  GEMINI_REQUEST_INVALID:
+    "Gemini 拒绝了本次请求；请检查设置中的模型名称",
+  GEMINI_TEMPORARILY_UNAVAILABLE:
+    "Gemini 服务暂时不可用，请稍后重试",
+  GEMINI_EMPTY_RESPONSE:
+    "Gemini 已响应，但没有返回可用正文；请稍后重试",
+  OPENAI_REQUEST_FAILED:
+    "OpenAI 请求未成功；请检查密钥、模型与账户额度",
+  OPENAI_EMPTY_RESPONSE:
+    "OpenAI 已响应，但没有返回可用正文；请稍后重试",
+  CODEX_CLI_UNAVAILABLE:
+    "没有找到本机 Codex；请先安装或打开 ChatGPT/Codex 桌面应用",
+  CODEX_AUTH_REQUIRED:
+    "本机 Codex 尚未登录；请先在 ChatGPT/Codex 中完成登录",
+  CODEX_RESEARCH_TIMEOUT:
+    "本次 Codex 联网研究超时；旧指南仍然保留，可以稍后重试",
+  CODEX_RESEARCH_FAILED:
+    "Codex 联网研究未成功；旧指南仍然保留，可以稍后重试",
+  CODEX_JOB_INTERRUPTED:
+    "本地服务在研究期间发生重启；请再次点击更新",
+});
+
+const LISTENING_GUIDE_POLL_INTERVAL_MS = 15_000;
+
+function guideRevision(guide) {
+  if (!guide) return "EMPTY";
+  return [guide.id, guide.updatedAt, guide.status].filter(Boolean).join(":");
+}
+
 export function ListeningGuideSection({ release }) {
   const [state, setState] = useState({
     loading: true,
@@ -30,6 +68,7 @@ export function ListeningGuideSection({ release }) {
 
   useEffect(() => {
     let active = true;
+    let requestInFlight = false;
     setExpanded(false);
     setState({
       loading: true,
@@ -37,30 +76,73 @@ export function ListeningGuideSection({ release }) {
       guide: null,
       error: "",
     });
-    fetch(guideEndpoint(release), { headers: { accept: "application/json" } })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("暂时无法读取聆听指南");
-        return response.json();
-      })
-      .then((payload) => {
-        if (!active) return;
-        setState({
-          loading: false,
-          saving: false,
-          guide: payload.guide ?? null,
-          error: "",
+    async function loadGuide({ initial = false } = {}) {
+      if (!active || requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const response = await fetch(guideEndpoint(release), {
+          headers: { accept: "application/json" },
         });
-      })
-      .catch((error) => {
+        if (!response.ok) throw new Error("暂时无法读取聆听指南");
+        const payload = await response.json();
         if (!active) return;
-        setState((current) => ({
-          ...current,
-          loading: false,
-          error: error.message,
-        }));
-      });
+        const nextGuide = payload.guide ?? null;
+        setState((current) => {
+          if (!initial && current.saving) return current;
+          if (!initial && current.guide && !nextGuide) return current;
+          const currentUpdatedAt = Date.parse(current.guide?.updatedAt ?? 0);
+          const nextUpdatedAt = Date.parse(nextGuide?.updatedAt ?? 0);
+          if (
+            !initial &&
+            current.guide &&
+            nextGuide &&
+            Number.isFinite(currentUpdatedAt) &&
+            Number.isFinite(nextUpdatedAt) &&
+            nextUpdatedAt < currentUpdatedAt
+          ) {
+            return current;
+          }
+          if (
+            !initial &&
+            guideRevision(current.guide) === guideRevision(nextGuide) &&
+            !current.error
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            loading: false,
+            guide: nextGuide,
+            error: "",
+          };
+        });
+      } catch (error) {
+        if (!active) return;
+        if (initial) {
+          setState((current) => ({
+            ...current,
+            loading: false,
+            error: error.message,
+          }));
+        }
+      } finally {
+        requestInFlight = false;
+      }
+    }
+
+    loadGuide({ initial: true });
+    const poll = () => {
+      if (document.visibilityState === "visible") loadGuide();
+    };
+    const intervalId = window.setInterval(
+      poll,
+      LISTENING_GUIDE_POLL_INTERVAL_MS,
+    );
+    document.addEventListener("visibilitychange", poll);
     return () => {
       active = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", poll);
     };
   }, [release.id, release.title, release.artists]);
 
@@ -69,26 +151,48 @@ export function ListeningGuideSection({ release }) {
     return `最近整理 ${displayDate(state.guide.generatedAt)}`;
   }, [state.guide?.generatedAt]);
 
-  async function generate(refresh = false) {
+  async function waitForCodexJob(initialPayload) {
+    let payload = initialPayload;
+    while (payload.codexJob?.status === "RUNNING") {
+      await new Promise((resolve) => window.setTimeout(resolve, 3_000));
+      const response = await fetch(guideEndpoint(release), {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) throw new Error("暂时无法读取 Codex 研究进度");
+      payload = await response.json();
+      if (!payload.codexJob && initialPayload.codexJob) {
+        throw new Error(GENERATION_ERROR_MESSAGES.CODEX_JOB_INTERRUPTED);
+      }
+    }
+    if (payload.codexJob?.status === "FAILED") {
+      throw new Error(
+        GENERATION_ERROR_MESSAGES[payload.codexJob.error] ||
+          GENERATION_ERROR_MESSAGES.CODEX_RESEARCH_FAILED,
+      );
+    }
+    return payload;
+  }
+
+  async function generate() {
     setState((current) => ({ ...current, saving: true, error: "" }));
     try {
       const response = await fetch(
-        `/api/releases/${encodeURIComponent(release.id)}/listening-guide/${
-          refresh ? "refresh" : "generate"
-        }`,
+        `/api/releases/${encodeURIComponent(release.id)}/listening-guide/codex-refresh`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(publicListeningGuideIdentity(release)),
         },
       );
-      const payload = await response.json();
+      let payload = await response.json();
       if (!response.ok) {
         throw new Error(
-          payload.error === "RESEARCH_PROVIDER_UNAVAILABLE"
-            ? "尚未配置联网研究服务；现有档案与正文没有被改动"
-            : "没有足够的可靠资料，暂未生成",
+          GENERATION_ERROR_MESSAGES[payload.error] ||
+            "联网整理未成功；现有聆听指南没有被改动",
         );
+      }
+      if (payload.codexJob?.status === "RUNNING") {
+        payload = await waitForCodexJob(payload);
       }
       setState((current) => ({
         ...current,
@@ -97,6 +201,11 @@ export function ListeningGuideSection({ release }) {
         guide: payload.guide,
         error: "",
       }));
+      window.dispatchEvent(
+        new CustomEvent("recordshelf-listening-guide-changed", {
+          detail: { releaseId: release.id, status: payload.guide?.status ?? "EMPTY" },
+        }),
+      );
       setExpanded(true);
     } catch (error) {
       setState((current) => ({
@@ -127,9 +236,9 @@ export function ListeningGuideSection({ release }) {
             type="button"
             className={`listening-guide-update${state.saving ? " is-saving" : ""}`}
             disabled={state.saving}
-            aria-label={state.saving ? "正在整理专辑聆听指南" : "联网更新专辑聆听指南"}
-            title={state.saving ? "正在整理" : "联网更新聆听指南"}
-            onClick={() => generate(Boolean(guide))}
+            aria-label={state.saving ? "Codex 正在整理专辑聆听指南" : "使用本机 Codex 联网更新专辑聆听指南"}
+            title={state.saving ? "Codex 正在联网整理" : "使用本机 Codex 更新聆听指南"}
+            onClick={generate}
           >
             <ArrowClockwise aria-hidden="true" />
           </button>
@@ -149,12 +258,6 @@ export function ListeningGuideSection({ release }) {
 
         {guide?.status === "READY" ? (
           <>
-            {guide.needsRefresh ? (
-              <div className="listening-guide-pilot-note">
-                <span>资料变化</span>
-                <p>唱片身份信息已有变化；当前正文仍保留，主动更新后才会重新研究。</p>
-              </div>
-            ) : null}
             <p className={`listening-guide-summary${expanded ? " is-expanded" : ""}`}>
               {guide.summary}
             </p>
