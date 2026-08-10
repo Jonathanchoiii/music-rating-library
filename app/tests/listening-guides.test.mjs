@@ -399,9 +399,15 @@ test("manual Codex job runs asynchronously and writes the shared guide cache", a
 
   const started = startCodexListeningGuideJob(releaseId, PILOT, {
     storePath,
-    runner: async () => payload,
+    runner: async ({ onProgress }) => {
+      onProgress({ stage: "SEARCHING" });
+      onProgress({ stage: "VERIFYING" });
+      onProgress({ stage: "WRITING" });
+      return payload;
+    },
   });
   assert.equal(started.status, "RUNNING");
+  assert.equal(started.stage, "PREPARING");
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (getCodexListeningGuideJob(releaseId)?.status !== "RUNNING") break;
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -409,6 +415,11 @@ test("manual Codex job runs asynchronously and writes the shared guide cache", a
   const finished = getCodexListeningGuideJob(releaseId);
   const store = await readListeningGuideStore(storePath);
   assert.equal(finished.status, "COMPLETED");
+  assert.equal(finished.stage, "COMPLETED");
+  assert.deepEqual(
+    finished.activity.map(({ stage }) => stage),
+    ["PREPARING", "SEARCHING", "VERIFYING", "WRITING", "SAVING", "COMPLETED"],
+  );
   assert.equal(store.guides[releaseId].summary, "manual Codex summary");
   assert.equal(store.guides[releaseId].provider, "CODEX_CHATGPT_WEB_RESEARCH");
 });

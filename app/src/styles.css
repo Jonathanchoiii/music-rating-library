@@ -2720,6 +2720,136 @@ html.is-desktop-shell .desktop-sidebar {
   animation: guide-spin 0.8s linear infinite;
 }
 
+.listening-guide-progress {
+  max-width: 46em;
+  padding: 17px 18px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: #fafaf8;
+}
+
+.listening-guide-progress-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.listening-guide-progress-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.listening-guide-progress-heading strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.listening-guide-progress-heading span,
+.listening-guide-progress-heading time {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.listening-guide-progress-heading time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.listening-guide-progress ol {
+  margin: 17px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  list-style: none;
+}
+
+.listening-guide-progress li {
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.listening-guide-progress li::before {
+  content: "";
+  height: 1px;
+  background: var(--line-strong);
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  left: 5px;
+}
+
+.listening-guide-progress li:first-child::before {
+  left: 10px;
+}
+
+.listening-guide-progress li:last-child::before {
+  right: calc(100% - 10px);
+}
+
+.listening-guide-progress li > span {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  position: relative;
+  z-index: 1;
+  flex: none;
+}
+
+.listening-guide-progress li.is-complete > span {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.listening-guide-progress li.is-active > span {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.listening-guide-progress li > div {
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 4px;
+}
+
+.listening-guide-progress li strong {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listening-guide-progress li.is-complete strong,
+.listening-guide-progress li.is-active strong {
+  color: var(--text);
+}
+
+.listening-guide-progress li small {
+  color: var(--muted-dark);
+  display: none;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.listening-guide-progress > p {
+  margin: 15px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}
+
 @keyframes guide-spin {
   to {
     transform: rotate(360deg);
@@ -5605,8 +5735,47 @@ button.settings-entry:disabled {
   }
 
   .listening-guide-summary,
-  .listening-guide-article {
+  .listening-guide-article,
+  .listening-guide-progress {
     max-width: none;
+  }
+
+  .listening-guide-progress {
+    padding: 15px;
+  }
+
+  .listening-guide-progress ol {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .listening-guide-progress li {
+    min-height: 31px;
+  }
+
+  .listening-guide-progress li::before {
+    width: 1px;
+    height: auto;
+    top: 5px;
+    right: auto;
+    bottom: -5px;
+    left: 5px;
+  }
+
+  .listening-guide-progress li:first-child::before {
+    left: 5px;
+  }
+
+  .listening-guide-progress li:last-child::before {
+    display: none;
+  }
+
+  .listening-guide-progress li.is-active {
+    min-height: 49px;
+  }
+
+  .listening-guide-progress li.is-active small {
+    display: block;
   }
 
   .listening-guide-summary {

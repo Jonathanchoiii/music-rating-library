@@ -30,6 +30,22 @@ const CODEX_RESEARCH_TIMEOUT_MS = 12 * 60 * 1000;
 const STORE_LOCK_TIMEOUT_MS = 30 * 1000;
 const STORE_LOCK_STALE_MS = 20 * 60 * 1000;
 const CODEX_JOB_RETENTION_MS = 60 * 60 * 1000;
+const CODEX_JOB_STAGES = new Set([
+  "PREPARING",
+  "SEARCHING",
+  "VERIFYING",
+  "WRITING",
+  "SAVING",
+  "COMPLETED",
+]);
+const CODEX_JOB_STAGE_ORDER = [
+  "PREPARING",
+  "SEARCHING",
+  "VERIFYING",
+  "WRITING",
+  "SAVING",
+  "COMPLETED",
+];
 const MODULE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIRECTORY = path.resolve(MODULE_DIRECTORY, "..");
 let storeWriteQueue = Promise.resolve();
@@ -1056,6 +1072,7 @@ export async function requestCodexResearch({
   identity: rawIdentity,
   timeoutMs = CODEX_RESEARCH_TIMEOUT_MS,
   executable,
+  onProgress = () => {},
 } = {}) {
   const identity = sanitizeIdentity(rawIdentity);
   if (!identity.originalTitle || !identity.artists.length) {
@@ -1074,6 +1091,7 @@ export async function requestCodexResearch({
   const args = [
     "--search",
     "exec",
+    "--json",
     "--ephemeral",
     "--sandbox",
     "read-only",
@@ -1091,6 +1109,7 @@ export async function requestCodexResearch({
   args.push("-");
 
   try {
+    onProgress({ stage: "PREPARING" });
     await fs.writeFile(schemaPath, `${JSON.stringify(LISTENING_GUIDE_SCHEMA)}\n`, {
       mode: 0o600,
     });
@@ -1098,16 +1117,49 @@ export async function requestCodexResearch({
       const child = spawn(cliPath, args, {
         cwd: temporaryDirectory,
         env: { ...process.env, NO_COLOR: "1" },
-        stdio: ["pipe", "ignore", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
       let stderr = "";
+      let stdout = "";
       let settled = false;
+      let latestStage = "";
+      const reportStage = (stage) => {
+        if (!CODEX_JOB_STAGES.has(stage) || latestStage === stage) return;
+        latestStage = stage;
+        onProgress({ stage });
+      };
+      reportStage("SEARCHING");
+      const verifyTimer = setTimeout(() => reportStage("VERIFYING"), 20_000);
+      const writingTimer = setTimeout(() => reportStage("WRITING"), 55_000);
       const finish = (callback) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(verifyTimer);
+        clearTimeout(writingTimer);
         callback();
       };
+      child.stdout.on("data", (chunk) => {
+        stdout = `${stdout}${chunk}`;
+        const lines = stdout.split("\n");
+        stdout = lines.pop() ?? "";
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            const eventType = cleanText(event?.type, 100).toLowerCase();
+            const itemType = cleanText(event?.item?.type, 100).toLowerCase();
+            if (eventType.includes("web_search") || itemType.includes("web_search")) {
+              reportStage("SEARCHING");
+            } else if (itemType === "reasoning") {
+              reportStage("VERIFYING");
+            } else if (itemType === "agent_message") {
+              reportStage("WRITING");
+            }
+          } catch {
+            // Codex progress is optional; never expose or depend on raw output.
+          }
+        }
+      });
       child.stderr.on("data", (chunk) => {
         stderr = `${stderr}${chunk}`.slice(-8000);
       });
@@ -1143,10 +1195,28 @@ function publicCodexJob(job) {
     id: job.id,
     releaseId: job.releaseId,
     status: job.status,
+    stage: job.stage,
     startedAt: job.startedAt,
+    updatedAt: job.updatedAt,
     finishedAt: job.finishedAt ?? null,
     error: job.error ?? null,
+    activity: (job.activity ?? []).map(({ stage, at }) => ({ stage, at })),
   };
+}
+
+function updateCodexJobStage(job, stage, now = new Date()) {
+  if (!CODEX_JOB_STAGES.has(stage) || job.stage === stage) return;
+  if (
+    CODEX_JOB_STAGE_ORDER.indexOf(stage) <
+    CODEX_JOB_STAGE_ORDER.indexOf(job.stage)
+  ) {
+    return;
+  }
+  const at = now.toISOString();
+  job.stage = stage;
+  job.updatedAt = at;
+  job.activity ??= [];
+  job.activity.push({ stage, at });
 }
 
 function pruneCodexJobs() {
@@ -1181,23 +1251,33 @@ export function startCodexListeningGuideJob(
     id: `codex-guide-job-${randomUUID()}`,
     releaseId: safeReleaseId,
     status: "RUNNING",
+    stage: "PREPARING",
     startedAt,
+    updatedAt: startedAt,
     finishedAt: null,
     error: null,
+    activity: [{ stage: "PREPARING", at: startedAt }],
   };
   codexResearchJobs.set(safeReleaseId, job);
   job.promise = Promise.resolve()
-    .then(() => runner({ identity }))
-    .then((payload) =>
-      saveCodexResearchGuide(safeReleaseId, identity, payload, {
+    .then(() =>
+      runner({
+        identity,
+        onProgress: ({ stage } = {}) => updateCodexJobStage(job, stage, now()),
+      }),
+    )
+    .then((payload) => {
+      updateCodexJobStage(job, "SAVING", now());
+      return saveCodexResearchGuide(safeReleaseId, identity, payload, {
         storePath,
         now: now(),
         force: true,
-      }),
-    )
+      });
+    })
     .then(() => {
       job.status = "COMPLETED";
       job.finishedAt = now().toISOString();
+      updateCodexJobStage(job, "COMPLETED", now());
     })
     .catch((error) => {
       const safeErrors = new Set([

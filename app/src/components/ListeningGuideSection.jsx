@@ -50,7 +50,21 @@ const GENERATION_ERROR_MESSAGES = Object.freeze({
     "本地服务在研究期间发生重启；请再次点击更新",
 });
 
-const LISTENING_GUIDE_POLL_INTERVAL_MS = 15_000;
+const LISTENING_GUIDE_POLL_INTERVAL_MS = 3_000;
+const CODEX_PROGRESS_STEPS = Object.freeze([
+  { stage: "PREPARING", label: "准备资料", detail: "确认专辑名称、艺人与公开平台身份" },
+  { stage: "SEARCHING", label: "联网检索", detail: "查找官方资料、采访、专业评论与公共讨论" },
+  { stage: "VERIFYING", label: "核验来源", detail: "排除错配内容，并交叉确认可引用事实" },
+  { stage: "WRITING", label: "撰写指南", detail: "整理听感、背景、评价与重点曲目" },
+  { stage: "SAVING", label: "写入本地", detail: "校验结构并保存到 RecordShelf" },
+]);
+
+function elapsedLabel(startedAt, now) {
+  const elapsed = Math.max(0, now - Date.parse(startedAt || now));
+  const seconds = Math.floor(elapsed / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
 
 function guideRevision(guide) {
   if (!guide) return "EMPTY";
@@ -62,9 +76,11 @@ export function ListeningGuideSection({ release }) {
     loading: true,
     saving: false,
     guide: null,
+    codexJob: null,
     error: "",
   });
   const [expanded, setExpanded] = useState(false);
+  const [progressNow, setProgressNow] = useState(Date.now());
 
   useEffect(() => {
     let active = true;
@@ -74,6 +90,7 @@ export function ListeningGuideSection({ release }) {
       loading: true,
       saving: false,
       guide: null,
+      codexJob: null,
       error: "",
     });
     async function loadGuide({ initial = false } = {}) {
@@ -87,9 +104,17 @@ export function ListeningGuideSection({ release }) {
         const payload = await response.json();
         if (!active) return;
         const nextGuide = payload.guide ?? null;
+        const nextJob = payload.codexJob ?? null;
         setState((current) => {
-          if (!initial && current.saving) return current;
-          if (!initial && current.guide && !nextGuide) return current;
+          const nextBase = {
+            ...current,
+            loading: false,
+            saving:
+              nextJob?.status === "RUNNING" ||
+              (current.saving && !nextJob),
+            codexJob: nextJob,
+          };
+          if (!initial && current.guide && !nextGuide) return nextBase;
           const currentUpdatedAt = Date.parse(current.guide?.updatedAt ?? 0);
           const nextUpdatedAt = Date.parse(nextGuide?.updatedAt ?? 0);
           if (
@@ -100,18 +125,17 @@ export function ListeningGuideSection({ release }) {
             Number.isFinite(nextUpdatedAt) &&
             nextUpdatedAt < currentUpdatedAt
           ) {
-            return current;
+            return nextBase;
           }
           if (
             !initial &&
             guideRevision(current.guide) === guideRevision(nextGuide) &&
             !current.error
           ) {
-            return current;
+            return nextBase;
           }
           return {
-            ...current,
-            loading: false,
+            ...nextBase,
             guide: nextGuide,
             error: "",
           };
@@ -146,6 +170,13 @@ export function ListeningGuideSection({ release }) {
     };
   }, [release.id, release.title, release.artists]);
 
+  useEffect(() => {
+    if (!state.saving) return undefined;
+    setProgressNow(Date.now());
+    const intervalId = window.setInterval(() => setProgressNow(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [state.saving]);
+
   const generatedLabel = useMemo(() => {
     if (!state.guide?.generatedAt) return "";
     return `最近整理 ${displayDate(state.guide.generatedAt)}`;
@@ -160,6 +191,11 @@ export function ListeningGuideSection({ release }) {
       });
       if (!response.ok) throw new Error("暂时无法读取 Codex 研究进度");
       payload = await response.json();
+      setState((current) => ({
+        ...current,
+        saving: payload.codexJob?.status === "RUNNING",
+        codexJob: payload.codexJob ?? current.codexJob,
+      }));
       if (!payload.codexJob && initialPayload.codexJob) {
         throw new Error(GENERATION_ERROR_MESSAGES.CODEX_JOB_INTERRUPTED);
       }
@@ -174,7 +210,19 @@ export function ListeningGuideSection({ release }) {
   }
 
   async function generate() {
-    setState((current) => ({ ...current, saving: true, error: "" }));
+    const startedAt = new Date().toISOString();
+    setState((current) => ({
+      ...current,
+      saving: true,
+      codexJob: {
+        status: "RUNNING",
+        stage: "PREPARING",
+        startedAt,
+        updatedAt: startedAt,
+        activity: [{ stage: "PREPARING", at: startedAt }],
+      },
+      error: "",
+    }));
     try {
       const response = await fetch(
         `/api/releases/${encodeURIComponent(release.id)}/listening-guide/codex-refresh`,
@@ -192,6 +240,10 @@ export function ListeningGuideSection({ release }) {
         );
       }
       if (payload.codexJob?.status === "RUNNING") {
+        setState((current) => ({
+          ...current,
+          codexJob: payload.codexJob,
+        }));
         payload = await waitForCodexJob(payload);
       }
       setState((current) => ({
@@ -199,6 +251,7 @@ export function ListeningGuideSection({ release }) {
         loading: false,
         saving: false,
         guide: payload.guide,
+        codexJob: payload.codexJob ?? null,
         error: "",
       }));
       window.dispatchEvent(
@@ -218,7 +271,13 @@ export function ListeningGuideSection({ release }) {
 
   const guide = state.guide;
   const hasVisibleBody =
-    state.loading || guide?.status === "READY" || Boolean(state.error);
+    state.loading || state.saving || guide?.status === "READY" || Boolean(state.error);
+  const activeStage = state.codexJob?.stage || "PREPARING";
+  const activeStageIndex = Math.max(
+    0,
+    CODEX_PROGRESS_STEPS.findIndex((step) => step.stage === activeStage),
+  );
+  const activeProgressStep = CODEX_PROGRESS_STEPS[activeStageIndex];
 
   return (
     <section className="listening-guide" aria-labelledby={`guide-${release.id}`}>
@@ -226,7 +285,12 @@ export function ListeningGuideSection({ release }) {
         <div>
           <h3 id={`guide-${release.id}`}>专辑聆听指南</h3>
           <p>
-            {guide?.status === "READY"
+            {state.saving
+              ? `Codex 正在${activeProgressStep.label} · 已用 ${elapsedLabel(
+                  state.codexJob?.startedAt,
+                  progressNow,
+                )}`
+              : guide?.status === "READY"
               ? generatedLabel
               : "基于可核验资料整理，不使用你的评分与评论"}
           </p>
@@ -253,6 +317,38 @@ export function ListeningGuideSection({ release }) {
           <div className="listening-guide-status">
             <span className="listening-guide-spinner" aria-hidden="true" />
             正在读取本地指南…
+          </div>
+        ) : null}
+
+        {state.saving ? (
+          <div className="listening-guide-progress" role="status">
+            <div className="listening-guide-progress-heading">
+              <div>
+                <strong>Codex 正在处理这张专辑</strong>
+                <span>{activeProgressStep.detail}</span>
+              </div>
+              <time>{elapsedLabel(state.codexJob?.startedAt, progressNow)}</time>
+            </div>
+            <ol>
+              {CODEX_PROGRESS_STEPS.map((step, index) => {
+                const status =
+                  index < activeStageIndex
+                    ? "is-complete"
+                    : index === activeStageIndex
+                      ? "is-active"
+                      : "";
+                return (
+                  <li className={status} key={step.stage}>
+                    <span aria-hidden="true" />
+                    <div>
+                      <strong>{step.label}</strong>
+                      {status === "is-active" ? <small>{step.detail}</small> : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+            <p>你可以继续浏览；完成后本页会自动写入并展开新指南。</p>
           </div>
         ) : null}
 
