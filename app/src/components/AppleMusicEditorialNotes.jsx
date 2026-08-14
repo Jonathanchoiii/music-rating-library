@@ -42,7 +42,7 @@ function productLocale() {
 
 function sectionSubtitle({ editing, showingUser, hasOfficialVersion }) {
   if (editing) return "保存在本机音乐库，不会覆盖 Apple Music 官方原文。";
-  if (showingUser) return "保存在本机音乐库。";
+  if (showingUser) return "";
   if (hasOfficialVersion) return "Apple Music 官方编辑介绍，不改写原文。";
   return "可以自己写，也可以在配置令牌后读取 Apple Music 官方介绍。";
 }
@@ -257,19 +257,18 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
     !showingUser &&
     !selectedVersion &&
     state.status === "loading";
+  const subtitle = sectionSubtitle({
+    editing,
+    showingUser,
+    hasOfficialVersion: Boolean(selectedVersion),
+  });
 
   return (
     <section className="apple-editorial" aria-label="专辑介绍">
       <header className="apple-editorial-header">
         <div>
           <h3>专辑介绍</h3>
-          <p>
-            {sectionSubtitle({
-              editing,
-              showingUser,
-              hasOfficialVersion: Boolean(selectedVersion),
-            })}
-          </p>
+          {subtitle ? <p>{subtitle}</p> : null}
         </div>
         {!editing && versions.length > 1 ? (
           <label className="apple-editorial-versions">
