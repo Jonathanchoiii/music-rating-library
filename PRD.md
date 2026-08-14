@@ -1706,6 +1706,33 @@ MVP 只需为每个发行找到可打开的精确专辑详情页，不做站内�
 - 使用可配置 storefront。
 - 保存 catalog album ID 与官方专辑 URL。
 
+#### Apple Music 官方编辑介绍
+
+- 发行详情页在平台跳转按钮之后、收听时间线之前展示「专辑介绍」，内容是
+  Apple Music 官方 `editorialNotes` 原文；只引用，不改写、不摘要、不机器翻译。
+  「多语言」只指 Apple 官方已有的本地化版本。
+- 只识别 `https://music.apple.com/{storefront}/album/…/{数字 album ID}`，
+  必须用标准 URL parser；忽略 tracking 参数与单曲分享链接的 `?i=`；
+  artist、playlist、station 链接不得触发。没有可解析的已确认链接时整个模块
+  不渲染。
+- 请求必须在服务端携带 MusicKit Developer Token，只从
+  `APPLE_MUSIC_DEVELOPER_TOKEN` 或 `Application Support/RecordShelf/apple-music-developer-token`
+  （`0600`）读取；不抓取网页，不复用网页内部 token，令牌不进入客户端 bundle、
+  日志、接口响应或安装包。未配置时返回 `APPLE_MUSIC_NOT_CONFIGURED` 且不发请求。
+- 跨 storefront 必须用 `filter[equivalents]` 解析目标地区 album ID；
+  `standard` 优先，缺失时降级 `short`，两者皆空不产生结果。
+- 服务端按 `<b> <i> <br>` 白名单清理，并用规范化正文 SHA-256 去重：相同正文
+  只保留一个版本并合并地区/语言来源，同一语言的不同正文保留为多个版本。
+  界面下拉命名为「文案版本」，`short` 必须标注短导语，默认优先当前产品语言
+  且完整介绍优先于短导语。
+- 文案是可刷新的外部元数据缓存，写入
+  `Application Support/RecordShelf/apple-music-editorial-notes.json`；不进入
+  共享用户增量，不覆盖用户手写内容。必须保留来源标识与 Apple Music 原专辑入口。
+- 本功能不得扩展为独立的 Apple Music 编辑文案聚合、归档、导出或对比数据库。
+  正式公开发布前需由产品负责人核对当时生效的 Apple Developer Program License
+  Agreement，技术实现不等于合规确认。详见
+  `docs/APPLE_MUSIC_EDITORIAL_NOTES.md`。
+
 ### 11.3 默认地区
 
 - `apple_music_storefront = cn`

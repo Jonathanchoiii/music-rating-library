@@ -12,6 +12,7 @@
 - 艺人别名、合作署名和 MusicBrainz ID 管理
 - CSV 导入与 NeoDB 增量同步流程
 - Apple Music、Spotify 和 NeoDB 外链
+- 专辑详情页展示 Apple Music 官方介绍，可切换地区与语言版本
 - 发行类型、日期及其他已核验元数据筛选
 - NeoDB 地址规范化和疑似重复条目人工处理
 
@@ -54,6 +55,29 @@ npm run import:neodb -- "/absolute/path/to/music_mark.csv"
 这些私人资料都不会由 GitHub 代为备份。
 共享文件每次更新前会在相邻的 `.backups/` 目录保留上一 revision，滚动保留
 最近 20 份，以便误操作后恢复。
+
+## Apple Music 官方介绍
+
+专辑详情页的「专辑介绍」读取 Apple Music 官方编辑介绍原文，并按地区 ×
+语言列出不同的官方文案版本。它需要一个 MusicKit Developer Token，只在本机
+服务端使用：
+
+```bash
+cd app
+cp .env.example .env   # 然后填入 APPLE_MUSIC_DEVELOPER_TOKEN
+```
+
+也可以改为写入私人文件（权限 `0600`，两端共用）：
+
+```text
+~/Library/Application Support/RecordShelf/apple-music-developer-token
+```
+
+没有配置令牌时，该模块只显示一行「暂不可用」提示，不会发出任何网络请求。
+文案结果缓存在 `Application Support/RecordShelf/apple-music-editorial-notes.json`，
+属于可刷新的外部元数据，不会写入共享音乐数据库，也不会覆盖你自己的文字。
+实现细节、错误码与 Apple 协议注意事项见
+[Apple Music 官方介绍说明](docs/APPLE_MUSIC_EDITORIAL_NOTES.md)。
 
 ## macOS 本地应用
 

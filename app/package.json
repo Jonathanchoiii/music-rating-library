@@ -26,7 +26,7 @@
     "backfill:listening-guides": "node scripts/backfill-listening-guides.mjs",
     "research:listening-guides:codex": "node scripts/research-listening-guides-with-codex.mjs",
     "preview": "vite preview",
-    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs tests/listening-guides.test.mjs",
+    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs tests/listening-guides.test.mjs tests/apple-music-notes.test.mjs",
     "test:build-privacy": "node scripts/verify-build-privacy.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
@@ -56,10 +56,12 @@
       "electron/**/*",
       "shared-state/**/*",
       "listening-guides/**/*",
+      "apple-music-notes/**/*",
       "prompts/**/*",
       "scripts/private-covers-http.mjs",
       "scripts/enrich-cover-art.mjs",
       "src/lib/sharedStorageKeys.js",
+      "src/lib/appleMusicUrl.js",
       "dist/desktop-client/**/*",
       "worker/index.js",
       "package.json"

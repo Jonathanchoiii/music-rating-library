@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import worker from "../worker/index.js";
 import { handleSharedStateRequest } from "../shared-state/index.mjs";
 import { handleListeningGuideRequest } from "../listening-guides/index.mjs";
+import { handleAppleMusicEditorialRequest } from "../apple-music-notes/index.mjs";
 import {
   handleLocalCoverEnrichRequest,
   handlePrivateCoverStatic,
@@ -146,6 +147,9 @@ export async function startRecordShelfServer(port = 4173) {
         return;
       }
       if (await handleListeningGuideRequest(request, response)) {
+        return;
+      }
+      if (await handleAppleMusicEditorialRequest(request, response)) {
         return;
       }
       if (await handleSharedStateRequest(request, response)) {
