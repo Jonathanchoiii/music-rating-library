@@ -299,8 +299,6 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
           <span className="apple-editorial-single-version">
             {editorialVersionLabel(selectedVersion, { locale, versions })}
           </span>
-        ) : !editing && showingUser ? (
-          <span className="apple-editorial-single-version">我写的</span>
         ) : null}
       </header>
 
