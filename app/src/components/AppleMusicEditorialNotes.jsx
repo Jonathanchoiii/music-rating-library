@@ -395,22 +395,13 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
           </p>
         ) : null}
 
-        {!editing ? (
+        {!editing && (canEdit || canScanMore || appleMusicUrl) ? (
           <div className="apple-editorial-footer">
-            <span>
-              {showingUser
-                ? "来源：我添加的介绍"
-                : selectedVersion
-                  ? "来源：Apple Music Editorial Notes"
-                  : album
-                    ? "官方介绍需要开发者令牌；你也可以自己添加。"
-                    : "保存在本机音乐库"}
-            </span>
-            <div>
+            <div className="apple-editorial-footer-actions">
               {canEdit ? (
                 <button
                   type="button"
-                  className="text-button"
+                  className="apple-editorial-muted-button"
                   onClick={startEditing}
                 >
                   {hasUserIntroduction ? "编辑" : "添加介绍"}
@@ -419,12 +410,14 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
               {canEdit && showingUser && hasUserIntroduction ? (
                 <button
                   type="button"
-                  className="text-button"
+                  className="apple-editorial-muted-button"
                   onClick={clearIntroduction}
                 >
                   清除
                 </button>
               ) : null}
+            </div>
+            <div className="apple-editorial-footer-links">
               {canScanMore ? (
                 <button
                   type="button"

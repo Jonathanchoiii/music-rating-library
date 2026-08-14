@@ -2782,15 +2782,32 @@ html.is-desktop-shell .desktop-sidebar {
   flex-wrap: wrap;
 }
 
-.apple-editorial-footer > span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.apple-editorial-footer > div {
+.apple-editorial-footer-actions,
+.apple-editorial-footer-links {
   display: flex;
   align-items: center;
   gap: 14px;
+}
+
+.apple-editorial-footer-links {
+  margin-left: auto;
+}
+
+.apple-editorial-muted-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgb(0 0 0 / 50%);
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.apple-editorial-muted-button:hover,
+.apple-editorial-muted-button:focus-visible {
+  color: rgb(0 0 0 / 72%);
 }
 
 .apple-editorial-footer a {
@@ -5910,11 +5927,7 @@ button.settings-entry:disabled {
     text-align: left;
   }
 
-  .apple-editorial-footer > div {
-    width: 100%;
-    justify-content: space-between;
-  }
-
+  .apple-editorial-footer .apple-editorial-muted-button,
   .apple-editorial-footer .text-button,
   .apple-editorial-editor-actions .text-button,
   .apple-editorial-editor-actions .secondary-button {
