@@ -101,6 +101,23 @@ function FilterChoices({ options, selected, onToggle, emptyText }) {
   );
 }
 
+function TernaryChoices({ value, onChange, options }) {
+  return (
+    <div className="filter-segmented">
+      {options.map(([optionValue, label]) => (
+        <button
+          type="button"
+          key={optionValue}
+          className={value === optionValue ? "is-active" : ""}
+          onClick={() => onChange(optionValue)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function DateRange({ label, from, to, onChange }) {
   return (
     <div className="filter-date-range">
@@ -452,25 +469,40 @@ export function FilterDrawer({
                 />
               </div>
               <div className="filter-field-block">
-                <strong>专辑聆听指南</strong>
-                <div className="filter-segmented">
-                  {[
+                <strong>动态封面</strong>
+                <TernaryChoices
+                  value={draft.motionArtworkState}
+                  onChange={(value) => update("motionArtworkState", value)}
+                  options={[
                     ["ANY", "全部"],
-                    ["WITH_GUIDE", "已有指南"],
-                    ["WITHOUT_GUIDE", "待生成"],
-                  ].map(([value, label]) => (
-                    <button
-                      type="button"
-                      key={value}
-                      className={
-                        draft.listeningGuideState === value ? "is-active" : ""
-                      }
-                      onClick={() => update("listeningGuideState", value)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                    ["WITH_MOTION", "已有"],
+                    ["WITHOUT_MOTION", "没有"],
+                  ]}
+                />
+              </div>
+              <div className="filter-field-block">
+                <strong>专辑介绍</strong>
+                <TernaryChoices
+                  value={draft.albumIntroductionState}
+                  onChange={(value) => update("albumIntroductionState", value)}
+                  options={[
+                    ["ANY", "全部"],
+                    ["WITH_INTRO", "已有"],
+                    ["WITHOUT_INTRO", "没有"],
+                  ]}
+                />
+              </div>
+              <div className="filter-field-block">
+                <strong>聆听指南</strong>
+                <TernaryChoices
+                  value={draft.listeningGuideState}
+                  onChange={(value) => update("listeningGuideState", value)}
+                  options={[
+                    ["ANY", "全部"],
+                    ["WITH_GUIDE", "已有"],
+                    ["WITHOUT_GUIDE", "没有"],
+                  ]}
+                />
               </div>
               <div className="filter-field-block">
                 <strong>数据可信度</strong>
@@ -696,7 +728,33 @@ export function ActiveFilterChips({
         key="listening-guide"
         onRemove={() => clearField("listeningGuideState")}
       >
-        {filters.listeningGuideState === "WITH_GUIDE" ? "已有聆听指南" : "待生成指南"}
+        {filters.listeningGuideState === "WITH_GUIDE"
+          ? "已有聆听指南"
+          : "没有聆听指南"}
+      </FilterChip>,
+    );
+  }
+  if (filters.motionArtworkState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="motion-artwork"
+        onRemove={() => clearField("motionArtworkState")}
+      >
+        {filters.motionArtworkState === "WITH_MOTION"
+          ? "已有动态封面"
+          : "没有动态封面"}
+      </FilterChip>,
+    );
+  }
+  if (filters.albumIntroductionState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="album-introduction"
+        onRemove={() => clearField("albumIntroductionState")}
+      >
+        {filters.albumIntroductionState === "WITH_INTRO"
+          ? "已有专辑介绍"
+          : "没有专辑介绍"}
       </FilterChip>,
     );
   }

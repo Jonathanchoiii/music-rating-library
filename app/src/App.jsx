@@ -698,6 +698,17 @@ function LibraryApp() {
     );
   }
 
+  function applyExternalRatings(releaseId, externalRatings) {
+    if (!releaseId || !externalRatings?.checkedAt) return;
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId
+          ? { ...release, externalRatings }
+        : release,
+      ),
+    );
+  }
+
   function findMergeCandidate(releaseId, inputUrl) {
     return findReleaseByReferenceUrl(
       releases,
@@ -1323,6 +1334,7 @@ function LibraryApp() {
         onMergeRelease={mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
         onApplyMotionArtworkUpdates={applyMotionArtworkUpdates}
+        onApplyExternalRatings={applyExternalRatings}
       />
       {isAddRoute ? (
         <AddReleaseDialog

@@ -273,3 +273,59 @@ test("listening guide availability filters use the persisted guide status index"
     true,
   );
 });
+
+test("motion artwork and album introduction filters use local persisted content", () => {
+  const withContent = release({
+    albumIntroduction: "  这是一张需要慢慢听的专辑。 ",
+    motionArtwork: {
+      status: "AVAILABLE",
+      storage: "LOCAL_WEBP",
+      localUrl: "/private-motion/example.webp",
+    },
+  });
+  const withoutContent = release({
+    albumIntroduction: "   ",
+    motionArtwork: { status: "UNAVAILABLE" },
+  });
+
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      withContent,
+      { ...EMPTY_LIBRARY_FILTERS, motionArtworkState: "WITH_MOTION" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    true,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      withoutContent,
+      { ...EMPTY_LIBRARY_FILTERS, motionArtworkState: "WITH_MOTION" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    false,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      withoutContent,
+      { ...EMPTY_LIBRARY_FILTERS, motionArtworkState: "WITHOUT_MOTION" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    true,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      withContent,
+      { ...EMPTY_LIBRARY_FILTERS, albumIntroductionState: "WITH_INTRO" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    true,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      withoutContent,
+      { ...EMPTY_LIBRARY_FILTERS, albumIntroductionState: "WITHOUT_INTRO" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+    ),
+    true,
+  );
+});

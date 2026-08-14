@@ -48,7 +48,10 @@ function sectionSubtitle({ editing, showingUser, hasOfficialVersion }) {
   return "可以自己写，也可以在配置令牌后读取 Apple Music 官方介绍。";
 }
 
-export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
+export function AppleMusicEditorialNotes({
+  release,
+  onSaveIntroduction,
+}) {
   const album = useMemo(
     () => findConfirmedAppleMusicAlbum(release),
     [release],
@@ -58,6 +61,13 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
     release.albumIntroduction,
   );
   const hasUserIntroduction = Boolean(userIntroduction);
+  const fallbackGenres = [
+    ...new Set(
+      (release.genres ?? [])
+        .map((genre) => String(genre ?? "").trim())
+        .filter(Boolean),
+    ),
+  ];
   const [state, setState] = useState({
     status: "idle",
     result: null,
@@ -258,6 +268,13 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
     !showingUser &&
     !selectedVersion &&
     state.status === "loading";
+  const showGenreFallback =
+    !editing &&
+    !showingUser &&
+    !selectedVersion &&
+    !showLoading &&
+    !showOfficialError &&
+    fallbackGenres.length > 0;
   const subtitle = sectionSubtitle({
     editing,
     showingUser,
@@ -372,13 +389,25 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
           </p>
         ) : null}
 
-        {showOfficialEmpty ? (
+        {showOfficialEmpty && !showGenreFallback ? (
           <p className="apple-editorial-status">
             这张专辑暂未发现 Apple Music 官方介绍。
           </p>
         ) : null}
 
-        {!editing && !showingUser && !album && !hasUserIntroduction ? (
+        {showGenreFallback ? (
+          <div className="genre-row apple-editorial-genre-fallback" aria-label="专辑流派">
+            {fallbackGenres.map((genre) => (
+              <span key={genre}>{genre}</span>
+            ))}
+          </div>
+        ) : null}
+
+        {!editing &&
+        !showingUser &&
+        !album &&
+        !hasUserIntroduction &&
+        !showGenreFallback ? (
           <p className="apple-editorial-status">还没有介绍。</p>
         ) : null}
 

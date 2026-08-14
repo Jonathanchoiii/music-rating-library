@@ -3,6 +3,7 @@ import {
   getDatePrecision,
   inferReleaseTypeFromOfficialTitle,
   normalizeExternalReleaseType,
+  normalizeSupportedReleaseUrl,
   normalizeText,
 } from "./music.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
@@ -85,7 +86,9 @@ const METADATA_FIELDS = [
   "releaseTypeUserConfirmed",
   "neodbSourceType",
   "typeVerificationInputFingerprint",
+  "neodbPlatformLinksCheckedAt",
   "albumIntroduction",
+  "externalRatings",
 ];
 
 function stableHash(value) {
@@ -104,7 +107,10 @@ function jsonHash(value) {
 function sourceItemIdFromUrl(url) {
   if (!url) return null;
   try {
-    return new URL(url).pathname.split("/").filter(Boolean).at(-1) ?? null;
+    return (
+      new URL(url, NEODB_ORIGIN).pathname.split("/").filter(Boolean).at(-1) ??
+      null
+    );
   } catch {
     return null;
   }
@@ -113,15 +119,31 @@ function sourceItemIdFromUrl(url) {
 function normalizedNeoDbUrl(url) {
   if (!url) return null;
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(String(url), NEODB_ORIGIN);
+    const host = parsed.hostname.toLocaleLowerCase();
+    if (!(host === "neodb.social" || host.startsWith("neodb."))) return null;
     parsed.protocol = "https:";
     parsed.search = "";
     parsed.hash = "";
-    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
     return parsed.toString().replace(/\/$/, "");
   } catch {
     return null;
   }
+}
+
+function catalogUrlFromItem(item) {
+  if (!item) return null;
+  for (const value of [item.id, item.url]) {
+    const normalized = normalizedNeoDbUrl(value);
+    if (normalized) return normalized;
+  }
+  const uuid = String(item.uuid ?? "").trim();
+  if (!uuid) return null;
+  const category = String(item.category ?? "").toLocaleLowerCase();
+  const type = String(item.type ?? "").toLocaleLowerCase();
+  if (category && category !== "music" && type !== "album") return null;
+  return `${NEODB_ORIGIN}/album/${uuid}`;
 }
 
 export function buildNeoDbCanonicalAliases(releases = []) {
@@ -513,7 +535,7 @@ export async function refreshNeoDbCanonicalIdentity(
 }
 
 function canonicalizeNeoDbMark(mark, aliases) {
-  const sourceUrl = normalizedNeoDbUrl(mark.item.url);
+  const sourceUrl = catalogUrlFromItem(mark.item);
   const canonicalUrl =
     aliases.get(mark.item.uuid) ?? aliases.get(sourceUrl) ?? sourceUrl;
   if (!canonicalUrl) return mark;
@@ -522,6 +544,7 @@ function canonicalizeNeoDbMark(mark, aliases) {
     item: {
       ...mark.item,
       uuid: sourceItemIdFromUrl(canonicalUrl) ?? mark.item.uuid,
+      id: canonicalUrl,
       url: canonicalUrl,
     },
   };
@@ -574,25 +597,91 @@ function translatedTitleFromItem(item) {
   return localized ?? null;
 }
 
+function catalogApiPathFromItem(item) {
+  if (item?.api_url) {
+    try {
+      const url = new URL(item.api_url, NEODB_ORIGIN);
+      return `${url.pathname}${url.search}`;
+    } catch {
+      return String(item.api_url).startsWith("/")
+        ? item.api_url
+        : `/${item.api_url}`;
+    }
+  }
+  const uuid = String(item?.uuid ?? "").trim();
+  if (!uuid) return null;
+  const category = String(item.category ?? "").toLocaleLowerCase();
+  const type = String(item.type ?? "").toLocaleLowerCase();
+  if (category && category !== "music" && type !== "album") return null;
+  return `/api/album/${encodeURIComponent(uuid)}`;
+}
+
+function mergeCatalogItem(shelfItem, catalogItem) {
+  if (!catalogItem) return shelfItem;
+  const seen = new Set();
+  const external_resources = [
+    ...(shelfItem?.external_resources ?? []),
+    ...(catalogItem.external_resources ?? []),
+  ].filter((resource) => {
+    const url = String(resource?.url ?? "").trim();
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+  return {
+    ...shelfItem,
+    ...catalogItem,
+    uuid: shelfItem?.uuid ?? catalogItem.uuid,
+    id: catalogItem.id ?? shelfItem?.id,
+    url: catalogItem.url ?? shelfItem?.url,
+    api_url: catalogItem.api_url ?? shelfItem?.api_url,
+    external_resources,
+  };
+}
+
+function platformLinkFromUrl(url) {
+  const normalized = normalizeSupportedReleaseUrl(url);
+  if (normalized) {
+    return {
+      provider: normalized.provider,
+      url: normalized.normalizedUrl,
+      status:
+        normalized.provider === "NEODB" ? "CONFIRMED" : "AUTO_CONFIRMED",
+    };
+  }
+  const provider = providerFromUrl(url);
+  if (!provider || provider === "OTHER" || provider === "DOUBAN") return null;
+  return {
+    provider,
+    url,
+    status: provider === "NEODB" ? "CONFIRMED" : "AUTO_CONFIRMED",
+  };
+}
+
 function externalLinksFromItem(item) {
   const urls = [
-    item.url,
+    catalogUrlFromItem(item),
     ...(item.external_resources ?? []).map((resource) => resource.url),
   ].filter(Boolean);
   const seen = new Set();
-  return urls
-    .map((url) => ({
-      provider: providerFromUrl(url),
-      url,
-      status: "CONFIRMED",
-    }))
-    .filter((link) => link.provider)
-    .filter((link) => {
-      const key = `${link.provider}|${link.url}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  const seenProviders = new Set();
+  const links = [];
+  for (const url of urls) {
+    const link = platformLinkFromUrl(url);
+    if (!link) continue;
+    const key = `${link.provider}|${link.url}`;
+    if (seen.has(key)) continue;
+    if (
+      ["NEODB", "APPLE_MUSIC", "SPOTIFY"].includes(link.provider) &&
+      seenProviders.has(link.provider)
+    ) {
+      continue;
+    }
+    seen.add(key);
+    seenProviders.add(link.provider);
+    links.push(link);
+  }
+  return links;
 }
 
 function releaseTypeFromItem(item) {
@@ -648,7 +737,7 @@ export function neoDbMarkToEntry(mark, review = null, suffix = "") {
     rating10: mark.rating_grade ?? null,
     comment: combinedComment(mark, review),
     source: "NEODB",
-    sourceUrl: mark.item.url,
+    sourceUrl: catalogUrlFromItem(mark.item) ?? mark.item.url,
     sourceItemId,
     markStatus: mark.shelf_type,
     markedAt: createdAt,
@@ -670,7 +759,7 @@ function markLogToEntry(mark, log) {
     rating10: log.rating_grade ?? null,
     comment: log.comment_text?.trim() || null,
     source: "NEODB",
-    sourceUrl: mark.item.url,
+    sourceUrl: catalogUrlFromItem(mark.item) ?? mark.item.url,
     sourceItemId: mark.item.uuid,
     markStatus: log.shelf_type,
     markedAt: createdAt,
@@ -692,14 +781,14 @@ export function neoDbMarkToRelease(mark, review = null, logs = []) {
     translatedTitle,
     titleAliases: translatedTitle ? [translatedTitle] : [],
     neodbSourceTitle: item.title,
-    neodbSourceTitleUrl: item.url,
+    neodbSourceTitleUrl: catalogUrlFromItem(item) ?? item.url,
     neodbSourceTitleUpdatedAt: mark.created_time ?? null,
     artists: artistNamesFromItem(item),
     releaseType: "OTHER",
     releaseTypeSource: "PENDING_EXACT_CHECK",
     releaseTypeEvidence:
       reportedReleaseType === "OTHER" ? item.type ?? null : item.type,
-    releaseTypeMatchedFrom: item.url,
+    releaseTypeMatchedFrom: catalogUrlFromItem(item) ?? item.url,
     releaseTypeMatchedAt: null,
     neodbSourceType: item.type ?? null,
     releaseDate: null,
@@ -708,6 +797,7 @@ export function neoDbMarkToRelease(mark, review = null, logs = []) {
     coverUrl: item.cover_image_url ?? null,
     isPrivate: mark.visibility === 2,
     externalLinks: externalLinksFromItem(item),
+    neodbPlatformLinksCheckedAt: new Date().toISOString(),
     markStatus: mark.shelf_type,
     tags: mark.tags ?? [],
     listeningEntries: [...historicalEntries, currentEntry],
@@ -932,6 +1022,36 @@ export function getOrphanNeoDbLinkedSourceIds(releases = []) {
   );
 }
 
+export function getUnlinkedNeoDbSourceIds(releases = []) {
+  const linkedIds = getNeoDbLinkedSourceIds(releases);
+  return new Set(
+    [...getNeoDbSourceIds(releases)].filter((id) => !linkedIds.has(id)),
+  );
+}
+
+function hasProviderLink(release, provider) {
+  return (release.externalLinks ?? []).some(
+    (link) => link.provider === provider,
+  );
+}
+
+export function getUnlinkedPlatformSourceIds(releases = []) {
+  return new Set(
+    releases
+      .filter(
+        (release) =>
+          !release.neodbPlatformLinksCheckedAt &&
+          (!hasProviderLink(release, "APPLE_MUSIC") ||
+            !hasProviderLink(release, "SPOTIFY")),
+      )
+      .flatMap((release) => [
+        ...neoDbIdsFromReleaseEntries(release),
+        ...neoDbIdsFromReleaseLinks(release),
+      ])
+      .filter(Boolean),
+  );
+}
+
 export function buildVerifiedNeoDbRemovalCandidates(
   releases,
   remoteSourceIds = [],
@@ -1045,14 +1165,32 @@ export function dedupeEquivalentListeningEntries(entries = []) {
 }
 
 function mergeExternalLinks(existing = [], incoming = []) {
+  const replaceable = new Set(["APPLE_MUSIC", "SPOTIFY"]);
   const links = [...existing];
   const seen = new Set(links.map((link) => `${link.provider}|${link.url}`));
+  const indexByProvider = new Map();
+  links.forEach((link, index) => {
+    if (replaceable.has(link.provider) && !indexByProvider.has(link.provider)) {
+      indexByProvider.set(link.provider, index);
+    }
+  });
   for (const link of incoming) {
     const key = `${link.provider}|${link.url}`;
-    if (!seen.has(key)) {
+    if (seen.has(key)) continue;
+    if (replaceable.has(link.provider) && indexByProvider.has(link.provider)) {
+      const index = indexByProvider.get(link.provider);
+      const current = links[index];
+      if (current.status === "CONFIRMED") continue;
+      if (current.status !== "AUTO_CONFIRMED") continue;
+      links[index] = link;
       seen.add(key);
-      links.push(link);
+      continue;
     }
+    seen.add(key);
+    if (replaceable.has(link.provider)) {
+      indexByProvider.set(link.provider, links.length);
+    }
+    links.push(link);
   }
   return links;
 }
@@ -1116,6 +1254,9 @@ function metadataPatch(existing, incoming) {
         ? new Date().toISOString()
         : existing.neodbSourceTitleUpdatedAt,
     neodbSourceType: incoming.neodbSourceType ?? null,
+    neodbPlatformLinksCheckedAt:
+      existing.neodbPlatformLinksCheckedAt ??
+      incoming.neodbPlatformLinksCheckedAt,
   };
   if (shouldPromoteNeoDbTitle) {
     patch.title = incoming.title;
@@ -1355,7 +1496,8 @@ function shelfPagesBeyondFirst(totalPagesByShelf) {
 
 async function enrichChangedMark(mark, token, includeLogs) {
   const uuid = encodeURIComponent(mark.item.uuid);
-  const [review, logsPage] = await Promise.all([
+  const catalogPath = catalogApiPathFromItem(mark.item);
+  const [review, logsPage, catalogItem] = await Promise.all([
     fetchNeoDb(`/api/me/review/item/${uuid}`, token, { allow404: true }),
     includeLogs
       ? fetchNeoDb(
@@ -1364,9 +1506,15 @@ async function enrichChangedMark(mark, token, includeLogs) {
           { allow404: true },
         )
       : Promise.resolve(null),
+    catalogPath
+      ? fetchNeoDb(catalogPath, token, { allow404: true })
+      : Promise.resolve(null),
   ]);
   return {
-    mark,
+    mark: {
+      ...mark,
+      item: mergeCatalogItem(mark.item, catalogItem),
+    },
     review,
     logs: logsPage?.data ?? [],
   };
@@ -1527,9 +1675,12 @@ export async function pullNeoDbDelta(
   const localSourceIds = getNeoDbSourceIds(releases);
   const identitySourceIds = getNeoDbSourceIds(identityReleases);
   const orphanLinkedSourceIds = getOrphanNeoDbLinkedSourceIds(releases);
+  const unlinkedSourceIds = getUnlinkedNeoDbSourceIds(releases);
+  const unlinkedPlatformSourceIds = getUnlinkedPlatformSourceIds(releases);
   const auditableSourceIds = new Set([
     ...localSourceIds,
     ...orphanLinkedSourceIds,
+    ...unlinkedPlatformSourceIds,
   ]);
   const knownIds = new Set([
     ...auditableSourceIds,
@@ -1674,7 +1825,10 @@ export async function pullNeoDbDelta(
   const changedMarks = [];
   for (const mark of fetchedMarks) {
     const hash = neoDbMarkHash(mark);
-    const needsLinkAttach = orphanLinkedSourceIds.has(mark.item.uuid);
+    const needsLinkAttach =
+      orphanLinkedSourceIds.has(mark.item.uuid) ||
+      unlinkedSourceIds.has(mark.item.uuid) ||
+      unlinkedPlatformSourceIds.has(mark.item.uuid);
     const missingLocally =
       !localSourceIds.has(mark.item.uuid) &&
       !identitySourceIds.has(mark.item.uuid);

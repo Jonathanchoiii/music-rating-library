@@ -9,6 +9,8 @@ import {
 } from "./artists.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
 import { LIBRARY_FILTER_STORAGE_KEY } from "./sharedStorageKeys.js";
+import { normalizeAlbumIntroduction } from "./appleMusicEditorial.js";
+import { hasLocalMotionArtwork } from "./motionArtwork.js";
 
 export { LIBRARY_FILTER_STORAGE_KEY };
 
@@ -25,6 +27,8 @@ export const EMPTY_LIBRARY_FILTERS = {
   markStatuses: [],
   commentState: "ANY",
   listeningGuideState: "ANY",
+  motionArtworkState: "ANY",
+  albumIntroductionState: "ANY",
   listenCount: "ANY",
   platforms: [],
   completeness: [],
@@ -82,6 +86,12 @@ function uniqueStrings(values = []) {
   ];
 }
 
+const TERNARY_FILTER_STATES = {
+  listeningGuideState: ["ANY", "WITH_GUIDE", "WITHOUT_GUIDE"],
+  motionArtworkState: ["ANY", "WITH_MOTION", "WITHOUT_MOTION"],
+  albumIntroductionState: ["ANY", "WITH_INTRO", "WITHOUT_INTRO"],
+};
+
 export function sanitizeLibraryFilters(filters = {}) {
   const sanitized = Object.fromEntries(
     Object.entries(EMPTY_LIBRARY_FILTERS).map(([field, defaultValue]) => [
@@ -95,8 +105,10 @@ export function sanitizeLibraryFilters(filters = {}) {
   sanitized.completeness = sanitized.completeness.filter(
     (value) => value !== "MISSING_LANGUAGE",
   );
-  if (!["ANY", "WITH_GUIDE", "WITHOUT_GUIDE"].includes(sanitized.listeningGuideState)) {
-    sanitized.listeningGuideState = "ANY";
+  for (const [field, allowed] of Object.entries(TERNARY_FILTER_STATES)) {
+    if (!allowed.includes(sanitized[field])) {
+      sanitized[field] = "ANY";
+    }
   }
   return sanitized;
 }
@@ -144,6 +156,8 @@ export function activeFilterCount(filters = {}) {
     value.markStatuses.length,
     value.commentState !== "ANY",
     value.listeningGuideState !== "ANY",
+    value.motionArtworkState !== "ANY",
+    value.albumIntroductionState !== "ANY",
     value.listenCount !== "ANY",
     value.platforms.length,
     value.completeness.length,
@@ -288,6 +302,16 @@ function matchesListenCount(release, listenCount) {
   if (listenCount === "ONE") return count === 1;
   if (listenCount === "TWO_THREE") return count >= 2 && count <= 3;
   if (listenCount === "FOUR_PLUS") return count >= 4;
+  return true;
+}
+
+function releaseHasAlbumIntroduction(release) {
+  return Boolean(normalizeAlbumIntroduction(release?.albumIntroduction));
+}
+
+function matchesTernaryState(hasValue, state, withValue, withoutValue) {
+  if (state === withValue) return hasValue;
+  if (state === withoutValue) return !hasValue;
   return true;
 }
 
@@ -453,10 +477,34 @@ export function releaseMatchesLibraryFilters(
     return false;
   }
   const hasListeningGuide = listeningGuideStatuses[release.id] === "READY";
-  if (filters.listeningGuideState === "WITH_GUIDE" && !hasListeningGuide) {
+  if (
+    !matchesTernaryState(
+      hasListeningGuide,
+      filters.listeningGuideState,
+      "WITH_GUIDE",
+      "WITHOUT_GUIDE",
+    )
+  ) {
     return false;
   }
-  if (filters.listeningGuideState === "WITHOUT_GUIDE" && hasListeningGuide) {
+  if (
+    !matchesTernaryState(
+      hasLocalMotionArtwork(release),
+      filters.motionArtworkState,
+      "WITH_MOTION",
+      "WITHOUT_MOTION",
+    )
+  ) {
+    return false;
+  }
+  if (
+    !matchesTernaryState(
+      releaseHasAlbumIntroduction(release),
+      filters.albumIntroductionState,
+      "WITH_INTRO",
+      "WITHOUT_INTRO",
+    )
+  ) {
     return false;
   }
   if (!matchesListenCount(release, filters.listenCount)) return false;

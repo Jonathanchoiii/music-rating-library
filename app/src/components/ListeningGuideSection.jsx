@@ -283,7 +283,7 @@ export function ListeningGuideSection({ release }) {
     <section className="listening-guide" aria-labelledby={`guide-${release.id}`}>
       <header className="listening-guide-header">
         <div>
-          <h3 id={`guide-${release.id}`}>专辑聆听指南</h3>
+          <h3 id={`guide-${release.id}`}>聆听指南</h3>
           <p>
             {state.saving
               ? `Codex 正在${activeProgressStep.label} · 已用 ${elapsedLabel(
@@ -300,7 +300,7 @@ export function ListeningGuideSection({ release }) {
             type="button"
             className={`listening-guide-update${state.saving ? " is-saving" : ""}`}
             disabled={state.saving}
-            aria-label={state.saving ? "Codex 正在整理专辑聆听指南" : "使用本机 Codex 联网更新专辑聆听指南"}
+            aria-label={state.saving ? "Codex 正在整理聆听指南" : "使用本机 Codex 联网更新聆听指南"}
             title={state.saving ? "Codex 正在联网整理" : "使用本机 Codex 更新聆听指南"}
             onClick={generate}
           >

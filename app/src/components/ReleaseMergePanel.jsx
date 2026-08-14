@@ -192,7 +192,7 @@ export function ReleaseMergePanel({
             onClick={() => setIsOpen(true)}
           >
             <LinkSimple aria-hidden="true" />
-            合并其他条目
+            合并条目
           </button>
         </div>
       ) : (

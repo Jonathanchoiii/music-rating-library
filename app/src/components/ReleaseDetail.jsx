@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   AppleLogo,
-  ArrowSquareOut,
   CalendarBlank,
   ClockCounterClockwise,
-  FilmStrip,
   LinkSimple,
   Plus,
   SpotifyLogo,
@@ -25,6 +23,7 @@ import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
 import { ListeningGuideSection } from "./ListeningGuideSection.jsx";
 import { AppleMusicEditorialNotes } from "./AppleMusicEditorialNotes.jsx";
 import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
+import { ExternalRatings } from "./ExternalRatings.jsx";
 import {
   convertMotionArtworkToWebp,
   hasLocalMotionArtwork,
@@ -54,30 +53,6 @@ const PLATFORM_SLOTS = [
   },
 ];
 
-const GENRE_SOURCE_LABELS = {
-  APPLE_LOOKUP: "Apple Music",
-  APPLE_MUSIC: "Apple Music",
-  APPLE_MUSIC_EXACT: "Apple Music",
-  MUSICBRAINZ: "MusicBrainz",
-  MUSICBRAINZ_EXACT: "MusicBrainz",
-};
-
-function genreSourceLabels(release) {
-  const evidenceSources =
-    release.metadataEvidence?.genres?.sources?.map((source) => source.source) ??
-    [];
-  const sourceValues = evidenceSources.length
-    ? evidenceSources
-    : String(release.genreSource ?? "").split("_AND_");
-  return [
-    ...new Set(
-      sourceValues
-        .map((source) => GENRE_SOURCE_LABELS[source])
-        .filter(Boolean),
-    ),
-  ];
-}
-
 export function ReleaseDetail({
   release,
   artistTargets = [],
@@ -90,6 +65,7 @@ export function ReleaseDetail({
   onOpenArtist,
   onSaveAlbumIntroduction,
   onApplyMotionArtworkUpdates,
+  onApplyExternalRatings,
 }) {
   const [editingProvider, setEditingProvider] = useState(null);
   const [draftUrl, setDraftUrl] = useState("");
@@ -123,7 +99,6 @@ export function ReleaseDetail({
       )
       .map((link) => [link.provider, link]),
   );
-  const genreSources = genreSourceLabels(release);
   const titleAliases = [
     ...new Map(
       [release.translatedTitle, ...(release.titleAliases ?? [])]
@@ -153,6 +128,15 @@ export function ReleaseDetail({
   const hasMotionArtwork = hasLocalMotionArtwork(release);
   const motionArtworkEnabled = isMotionArtworkEnabled(release);
   const needsMotionArtworkUpgrade = motionArtworkNeedsUpgrade(release);
+
+  function activateMotionArtworkControl() {
+    if (motionLookup.running) return;
+    if (hasMotionArtwork) {
+      toggleMotionArtwork();
+      return;
+    }
+    requestMotionArtwork();
+  }
 
   function toggleMotionArtwork() {
     if (!hasMotionArtwork) return;
@@ -370,23 +354,117 @@ export function ReleaseDetail({
           </div>
           <div className="detail-type-editor">
             <span>发行类型</span>
-            <div role="group" aria-label="快速设置发行类型">
-              {[
-                ["LP", "LP"],
-                ["EP", "EP"],
-                ["SINGLE", "Single"],
-                ["OTHER", "未分类"],
-              ].map(([value, label]) => (
+            <div className="detail-release-tools">
+              <div className="detail-type-buttons" role="group" aria-label="快速设置发行类型">
+                {[
+                  ["LP", "LP"],
+                  ["EP", "EP"],
+                  ["SINGLE", "Single"],
+                  ["OTHER", "未分类"],
+                ].map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    className={release.releaseType === value ? "is-active" : ""}
+                    onClick={() => onChangeType?.(release.id, value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="detail-utility-icons" aria-label="发行工具">
+                {PLATFORM_SLOTS.map((slot) => {
+                  const link = confirmedLinks.get(slot.provider);
+                  const Icon = slot.Icon;
+                  if (link) {
+                    return (
+                      <a
+                        className="detail-utility-icon"
+                        href={link.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        key={slot.provider}
+                        aria-label={slot.label}
+                        title={slot.label}
+                      >
+                        <Icon weight="fill" aria-hidden="true" />
+                      </a>
+                    );
+                  }
+                  return (
+                    <button
+                      type="button"
+                      key={slot.provider}
+                      className={`detail-utility-icon is-missing${
+                        editingProvider === slot.provider ? " is-editing" : ""
+                      }`}
+                      onClick={() => openLinkEditor(slot.provider)}
+                      aria-label={slot.addLabel}
+                      title={slot.addLabel}
+                    >
+                      <Icon aria-hidden="true" />
+                    </button>
+                  );
+                })}
                 <button
                   type="button"
-                  key={value}
-                  className={release.releaseType === value ? "is-active" : ""}
-                  onClick={() => onChangeType?.(release.id, value)}
+                  className={`detail-utility-icon motion-artwork-icon${
+                    hasMotionArtwork && motionArtworkEnabled ? " is-active" : ""
+                  }`}
+                  onClick={activateMotionArtworkControl}
+                  disabled={motionLookup.running}
+                  aria-label={
+                    hasMotionArtwork
+                      ? `动态封面已${motionArtworkEnabled ? "开启，点击关闭" : "关闭，点击开启"}`
+                      : "请求动态封面"
+                  }
+                  title={
+                    hasMotionArtwork
+                      ? `动态封面：${motionArtworkEnabled ? "开启" : "关闭"}`
+                      : "请求动态封面"
+                  }
                 >
-                  {label}
+                  {motionLookup.running ? (
+                    <SpinnerGap className="spin" aria-hidden="true" />
+                  ) : (
+                    <span className="motion-artwork-glyph" aria-hidden="true" />
+                  )}
+                  {hasMotionArtwork ? (
+                    <span className="motion-artwork-indicator" aria-hidden="true" />
+                  ) : null}
                 </button>
-              ))}
+              </div>
             </div>
+            {editingSlot ? (
+              <form className="platform-link-editor" onSubmit={savePlatformLink}>
+                <label htmlFor={`platform-link-${release.id}`}>
+                  粘贴精确的 {editingSlot.addLabel.replace(/^添加 /, "")}
+                </label>
+                <div>
+                  <input
+                    id={`platform-link-${release.id}`}
+                    type="url"
+                    value={draftUrl}
+                    placeholder="https://"
+                    autoFocus
+                    onChange={(event) => {
+                      setDraftUrl(event.target.value);
+                      setLinkError("");
+                    }}
+                  />
+                  <button type="submit" className="secondary-button">
+                    保存链接
+                  </button>
+                  <button type="button" className="text-button" onClick={closeLinkEditor}>
+                    取消
+                  </button>
+                </div>
+                {linkError ? <p className="platform-link-error">{linkError}</p> : null}
+              </form>
+            ) : null}
+            {motionLookup.message ? (
+              <small className="motion-artwork-message">{motionLookup.message}</small>
+            ) : null}
           </div>
         </div>
         {release.genres.length ? (
@@ -396,152 +474,16 @@ export function ReleaseDetail({
                 <span key={genre}>{genre}</span>
               ))}
             </div>
-            {genreSources.length ? (
-              <p className="genre-source">
-                精确信源：{genreSources.join("、")}
-              </p>
-            ) : null}
           </div>
         ) : null}
-        <div className="platform-row">
-          <div className="platform-row-slots">
-            {PLATFORM_SLOTS.map((slot) => {
-              const link = confirmedLinks.get(slot.provider);
-              const Icon = slot.Icon;
-              if (link) {
-                return (
-                  <a
-                    href={link.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    key={slot.provider}
-                  >
-                    <Icon weight="fill" aria-hidden="true" />
-                    {slot.label}
-                    <ArrowSquareOut aria-hidden="true" />
-                  </a>
-                );
-              }
-              return (
-                <button
-                  type="button"
-                  key={slot.provider}
-                  className={`platform-link-missing${
-                    editingProvider === slot.provider ? " is-editing" : ""
-                  }`}
-                  onClick={() => openLinkEditor(slot.provider)}
-                >
-                  <Plus aria-hidden="true" />
-                  {slot.addLabel}
-                </button>
-              );
-            })}
-          </div>
-          {editingSlot ? (
-            <form className="platform-link-editor" onSubmit={savePlatformLink}>
-              <label htmlFor={`platform-link-${release.id}`}>
-                粘贴精确的 {editingSlot.addLabel.replace(/^添加 /, "")}
-              </label>
-              <div>
-                <input
-                  id={`platform-link-${release.id}`}
-                  type="url"
-                  value={draftUrl}
-                  placeholder="https://"
-                  autoFocus
-                  onChange={(event) => {
-                    setDraftUrl(event.target.value);
-                    setLinkError("");
-                  }}
-                />
-                <button type="submit" className="secondary-button">
-                  保存链接
-                </button>
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={closeLinkEditor}
-                >
-                  取消
-                </button>
-              </div>
-              {linkError ? <p className="platform-link-error">{linkError}</p> : null}
-            </form>
-          ) : null}
-        </div>
-        <div className="motion-artwork-action">
-          <div>
-            <FilmStrip aria-hidden="true" />
-            <span>
-              <strong>动态封面</strong>
-              <small>
-                {hasMotionArtwork
-                  ? needsMotionArtworkUpgrade
-                    ? "旧版封面可继续使用，也可单次优化清晰度"
-                    : `已保存清晰版 · ${release.motionArtwork.width ?? 960}px`
-                  : exactAppleLink
-                    ? "单张检测 Apple Music 动态封面"
-                    : "需要先添加精确 Apple Music 专辑链接"}
-              </small>
-            </span>
-          </div>
-          {hasMotionArtwork ? (
-            <div className="motion-artwork-controls">
-              {needsMotionArtworkUpgrade ? (
-                <button
-                  type="button"
-                  className="secondary-button motion-artwork-upgrade"
-                  onClick={requestMotionArtwork}
-                  disabled={motionLookup.running}
-                >
-                  {motionLookup.running ? (
-                    <SpinnerGap className="spin" aria-hidden="true" />
-                  ) : null}
-                  {motionLookup.running ? "正在优化" : "优化清晰度"}
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className={`motion-artwork-toggle${
-                  motionArtworkEnabled ? " is-active" : ""
-                }`}
-                role="switch"
-                aria-label="动态封面"
-                aria-checked={motionArtworkEnabled}
-                onClick={toggleMotionArtwork}
-              >
-                <span>{motionArtworkEnabled ? "开启" : "关闭"}</span>
-                <span className="motion-artwork-switch" aria-hidden="true">
-                  <span />
-                </span>
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="secondary-button motion-artwork-button"
-              onClick={requestMotionArtwork}
-              disabled={motionLookup.running}
-            >
-              {motionLookup.running ? (
-                <SpinnerGap className="spin" aria-hidden="true" />
-              ) : (
-                <FilmStrip aria-hidden="true" />
-              )}
-              {motionLookup.running ? "正在请求" : "请求动态封面"}
-            </button>
-          )}
-          {motionLookup.message ? (
-            <small className="motion-artwork-message">{motionLookup.message}</small>
-          ) : null}
-        </div>
+        <ExternalRatings release={release} onApply={onApplyExternalRatings} />
         <AppleMusicEditorialNotes
           release={release}
           onSaveIntroduction={onSaveAlbumIntroduction}
         />
         <div className="timeline-header">
           <div>
-            <h3>收听时间线</h3>
+            <h3>收听时间</h3>
             <p>每次评分与评论都会独立保留</p>
           </div>
           <button
@@ -550,7 +492,7 @@ export function ReleaseDetail({
             onClick={() => onAddListening(release.id)}
           >
             <Plus aria-hidden="true" />
-            记录这次收听
+            添加评论
           </button>
         </div>
         <ol className={`timeline${entries.length < 2 ? " is-single" : ""}`}>

@@ -398,9 +398,16 @@ export function normalizeSupportedReleaseUrl(value = "") {
     const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
     let provider = null;
     let providerLabel = "";
-    if (host === "music.apple.com" && pathname.includes("/album/")) {
-      provider = "APPLE_MUSIC";
-      providerLabel = "Apple Music";
+    if (host === "music.apple.com") {
+      const segments = pathname.split("/").filter(Boolean);
+      if (segments[0] === "album" && /^\d+$/.test(segments[1] ?? "")) {
+        provider = "APPLE_MUSIC";
+        providerLabel = "Apple Music";
+        parsed.pathname = `/us/album/${segments[1]}`;
+      } else if (pathname.includes("/album/")) {
+        provider = "APPLE_MUSIC";
+        providerLabel = "Apple Music";
+      }
     }
     if (
       host === "open.spotify.com" &&
@@ -414,7 +421,10 @@ export function normalizeSupportedReleaseUrl(value = "") {
     parsed.hostname = host;
     parsed.search = "";
     parsed.hash = "";
-    parsed.pathname = pathname;
+    parsed.pathname =
+      provider === "APPLE_MUSIC" && parsed.pathname.startsWith("/us/album/")
+        ? parsed.pathname
+        : pathname;
     return {
       provider,
       providerLabel,
