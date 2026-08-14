@@ -7,9 +7,12 @@ import {
 } from "@phosphor-icons/react";
 import { findConfirmedAppleMusicAlbum } from "../lib/appleMusicUrl.js";
 import {
+  ALBUM_INTRODUCTION_MAX_LENGTH,
+  USER_ALBUM_INTRODUCTION_VERSION_ID,
   editorialVersionLabel,
   editorialVersionRegionNames,
-  selectDefaultEditorialVersionId,
+  normalizeAlbumIntroduction,
+  selectAlbumIntroductionVersionId,
 } from "../lib/appleMusicEditorial.js";
 
 const ERROR_MESSAGES = Object.freeze({
@@ -37,32 +40,57 @@ function productLocale() {
   return navigator.language || "zh-CN";
 }
 
-export function AppleMusicEditorialNotes({ release }) {
+function sectionSubtitle({ editing, showingUser, hasOfficialVersion }) {
+  if (editing) return "保存在本机音乐库，不会覆盖 Apple Music 官方原文。";
+  if (showingUser) return "你添加的介绍，保存在本机音乐库。";
+  if (hasOfficialVersion) return "Apple Music 官方编辑介绍，不改写原文。";
+  return "可以自己写，也可以在配置令牌后读取 Apple Music 官方介绍。";
+}
+
+export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
   const album = useMemo(
     () => findConfirmedAppleMusicAlbum(release),
     [release],
   );
   const locale = useMemo(productLocale, []);
+  const userIntroduction = normalizeAlbumIntroduction(
+    release.albumIntroduction,
+  );
+  const hasUserIntroduction = Boolean(userIntroduction);
   const [state, setState] = useState({
     status: "idle",
     result: null,
     errorCode: "",
   });
-  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [selectedVersionId, setSelectedVersionId] = useState(
+    hasUserIntroduction ? USER_ALBUM_INTRODUCTION_VERSION_ID : "",
+  );
   const [loadingMore, setLoadingMore] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
 
   const canonicalUrl = album?.canonicalUrl ?? "";
+  const releaseId = release?.id ?? "";
+
+  useEffect(() => {
+    setEditing(false);
+    setDraft("");
+    setSelectedVersionId(
+      normalizeAlbumIntroduction(release.albumIntroduction)
+        ? USER_ALBUM_INTRODUCTION_VERSION_ID
+        : "",
+    );
+  }, [releaseId]);
 
   useEffect(() => {
     if (!canonicalUrl) {
       setState({ status: "idle", result: null, errorCode: "" });
-      setSelectedVersionId("");
+      setLoadingMore(false);
       return undefined;
     }
 
     let active = true;
     setState({ status: "loading", result: null, errorCode: "" });
-    setSelectedVersionId("");
     setLoadingMore(false);
 
     const params = new URLSearchParams({
@@ -88,8 +116,13 @@ export function AppleMusicEditorialNotes({ release }) {
           return;
         }
         setState({ status: "ready", result: payload, errorCode: "" });
-        setSelectedVersionId(
-          selectDefaultEditorialVersionId(payload.versions ?? [], { locale }),
+        setSelectedVersionId((current) =>
+          selectAlbumIntroductionVersionId(payload.versions ?? [], {
+            locale,
+            previousVersionId: current,
+            hasUserIntroduction:
+              current === USER_ALBUM_INTRODUCTION_VERSION_ID,
+          }),
         );
       })
       .catch(() => {
@@ -100,10 +133,10 @@ export function AppleMusicEditorialNotes({ release }) {
     return () => {
       active = false;
     };
-  }, [canonicalUrl, locale]);
+  }, [canonicalUrl, locale, releaseId]);
 
   async function loadMoreLanguages() {
-    if (loadingMore) return;
+    if (loadingMore || !canonicalUrl) return;
     setLoadingMore(true);
     try {
       const params = new URLSearchParams({
@@ -128,11 +161,12 @@ export function AppleMusicEditorialNotes({ release }) {
         result: payload,
         errorCode: current.errorCode,
       }));
-      // A wider scan must never move the reader off the version they chose.
       setSelectedVersionId((current) =>
-        selectDefaultEditorialVersionId(payload.versions ?? [], {
+        selectAlbumIntroductionVersionId(payload.versions ?? [], {
           locale,
           previousVersionId: current,
+          hasUserIntroduction:
+            current === USER_ALBUM_INTRODUCTION_VERSION_ID,
         }),
       );
     } catch {
@@ -142,68 +176,204 @@ export function AppleMusicEditorialNotes({ release }) {
     }
   }
 
-  if (!album) return null;
-
   const versions = state.result?.versions ?? [];
+
+  function officialVersionId() {
+    return selectAlbumIntroductionVersionId(versions, { locale });
+  }
+
+  function startEditing() {
+    setDraft(userIntroduction);
+    setEditing(true);
+    setSelectedVersionId(USER_ALBUM_INTRODUCTION_VERSION_ID);
+  }
+
+  function cancelEditing() {
+    setDraft("");
+    setEditing(false);
+    setSelectedVersionId(
+      selectAlbumIntroductionVersionId(versions, {
+        locale,
+        hasUserIntroduction,
+      }),
+    );
+  }
+
+  function saveIntroduction() {
+    const text = normalizeAlbumIntroduction(draft);
+    onSaveIntroduction?.(release.id, text);
+    setEditing(false);
+    setDraft("");
+    setSelectedVersionId(
+      text ? USER_ALBUM_INTRODUCTION_VERSION_ID : officialVersionId(),
+    );
+  }
+
+  function clearIntroduction() {
+    if (!hasUserIntroduction) return;
+    if (!window.confirm("清除这篇介绍？官方原文不会被改动。")) return;
+    onSaveIntroduction?.(release.id, "");
+    setEditing(false);
+    setDraft("");
+    setSelectedVersionId(officialVersionId());
+  }
+  const showingUser =
+    hasUserIntroduction &&
+    (editing ||
+      selectedVersionId === USER_ALBUM_INTRODUCTION_VERSION_ID ||
+      (!selectedVersionId && hasUserIntroduction));
   const selectedVersion =
-    versions.find((version) => version.id === selectedVersionId) ??
-    versions[0] ??
-    null;
+    showingUser || editing
+      ? null
+      : (versions.find((version) => version.id === selectedVersionId) ??
+        versions[0] ??
+        null);
   const regionNames = selectedVersion
     ? editorialVersionRegionNames(selectedVersion, locale)
     : [];
   const appleMusicUrl =
-    state.result?.album?.appleMusicUrl || album.canonicalUrl;
+    state.result?.album?.appleMusicUrl || album?.canonicalUrl || "";
   const scan = state.result?.scan;
-  const canScanMore = scan?.mode === "quick";
+  const canScanMore = Boolean(album) && scan?.mode === "quick";
+  const canEdit = typeof onSaveIntroduction === "function";
+  const versionOptions = [
+    ...(hasUserIntroduction
+      ? [{ id: USER_ALBUM_INTRODUCTION_VERSION_ID, label: "我写的" }]
+      : []),
+    ...versions.map((version) => ({
+      id: version.id,
+      label: editorialVersionLabel(version, { locale, versions }),
+    })),
+  ];
+  const showOfficialError =
+    Boolean(album) &&
+    !editing &&
+    !showingUser &&
+    (state.status === "error" || (state.status === "ready" && state.errorCode));
+  const showOfficialEmpty =
+    Boolean(album) &&
+    !editing &&
+    !showingUser &&
+    !selectedVersion &&
+    state.status === "ready";
+  const showLoading =
+    Boolean(album) &&
+    !editing &&
+    !showingUser &&
+    !selectedVersion &&
+    state.status === "loading";
 
   return (
-    <section className="apple-editorial" aria-label="Apple Music 官方介绍">
+    <section className="apple-editorial" aria-label="专辑介绍">
       <header className="apple-editorial-header">
         <div>
           <h3>专辑介绍</h3>
-          <p>Apple Music 官方编辑介绍，不改写原文。</p>
+          <p>
+            {sectionSubtitle({
+              editing,
+              showingUser,
+              hasOfficialVersion: Boolean(selectedVersion),
+            })}
+          </p>
         </div>
-        {versions.length > 1 ? (
+        {!editing && versionOptions.length > 1 ? (
           <label className="apple-editorial-versions">
             <span className="sr-only">文案版本</span>
             <select
-              value={selectedVersion?.id ?? ""}
+              value={
+                showingUser
+                  ? USER_ALBUM_INTRODUCTION_VERSION_ID
+                  : (selectedVersion?.id ?? "")
+              }
               onChange={(event) => setSelectedVersionId(event.target.value)}
             >
-              {versions.map((version) => (
-                <option key={version.id} value={version.id}>
-                  {editorialVersionLabel(version, { locale, versions })}
+              {versionOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
                 </option>
               ))}
             </select>
             <CaretDown aria-hidden="true" />
           </label>
-        ) : selectedVersion ? (
+        ) : !editing && selectedVersion ? (
           <span className="apple-editorial-single-version">
             {editorialVersionLabel(selectedVersion, { locale, versions })}
           </span>
+        ) : !editing && showingUser ? (
+          <span className="apple-editorial-single-version">我写的</span>
         ) : null}
       </header>
 
       <div className="apple-editorial-body">
-        {state.status === "loading" ? (
+        {editing ? (
+          <form
+            className="apple-editorial-editor"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveIntroduction();
+            }}
+          >
+            <label className="sr-only" htmlFor={`album-introduction-${release.id}`}>
+              专辑介绍正文
+            </label>
+            <textarea
+              id={`album-introduction-${release.id}`}
+              value={draft}
+              autoFocus
+              rows={12}
+              maxLength={ALBUM_INTRODUCTION_MAX_LENGTH}
+              placeholder="在这里写下或粘贴专辑介绍。"
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <div className="apple-editorial-editor-actions">
+              <button type="submit" className="secondary-button">
+                保存介绍
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={cancelEditing}
+              >
+                取消
+              </button>
+              {hasUserIntroduction ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={clearIntroduction}
+                >
+                  清除
+                </button>
+              ) : null}
+            </div>
+          </form>
+        ) : null}
+
+        {showLoading ? (
           <p className="apple-editorial-status">
             <SpinnerGap className="spin" aria-hidden="true" />
             正在查找 Apple Music 官方介绍…
           </p>
         ) : null}
 
-        {state.status === "error" ? (
+        {showOfficialError ? (
           <p className="apple-editorial-status">
             {errorMessage(state.errorCode)}
           </p>
         ) : null}
 
-        {state.status === "ready" && !selectedVersion ? (
+        {showOfficialEmpty ? (
           <p className="apple-editorial-status">
             这张专辑暂未发现 Apple Music 官方介绍。
           </p>
+        ) : null}
+
+        {!editing && !showingUser && !album && !hasUserIntroduction ? (
+          <p className="apple-editorial-status">还没有介绍。</p>
+        ) : null}
+
+        {showingUser && !editing ? (
+          <div className="apple-editorial-prose is-user">{userIntroduction}</div>
         ) : null}
 
         {selectedVersion ? (
@@ -221,38 +391,62 @@ export function AppleMusicEditorialNotes({ release }) {
           </>
         ) : null}
 
-        {state.status === "ready" && state.errorCode ? (
-          <p className="apple-editorial-status">
-            {errorMessage(state.errorCode)}
-          </p>
-        ) : null}
-
-        {scan?.status === "partial" && !state.errorCode ? (
+        {scan?.status === "partial" && !state.errorCode && selectedVersion ? (
           <p className="apple-editorial-note">
             部分地区暂时没有返回结果，已展示可用版本。
           </p>
         ) : null}
 
-        <div className="apple-editorial-footer">
-          <span>来源：Apple Music Editorial Notes</span>
-          <div>
-            {canScanMore ? (
-              <button
-                type="button"
-                className="text-button"
-                onClick={loadMoreLanguages}
-                disabled={loadingMore}
-              >
-                {loadingMore ? "正在查找…" : "查找更多语言版本"}
-              </button>
-            ) : null}
-            <a href={appleMusicUrl} target="_blank" rel="noopener noreferrer">
-              <AppleLogo weight="fill" aria-hidden="true" />
-              在 Apple Music 中打开
-              <ArrowSquareOut aria-hidden="true" />
-            </a>
+        {!editing ? (
+          <div className="apple-editorial-footer">
+            <span>
+              {showingUser
+                ? "来源：我添加的介绍"
+                : selectedVersion
+                  ? "来源：Apple Music Editorial Notes"
+                  : album
+                    ? "官方介绍需要开发者令牌；你也可以自己添加。"
+                    : "保存在本机音乐库"}
+            </span>
+            <div>
+              {canEdit ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={startEditing}
+                >
+                  {hasUserIntroduction ? "编辑" : "添加介绍"}
+                </button>
+              ) : null}
+              {canEdit && showingUser && hasUserIntroduction ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={clearIntroduction}
+                >
+                  清除
+                </button>
+              ) : null}
+              {canScanMore ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={loadMoreLanguages}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? "正在查找…" : "查找更多语言版本"}
+                </button>
+              ) : null}
+              {appleMusicUrl ? (
+                <a href={appleMusicUrl} target="_blank" rel="noopener noreferrer">
+                  <AppleLogo weight="fill" aria-hidden="true" />
+                  在 Apple Music 中打开
+                  <ArrowSquareOut aria-hidden="true" />
+                </a>
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
     </section>
   );

@@ -1047,13 +1047,15 @@ test("context search reports the exact comment and secondary field that matched"
         comment: "这段让我想到 Charli xcx 的制作。",
       },
     ],
+    albumIntroduction: "Charli xcx 这张专辑的官方简介摘录。",
   };
   const matches = getReleaseContextMatches(release, "charli xcx");
   assert.deepEqual(
     matches.map((match) => match.label),
-    ["译名", "评论"],
+    ["译名", "评论", "专辑介绍"],
   );
   assert.equal(matches[1].text, "这段让我想到 Charli xcx 的制作。");
+  assert.equal(matches[2].text, "Charli xcx 这张专辑的官方简介摘录。");
 });
 
 test("NeoDB export preset maps artist, timestamp and streaming links", () => {

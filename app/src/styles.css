@@ -2738,6 +2738,35 @@ html.is-desktop-shell .desktop-sidebar {
   overflow-wrap: anywhere;
 }
 
+.apple-editorial-prose.is-user {
+  white-space: pre-wrap;
+}
+
+.apple-editorial-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.apple-editorial-editor textarea {
+  width: 100%;
+  min-height: 220px;
+  padding: 12px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--surface);
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.apple-editorial-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
 .apple-editorial-regions {
   margin: 12px 0 0;
   color: var(--muted);
@@ -5884,6 +5913,16 @@ button.settings-entry:disabled {
   .apple-editorial-footer > div {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .apple-editorial-footer .text-button,
+  .apple-editorial-editor-actions .text-button,
+  .apple-editorial-editor-actions .secondary-button {
+    min-height: 44px;
+  }
+
+  .apple-editorial-editor textarea {
+    min-height: 260px;
   }
 
   .listening-guide {

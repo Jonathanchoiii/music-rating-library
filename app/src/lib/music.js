@@ -356,6 +356,12 @@ export function getReleaseContextMatches(release, searchQuery = "") {
       entry.id ?? `${release.id}-comment-${index}`,
     ),
   );
+  addMatch(
+    "ALBUM_INTRODUCTION",
+    "专辑介绍",
+    release.albumIntroduction,
+    `${release.id}-album-introduction`,
+  );
   return matches;
 }
 

@@ -1,3 +1,36 @@
+export const USER_ALBUM_INTRODUCTION_VERSION_ID = "user";
+export const ALBUM_INTRODUCTION_MAX_LENGTH = 20_000;
+
+const HTML_ENTITIES = Object.freeze({
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+});
+
+export function normalizeAlbumIntroduction(value) {
+  const decoded = String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity) => {
+      const named = HTML_ENTITIES[String(entity).toLocaleLowerCase()];
+      if (named) return named;
+      if (entity[0] !== "#") return match;
+      const code =
+        entity[1] === "x" || entity[1] === "X"
+          ? Number.parseInt(entity.slice(2), 16)
+          : Number.parseInt(entity.slice(1), 10);
+      if (!Number.isFinite(code)) return match;
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return match;
+      }
+    });
+  return decoded.trim().slice(0, ALBUM_INTRODUCTION_MAX_LENGTH);
+}
+
 function displayNames(type, locale) {
   try {
     return new Intl.DisplayNames([locale || "zh-CN"], {
@@ -116,4 +149,32 @@ export function selectDefaultEditorialVersionId(
     }
   }
   return best.id;
+}
+
+export function selectAlbumIntroductionVersionId(
+  versions = [],
+  {
+    locale = "",
+    sourceDefaultLanguageTag = "",
+    previousVersionId = "",
+    hasUserIntroduction = false,
+  } = {},
+) {
+  if (
+    previousVersionId === USER_ALBUM_INTRODUCTION_VERSION_ID &&
+    hasUserIntroduction
+  ) {
+    return USER_ALBUM_INTRODUCTION_VERSION_ID;
+  }
+  if (
+    previousVersionId &&
+    versions.some((version) => version.id === previousVersionId)
+  ) {
+    return previousVersionId;
+  }
+  if (hasUserIntroduction) return USER_ALBUM_INTRODUCTION_VERSION_ID;
+  return selectDefaultEditorialVersionId(versions, {
+    locale,
+    sourceDefaultLanguageTag,
+  });
 }

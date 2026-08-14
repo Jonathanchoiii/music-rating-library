@@ -13,9 +13,13 @@ import {
 } from "../apple-music-notes/index.mjs";
 import {
   editorialVersionLabel,
+  normalizeAlbumIntroduction,
+  selectAlbumIntroductionVersionId,
   selectDefaultEditorialVersionId,
+  USER_ALBUM_INTRODUCTION_VERSION_ID,
 } from "../src/lib/appleMusicEditorial.js";
 import { findConfirmedAppleMusicAlbum } from "../src/lib/appleMusicUrl.js";
+import { getReleaseMetadataFields } from "../src/lib/neodbSync.js";
 
 async function temporaryStorePath() {
   const directory = await fs.mkdtemp(
@@ -622,4 +626,64 @@ test("version labels name the language, region count and short notes", () => {
   assert.notEqual(taiwanLabel, hongKongLabel);
   assert.ok(taiwanLabel.includes("台湾"));
   assert.ok(hongKongLabel.includes("香港"));
+});
+
+test("user album introductions decode copied HTML entities and stay plain text", () => {
+  assert.equal(
+    normalizeAlbumIntroduction(
+      "  摇滚、Funk 与 R&amp;B 元素，热单《Bad Habit》\r\n\r\n第二段。  ",
+    ),
+    "摇滚、Funk 与 R&B 元素，热单《Bad Habit》\n\n第二段。",
+  );
+  assert.equal(normalizeAlbumIntroduction("   \n  "), "");
+  assert.equal(
+    normalizeAlbumIntroduction("a".repeat(20_001)).length,
+    20_000,
+  );
+  assert.equal(
+    getReleaseMetadataFields().includes("albumIntroduction"),
+    true,
+  );
+});
+
+test("album introduction version selection prefers the user-written copy", () => {
+  const versions = [
+    {
+      id: "en",
+      noteType: "standard",
+      languageTags: ["en-US"],
+      sources: [{ storefront: "us" }],
+    },
+  ];
+
+  assert.equal(
+    selectAlbumIntroductionVersionId(versions, {
+      locale: "zh-CN",
+      hasUserIntroduction: true,
+    }),
+    USER_ALBUM_INTRODUCTION_VERSION_ID,
+  );
+  assert.equal(
+    selectAlbumIntroductionVersionId(versions, {
+      locale: "zh-CN",
+      hasUserIntroduction: true,
+      previousVersionId: "en",
+    }),
+    "en",
+  );
+  assert.equal(
+    selectAlbumIntroductionVersionId(versions, {
+      locale: "zh-CN",
+      hasUserIntroduction: true,
+      previousVersionId: USER_ALBUM_INTRODUCTION_VERSION_ID,
+    }),
+    USER_ALBUM_INTRODUCTION_VERSION_ID,
+  );
+  assert.equal(
+    selectAlbumIntroductionVersionId(versions, {
+      locale: "zh-CN",
+      hasUserIntroduction: false,
+    }),
+    "en",
+  );
 });

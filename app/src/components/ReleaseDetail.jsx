@@ -78,6 +78,7 @@ export function ReleaseDetail({
   onFindMergeCandidate,
   onMergeRelease,
   onOpenArtist,
+  onSaveAlbumIntroduction,
 }) {
   const [editingProvider, setEditingProvider] = useState(null);
   const [draftUrl, setDraftUrl] = useState("");
@@ -338,7 +339,10 @@ export function ReleaseDetail({
             </form>
           ) : null}
         </div>
-        <AppleMusicEditorialNotes release={release} />
+        <AppleMusicEditorialNotes
+          release={release}
+          onSaveIntroduction={onSaveAlbumIntroduction}
+        />
         <div className="timeline-header">
           <div>
             <h3>收听时间线</h3>

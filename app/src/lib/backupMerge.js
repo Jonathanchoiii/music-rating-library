@@ -127,6 +127,12 @@ function mergeRelease(primary, incoming) {
   }
   if (!primary.coverUrl && incoming.coverUrl) next.coverUrl = incoming.coverUrl;
   if (
+    !String(primary.albumIntroduction ?? "").trim() &&
+    String(incoming.albumIntroduction ?? "").trim()
+  ) {
+    next.albumIntroduction = incoming.albumIntroduction;
+  }
+  if (
     normalizeText(primary.title) !== normalizeText(incoming.title) &&
     incoming.title
   ) {

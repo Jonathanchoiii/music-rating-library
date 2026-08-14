@@ -93,6 +93,7 @@ import {
 } from "./lib/backupMerge.js";
 import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "./lib/sharedStorageKeys.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
+import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
 
 const USER_STATE_KEY = "recordshelf-user-state-v2";
 const LEGACY_USER_STATE_KEY = "recordshelf-user-state-v1";
@@ -881,6 +882,28 @@ function LibraryApp() {
     return true;
   }
 
+  function updateAlbumIntroduction(releaseId, rawText) {
+    const text = normalizeAlbumIntroduction(rawText);
+    let updatedTitle = "";
+    setReleases((current) =>
+      current.map((release) => {
+        if (release.id !== releaseId) return release;
+        updatedTitle = release.title;
+        if (!text) {
+          const next = { ...release };
+          delete next.albumIntroduction;
+          return next;
+        }
+        return { ...release, albumIntroduction: text };
+      }),
+    );
+    setToast(
+      text
+        ? `已保存《${updatedTitle}》的专辑介绍`
+        : `已清除《${updatedTitle}》的专辑介绍`,
+    );
+  }
+
   async function copyReleaseId(releaseId, releaseTitle) {
     try {
       await navigator.clipboard.writeText(releaseId);
@@ -1553,6 +1576,7 @@ function LibraryApp() {
         onAddListening={(releaseId) => setListeningReleaseId(releaseId)}
         onChangeType={updateReleaseType}
         onUpdatePlatformLink={updateReleasePlatformLink}
+        onSaveAlbumIntroduction={updateAlbumIntroduction}
         onFindMergeCandidate={findMergeCandidate}
         onMergeRelease={mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
