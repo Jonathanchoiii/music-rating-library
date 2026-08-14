@@ -2,13 +2,51 @@ import { SHARED_LOCAL_STORAGE_KEYS } from "./sharedStorageKeys.js";
 
 const LOCAL_STATE_ENDPOINT = "/api/local-state";
 const MIGRATION_MARKER_KEY = "recordshelf-shared-state-migrated-v1";
-const SYNC_INTERVAL_MS = 600;
+const SYNC_INTERVAL_MS = 2000;
 const sourceId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`;
 let knownRevision = 0;
 let lastSnapshot = {};
 let syncTimer = null;
 let syncInFlight = null;
 let immediateFlushQueued = false;
+
+function isPlainJsonEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== typeof right) {
+    return left === right;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => isPlainJsonEqual(item, right[index]))
+    );
+  }
+  if (typeof left === "object") {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every(
+        (key) =>
+          Object.hasOwn(right, key) &&
+          isPlainJsonEqual(left[key], right[key]),
+      )
+    );
+  }
+  return false;
+}
+
+export function storageValuesEqual(left, right) {
+  if (left === right) return true;
+  if (left == null || right == null) return false;
+  try {
+    return isPlainJsonEqual(JSON.parse(left), JSON.parse(right));
+  } catch {
+    return false;
+  }
+}
 
 export function isAuthoritativeSharedStateWriter({
   hostname,
@@ -59,7 +97,9 @@ function changedValues(previous, next) {
   for (const key of SHARED_LOCAL_STORAGE_KEYS) {
     const previousValue = previous[key] ?? null;
     const nextValue = next[key] ?? null;
-    if (previousValue !== nextValue) changes[key] = nextValue;
+    if (!storageValuesEqual(previousValue, nextValue)) {
+      changes[key] = nextValue;
+    }
   }
   return changes;
 }
@@ -76,12 +116,20 @@ export function reconcileSharedStateResponse(
     const requestedValue = requestStorage[key] ?? null;
     const currentValue = currentStorage[key] ?? null;
     const authoritativeValue = authoritativeStorage[key] ?? null;
-    const changedDuringRequest = currentValue !== requestedValue;
+    const changedDuringRequest = !storageValuesEqual(
+      currentValue,
+      requestedValue,
+    );
     const nextValue = changedDuringRequest
       ? currentValue
-      : authoritativeValue;
+      : storageValuesEqual(currentValue, authoritativeValue)
+        ? currentValue
+        : authoritativeValue;
 
-    if (!changedDuringRequest && nextValue !== currentValue) {
+    if (
+      !changedDuringRequest &&
+      !storageValuesEqual(nextValue, currentValue)
+    ) {
       appliedRemoteChanges = true;
     }
     if (typeof nextValue === "string") storage[key] = nextValue;
@@ -153,7 +201,7 @@ function reconcileWithAuthoritativeState(
       state.storage,
     );
     applyRemoteStorage(reconciliation.storage);
-    lastSnapshot = { ...state.storage };
+    lastSnapshot = localSnapshot();
     return reconciliation.appliedRemoteChanges;
   }
   if (!Object.keys(changedValues(current, state.storage)).length) {
@@ -211,13 +259,15 @@ export function flushSharedLocalState() {
   if (!canWriteSharedState()) return Promise.resolve();
   if (syncInFlight) return syncInFlight;
 
-  let shouldReload = false;
   syncInFlight = (async () => {
     while (true) {
       const requestSnapshot = localSnapshot();
       const changes = changedValues(lastSnapshot, requestSnapshot);
       const changedKeys = Object.keys(changes);
-      if (!changedKeys.length) break;
+      if (!changedKeys.length) {
+        lastSnapshot = requestSnapshot;
+        break;
+      }
 
       const previousSnapshot = lastSnapshot;
       try {
@@ -229,16 +279,12 @@ export function flushSharedLocalState() {
             ]),
           ),
         });
-        shouldReload =
-          reconcileWithAuthoritativeState(state, requestSnapshot) ||
-          shouldReload;
+        reconcileWithAuthoritativeState(state, requestSnapshot);
       } catch (error) {
         lastSnapshot = previousSnapshot;
         throw error;
       }
     }
-
-    if (shouldReload) window.location.reload();
   })()
     .catch((error) => {
       console.warn("RecordShelf 本地修改将在稍后重试", error);
@@ -264,6 +310,11 @@ async function refreshFromSharedState() {
   try {
     const remote = await requestSharedState();
     if ((remote.revision ?? 0) <= knownRevision) return;
+    if (!Object.keys(changedValues(localSnapshot(), remote.storage)).length) {
+      knownRevision = remote.revision ?? knownRevision;
+      lastSnapshot = localSnapshot();
+      return;
+    }
     applyRemoteStorage(remote.storage);
     knownRevision = remote.revision ?? knownRevision;
     lastSnapshot = localSnapshot();

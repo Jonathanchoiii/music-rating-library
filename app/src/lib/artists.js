@@ -160,6 +160,9 @@ export function saveArtistIdentityState(
   const sanitized = sanitizeArtistIdentityState(state);
   try {
     const serialized = JSON.stringify(sanitized);
+    if (storage?.getItem(ARTIST_IDENTITY_STORAGE_KEY) === serialized) {
+      return sanitized;
+    }
     let backups = [];
     try {
       const storedBackups = JSON.parse(

@@ -168,7 +168,7 @@ export function ListeningGuideSection({ release }) {
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [release.id, release.title, release.artists]);
+  }, [release.id, release.title, release.artists.join("\u0000")]);
 
   useEffect(() => {
     if (!state.saving) return undefined;

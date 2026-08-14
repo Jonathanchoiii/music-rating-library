@@ -41,6 +41,7 @@ export function Cover({ release, className = "" }) {
       src={release.coverUrl}
       alt={`${release.artists.join("、")}《${release.title}》封面`}
       loading="lazy"
+      decoding="async"
       onError={() => {
         markCoverLoadFailed(release.id);
         setLoadFailed(true);

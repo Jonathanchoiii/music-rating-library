@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   isAuthoritativeSharedStateWriter,
   reconcileSharedStateResponse,
+  storageValuesEqual,
 } from "../src/lib/sharedLocalState.js";
 
 test("only 4173 Web and the Mac shell may write shared state", () => {
@@ -108,4 +109,24 @@ test("the queued follow-up reaches a clean authoritative state", () => {
   assert.deepEqual(result.storage, storage);
   assert.equal(result.appliedRemoteChanges, false);
   assert.equal(result.hasPendingChanges, false);
+});
+
+test("semantically equal JSON is not treated as a remote change", () => {
+  const userStateKey = "recordshelf-user-state-v2";
+  const compact = '{"removedReleaseIds":["a"],"userReleases":[]}';
+  const reordered = '{"userReleases":[],"removedReleaseIds":["a"]}';
+  const result = reconcileSharedStateResponse(
+    { [userStateKey]: compact },
+    { [userStateKey]: compact },
+    { [userStateKey]: reordered },
+  );
+
+  assert.equal(result.storage[userStateKey], compact);
+  assert.equal(result.appliedRemoteChanges, false);
+  assert.equal(result.hasPendingChanges, false);
+  assert.equal(storageValuesEqual(compact, reordered), true);
+  assert.equal(
+    storageValuesEqual(compact, '{"removedReleaseIds":["b"]}'),
+    false,
+  );
 });
