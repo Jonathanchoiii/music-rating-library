@@ -116,10 +116,11 @@ export function saveLibraryFilters(
 ) {
   const sanitized = sanitizeLibraryFilters(filters);
   try {
-    storage?.setItem(
-      LIBRARY_FILTER_STORAGE_KEY,
-      JSON.stringify(sanitized),
-    );
+    const serialized = JSON.stringify(sanitized);
+    if (storage?.getItem(LIBRARY_FILTER_STORAGE_KEY) === serialized) {
+      return sanitized;
+    }
+    storage?.setItem(LIBRARY_FILTER_STORAGE_KEY, serialized);
     if (storage === globalThis.localStorage) {
       notifySharedLocalStateChanged();
     }

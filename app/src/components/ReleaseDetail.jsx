@@ -21,6 +21,7 @@ import { markCoverLoadFailed } from "../lib/coverStatus.js";
 import { Rating } from "./Rating.jsx";
 import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
 import { ListeningGuideSection } from "./ListeningGuideSection.jsx";
+import { AppleMusicEditorialNotes } from "./AppleMusicEditorialNotes.jsx";
 
 const PLATFORM_SLOTS = [
   {
@@ -77,6 +78,7 @@ export function ReleaseDetail({
   onFindMergeCandidate,
   onMergeRelease,
   onOpenArtist,
+  onSaveAlbumIntroduction,
 }) {
   const [editingProvider, setEditingProvider] = useState(null);
   const [draftUrl, setDraftUrl] = useState("");
@@ -337,6 +339,10 @@ export function ReleaseDetail({
             </form>
           ) : null}
         </div>
+        <AppleMusicEditorialNotes
+          release={release}
+          onSaveIntroduction={onSaveAlbumIntroduction}
+        />
         <div className="timeline-header">
           <div>
             <h3>收听时间线</h3>

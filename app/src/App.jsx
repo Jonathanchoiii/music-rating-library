@@ -93,6 +93,7 @@ import {
 } from "./lib/backupMerge.js";
 import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "./lib/sharedStorageKeys.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
+import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
 
 const USER_STATE_KEY = "recordshelf-user-state-v2";
 const LEGACY_USER_STATE_KEY = "recordshelf-user-state-v1";
@@ -320,8 +321,10 @@ function LibraryApp() {
   const [toast, setToast] = useState("");
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [listeningReleaseId, setListeningReleaseId] = useState(null);
+  const [optimisticDetailId, setOptimisticDetailId] = useState(null);
   const loadMoreSentinelRef = useRef(null);
   const libraryWorkspaceReturnRef = useRef(null);
+  const skipInitialUserStatePersistRef = useRef(true);
 
   const refreshListeningGuideStatuses = useCallback(async () => {
     try {
@@ -351,9 +354,10 @@ function LibraryApp() {
   const selectedArtistId =
     new URLSearchParams(location.search).get("artist") ?? "";
   const isArtistIndex = isArtistRoute && !selectedArtistId;
-  const detailId = location.pathname.startsWith("/releases/")
+  const routeDetailId = location.pathname.startsWith("/releases/")
     ? decodeURIComponent(location.pathname.split("/").pop())
     : null;
+  const detailId = optimisticDetailId ?? routeDetailId;
   const selectedRelease = releases.find((release) => release.id === detailId);
   const selectedReleaseArtistTargets = useMemo(
     () =>
@@ -370,9 +374,16 @@ function LibraryApp() {
   );
 
   useEffect(() => {
+    if (skipInitialUserStatePersistRef.current) {
+      skipInitialUserStatePersistRef.current = false;
+      return;
+    }
     const serializedState = JSON.stringify(
       deriveUserState(releases, releaseTypeOverrides),
     );
+    if (window.localStorage.getItem(USER_STATE_KEY) === serializedState) {
+      return;
+    }
     try {
       window.localStorage.setItem(USER_STATE_KEY, serializedState);
       notifySharedLocalStateChanged();
@@ -451,11 +462,19 @@ function LibraryApp() {
   }, [location.search]);
 
   useEffect(() => {
+    setOptimisticDetailId(null);
+  }, [routeDetailId]);
+
+  useEffect(() => {
     const params = new URLSearchParams(location.search);
+    if (params.get("view") === view) return;
     params.set("view", view);
-    const next = `${location.pathname}?${params.toString()}`;
-    window.history.replaceState({}, "", next);
-  }, [view, location.pathname, location.search]);
+    const search = params.toString();
+    navigate(`${location.pathname}${search ? `?${search}` : ""}`, {
+      replace: true,
+      preventScrollReset: true,
+    });
+  }, [view, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     if (
@@ -598,8 +617,11 @@ function LibraryApp() {
     ? artistGroups
     : sortedArtistGroups.slice(0, visibleLimit);
   const duplicateGroups = useMemo(
-    () => findExactNeoDbDuplicateGroups(releases),
-    [releases],
+    () =>
+      isSettingsRoute || isDuplicateRoute
+        ? findExactNeoDbDuplicateGroups(releases)
+        : [],
+    [isDuplicateRoute, isSettingsRoute, releases],
   );
   const duplicateReleaseCount = useMemo(
     () =>
@@ -726,8 +748,10 @@ function LibraryApp() {
       : isArtistRoute
         ? "artists"
         : "library";
+    setOptimisticDetailId(id);
     navigate(
       `/releases/${encodeURIComponent(id)}?view=${view}&from=${from}`,
+      { preventScrollReset: true },
     );
   }
 
@@ -856,6 +880,28 @@ function LibraryApp() {
       } 链接`,
     );
     return true;
+  }
+
+  function updateAlbumIntroduction(releaseId, rawText) {
+    const text = normalizeAlbumIntroduction(rawText);
+    let updatedTitle = "";
+    setReleases((current) =>
+      current.map((release) => {
+        if (release.id !== releaseId) return release;
+        updatedTitle = release.title;
+        if (!text) {
+          const next = { ...release };
+          delete next.albumIntroduction;
+          return next;
+        }
+        return { ...release, albumIntroduction: text };
+      }),
+    );
+    setToast(
+      text
+        ? `已保存《${updatedTitle}》的专辑介绍`
+        : `已清除《${updatedTitle}》的专辑介绍`,
+    );
   }
 
   async function copyReleaseId(releaseId, releaseTitle) {
@@ -1521,10 +1567,16 @@ function LibraryApp() {
       <ReleaseDetail
         release={selectedRelease}
         artistTargets={selectedReleaseArtistTargets}
-        onClose={() => navigate(`${activeBasePath}?view=${view}`)}
+        onClose={() => {
+          setOptimisticDetailId(null);
+          navigate(`${activeBasePath}?view=${view}`, {
+            preventScrollReset: true,
+          });
+        }}
         onAddListening={(releaseId) => setListeningReleaseId(releaseId)}
         onChangeType={updateReleaseType}
         onUpdatePlatformLink={updateReleasePlatformLink}
+        onSaveAlbumIntroduction={updateAlbumIntroduction}
         onFindMergeCandidate={findMergeCandidate}
         onMergeRelease={mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}

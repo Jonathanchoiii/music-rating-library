@@ -81,6 +81,7 @@ const METADATA_FIELDS = [
   "releaseTypeUserConfirmed",
   "neodbSourceType",
   "typeVerificationInputFingerprint",
+  "albumIntroduction",
 ];
 
 function stableHash(value) {
