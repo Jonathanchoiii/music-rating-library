@@ -25,18 +25,9 @@ import {
 } from "react-router-dom";
 import { seedReleases } from "./data/seed.js";
 import {
-  getCurrentRating,
   findExactNeoDbDuplicateGroups,
-  compareReleaseDates,
-  getReleaseContextMatches,
-  getLatestListenedAt,
-  getNextVisibleLimit,
   findReleaseByReferenceUrl,
-  normalizeText,
-  reconcileCanonicalCoverOverride,
-  reconcileCanonicalExternalLinkOverride,
-  reconcileCanonicalTitleOverride,
-  releaseMatchesPrimarySearch,
+  getNextVisibleLimit,
   upsertConfirmedExternalLink,
 } from "./lib/music.js";
 import {
@@ -55,7 +46,6 @@ import {
   NEODB_OAUTH_PENDING_KEY,
   NEODB_SYNC_STATE_KEY,
   dedupeEquivalentListeningEntries,
-  getReleaseMetadataFields,
 } from "./lib/neodbSync.js";
 import { ContextualSearchResults } from "./components/ContextualSearchResults.jsx";
 import { DuplicateManager } from "./components/DuplicateManager.jsx";
@@ -71,7 +61,6 @@ import {
   getReleaseArtistTargets,
   groupReleasesByArtistIdentity,
   loadArtistIdentityState,
-  releaseMatchesMappedArtistQuery,
   saveArtistIdentityState,
   sanitizeArtistIdentityState,
   sortArtistGroups,
@@ -81,7 +70,6 @@ import {
   EMPTY_LIBRARY_FILTERS,
   LIBRARY_FILTER_STORAGE_KEY,
   loadLibraryFilters,
-  releaseMatchesLibraryFilters,
   saveLibraryFilters,
   sanitizeLibraryFilters,
 } from "./lib/filters.js";
@@ -91,30 +79,26 @@ import {
   mergeSelectedReleases,
   validateRecordshelfBackup,
 } from "./lib/backupMerge.js";
-import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "./lib/sharedStorageKeys.js";
+import {
+  DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
+  LEGACY_FULL_LIBRARY_KEYS,
+  LEGACY_USER_STATE_KEY,
+  USER_STATE_KEY,
+} from "./lib/sharedStorageKeys.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
 import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
+import {
+  getBaseRelease,
+  loadInitialLibraryState,
+  persistUserState,
+} from "./lib/libraryUserState.js";
+import {
+  countReleaseTypes,
+  getLibraryRouteState,
+  getLibrarySearchResults,
+} from "./lib/librarySearch.js";
 
-const USER_STATE_KEY = "recordshelf-user-state-v2";
-const LEGACY_USER_STATE_KEY = "recordshelf-user-state-v1";
-const LEGACY_FULL_LIBRARY_KEYS = [
-  "recordshelf-mvp-releases-v5",
-  "recordshelf-mvp-releases-v4",
-  "recordshelf-mvp-releases-v3",
-  "recordshelf-mvp-releases-v2",
-  "recordshelf-mvp-releases-v1",
-];
 const PAGE_SIZE = 84;
-const BASE_RELEASE_BY_ID = new Map(
-  seedReleases.map((release) => [release.id, release]),
-);
-const BASE_ENTRY_IDS_BY_RELEASE = new Map(
-  seedReleases.map((release) => [
-    release.id,
-    new Set(release.listeningEntries.map((entry) => entry.id)),
-  ]),
-);
-const RELEASE_METADATA_FIELDS = getReleaseMetadataFields();
 
 const navItems = [
   { href: "/", label: "音乐库", Icon: VinylRecord },
@@ -123,179 +107,6 @@ const navItems = [
   { href: "/?focus=search", label: "搜索", Icon: MagnifyingGlass },
   { href: "/settings", label: "设置", Icon: GearSix },
 ];
-
-function deriveUserState(releases, releaseTypeOverrides = {}) {
-  const listeningEntryAdditions = {};
-  const listeningEntryRemovals = {};
-  const releaseMetadataOverrides = {};
-  const userReleases = [];
-  const currentReleaseIds = new Set(releases.map((release) => release.id));
-  const removedReleaseIds = seedReleases
-    .filter((release) => !currentReleaseIds.has(release.id))
-    .map((release) => release.id);
-
-  for (const release of releases) {
-    const baseRelease = BASE_RELEASE_BY_ID.get(release.id);
-    if (!baseRelease) {
-      userReleases.push(release);
-      continue;
-    }
-    const baseEntryIds = BASE_ENTRY_IDS_BY_RELEASE.get(release.id);
-    const additions = release.listeningEntries.filter(
-      (entry) => !baseEntryIds.has(entry.id),
-    );
-    if (additions.length) {
-      listeningEntryAdditions[release.id] = additions;
-    }
-    const currentEntryIds = new Set(
-      release.listeningEntries.map((entry) => entry.id),
-    );
-    const removals = baseRelease.listeningEntries
-      .filter((entry) => !currentEntryIds.has(entry.id))
-      .map((entry) => entry.id);
-    if (removals.length) {
-      listeningEntryRemovals[release.id] = removals;
-    }
-    const metadataPatch = Object.fromEntries(
-      RELEASE_METADATA_FIELDS.filter(
-        (field) =>
-          JSON.stringify(release[field]) !==
-          JSON.stringify(baseRelease[field]),
-      ).map((field) => [field, release[field]]),
-    );
-    if (Object.keys(metadataPatch).length) {
-      releaseMetadataOverrides[release.id] = metadataPatch;
-    }
-  }
-
-  return {
-    releaseTypeOverrides,
-    listeningEntryAdditions,
-    listeningEntryRemovals,
-    releaseMetadataOverrides,
-    removedReleaseIds,
-    userReleases,
-  };
-}
-
-function applyUserState(userState = {}) {
-  const releaseTypeOverrides = userState.releaseTypeOverrides ?? {};
-  const listeningEntryAdditions = userState.listeningEntryAdditions ?? {};
-  const listeningEntryRemovals = userState.listeningEntryRemovals ?? {};
-  const releaseMetadataOverrides = userState.releaseMetadataOverrides ?? {};
-  const removedReleaseIds = new Set(userState.removedReleaseIds ?? []);
-  const baseReleases = seedReleases
-    .filter((release) => !removedReleaseIds.has(release.id))
-    .map((release) => {
-      const removedEntryIds = new Set(
-        listeningEntryRemovals[release.id] ?? [],
-      );
-      const metadataOverride = reconcileCanonicalTitleOverride(
-        release,
-        reconcileCanonicalCoverOverride(
-          release,
-          reconcileCanonicalExternalLinkOverride(
-            release,
-            releaseMetadataOverrides[release.id] ?? {},
-          ),
-        ),
-      );
-      return {
-        ...release,
-        ...metadataOverride,
-        releaseType:
-          releaseTypeOverrides[release.id] ??
-          metadataOverride.releaseType ??
-          release.releaseType,
-        releaseTypeUserConfirmed:
-          metadataOverride.releaseTypeUserConfirmed ??
-          (Object.hasOwn(releaseTypeOverrides, release.id)
-            ? true
-            : release.releaseTypeUserConfirmed ?? false),
-        listeningEntries: [
-          ...dedupeEquivalentListeningEntries([
-            ...release.listeningEntries.filter(
-              (entry) => !removedEntryIds.has(entry.id),
-            ),
-            ...(listeningEntryAdditions[release.id] ?? []),
-          ]),
-        ],
-      };
-    });
-  return [...(userState.userReleases ?? []), ...baseReleases];
-}
-
-function keepExplicitLegacyTypeOverrides(overrides = {}) {
-  return Object.fromEntries(
-    Object.entries(overrides).filter(
-      ([releaseId, releaseType]) =>
-        BASE_RELEASE_BY_ID.has(releaseId) && releaseType !== "OTHER",
-    ),
-  );
-}
-
-function loadInitialLibraryState() {
-  try {
-    const savedUserState = window.localStorage.getItem(USER_STATE_KEY);
-    if (savedUserState) {
-      const userState = JSON.parse(savedUserState);
-      return { releases: applyUserState(userState), userState };
-    }
-
-    const legacyUserStateValue =
-      window.localStorage.getItem(LEGACY_USER_STATE_KEY);
-    if (legacyUserStateValue) {
-      const legacyUserState = JSON.parse(legacyUserStateValue);
-      const userState = {
-        ...legacyUserState,
-        releaseTypeOverrides: keepExplicitLegacyTypeOverrides(
-          legacyUserState.releaseTypeOverrides,
-        ),
-      };
-      window.localStorage.setItem(USER_STATE_KEY, JSON.stringify(userState));
-      window.localStorage.removeItem(LEGACY_USER_STATE_KEY);
-      return { releases: applyUserState(userState), userState };
-    }
-
-    for (const legacyKey of LEGACY_FULL_LIBRARY_KEYS) {
-      const legacyValue = window.localStorage.getItem(legacyKey);
-      if (!legacyValue) continue;
-      const legacyReleases = JSON.parse(legacyValue);
-      const legacyTypeOverrides = Object.fromEntries(
-        legacyReleases
-          .filter((release) => {
-            const baseRelease = BASE_RELEASE_BY_ID.get(release.id);
-            return (
-              baseRelease &&
-              release.releaseType !== "OTHER" &&
-              release.releaseType !== baseRelease.releaseType
-            );
-          })
-          .map((release) => [release.id, release.releaseType]),
-      );
-      const migratedState = deriveUserState(
-        legacyReleases,
-        legacyTypeOverrides,
-      );
-      window.localStorage.setItem(
-        USER_STATE_KEY,
-        JSON.stringify(migratedState),
-      );
-      LEGACY_FULL_LIBRARY_KEYS.forEach((key) =>
-        window.localStorage.removeItem(key),
-      );
-      return {
-        releases: applyUserState(migratedState),
-        userState: migratedState,
-      };
-    }
-    const userState = deriveUserState(seedReleases);
-    return { releases: applyUserState(userState), userState };
-  } catch {
-    const userState = deriveUserState(seedReleases);
-    return { releases: applyUserState(userState), userState };
-  }
-}
 
 function LibraryApp() {
   const location = useLocation();
@@ -339,24 +150,19 @@ function LibraryApp() {
     }
   }, []);
 
-  const isArtistRoute = location.pathname === "/artists";
-  const isAddRoute = location.pathname === "/admin/add";
-  const isImportRoute = location.pathname === "/admin/import";
-  const isSyncRoute = location.pathname === "/sync";
-  const isSettingsRoute =
-    location.pathname === "/settings" ||
-    location.pathname === "/settings/artists";
-  const isArtistSettingsRoute =
-    location.pathname === "/settings/artists";
-  const isDuplicateRoute =
-    location.pathname === "/settings/duplicates" ||
-    location.pathname === "/duplicates";
-  const selectedArtistId =
-    new URLSearchParams(location.search).get("artist") ?? "";
-  const isArtistIndex = isArtistRoute && !selectedArtistId;
-  const routeDetailId = location.pathname.startsWith("/releases/")
-    ? decodeURIComponent(location.pathname.split("/").pop())
-    : null;
+  const {
+    isArtistRoute,
+    isAddRoute,
+    isImportRoute,
+    isSyncRoute,
+    isSettingsRoute,
+    isArtistSettingsRoute,
+    isDuplicateRoute,
+    selectedArtistId,
+    isArtistIndex,
+    detailId: routeDetailId,
+    detailReturnTarget,
+  } = getLibraryRouteState(location);
   const detailId = optimisticDetailId ?? routeDetailId;
   const selectedRelease = releases.find((release) => release.id === detailId);
   const selectedReleaseArtistTargets = useMemo(
@@ -378,26 +184,8 @@ function LibraryApp() {
       skipInitialUserStatePersistRef.current = false;
       return;
     }
-    const serializedState = JSON.stringify(
-      deriveUserState(releases, releaseTypeOverrides),
-    );
-    if (window.localStorage.getItem(USER_STATE_KEY) === serializedState) {
-      return;
-    }
-    try {
-      window.localStorage.setItem(USER_STATE_KEY, serializedState);
+    if (persistUserState(releases, releaseTypeOverrides)) {
       notifySharedLocalStateChanged();
-    } catch (error) {
-      try {
-        LEGACY_FULL_LIBRARY_KEYS.forEach((key) =>
-          window.localStorage.removeItem(key),
-        );
-        window.localStorage.removeItem(LEGACY_USER_STATE_KEY);
-        window.localStorage.setItem(USER_STATE_KEY, serializedState);
-        notifySharedLocalStateChanged();
-      } catch (retryError) {
-        console.warn("用户变更暂时无法写入本地存储", retryError ?? error);
-      }
     }
   }, [releases, releaseTypeOverrides]);
 
@@ -504,90 +292,29 @@ function LibraryApp() {
       window.removeEventListener("scroll", updateScrollTopVisibility);
   }, []);
 
-  const searchResults = useMemo(() => {
-    const query = normalizeText(search);
-    const filtered = releases.filter((release) =>
-      releaseMatchesLibraryFilters(
-        release,
+  const searchResults = useMemo(
+    () =>
+      getLibrarySearchResults({
+        releases,
+        search,
         filters,
         artistIdentityState,
         listeningGuideStatuses,
-      ),
-    );
-    const sortReleases = (releaseA, releaseB) => {
-      if (sort === "rating_desc") {
-        return (
-          (getCurrentRating(releaseB.listeningEntries) ?? -1) -
-          (getCurrentRating(releaseA.listeningEntries) ?? -1)
-        );
-      }
-      if (sort === "title_asc") {
-        return releaseA.title.localeCompare(releaseB.title, "zh-CN");
-      }
-      if (sort === "released_desc") {
-        return compareReleaseDates(releaseA, releaseB, "desc");
-      }
-      if (sort === "released_asc") {
-        return compareReleaseDates(releaseA, releaseB, "asc");
-      }
-      return (
-        Date.parse(getLatestListenedAt(releaseB.listeningEntries) ?? 0) -
-        Date.parse(getLatestListenedAt(releaseA.listeningEntries) ?? 0)
-      );
-    };
-    if (!query) {
-      return {
-        primary: [...filtered].sort(sortReleases),
-        contextual: [],
-      };
-    }
-
-    const primary = filtered
-      .filter(
-        (release) =>
-          releaseMatchesPrimarySearch(release, query) ||
-          releaseMatchesMappedArtistQuery(
-            release,
-            query,
-            artistIdentityState,
-          ),
-      )
-      .sort(sortReleases);
-    const primaryIds = new Set(primary.map((release) => release.id));
-    const contextual = filtered
-      .filter((release) => !primaryIds.has(release.id))
-      .map((release) => ({
-        release,
-        matches: getReleaseContextMatches(release, query),
-      }))
-      .filter((result) => result.matches.length)
-      .sort((resultA, resultB) =>
-        sortReleases(resultA.release, resultB.release),
-      );
-    return { primary, contextual };
-  }, [
-    artistIdentityState,
-    filters,
-    listeningGuideStatuses,
-    releases,
-    search,
-    sort,
-  ]);
+        sort,
+      }),
+    [
+      artistIdentityState,
+      filters,
+      listeningGuideStatuses,
+      releases,
+      search,
+      sort,
+    ],
+  );
   const visibleReleases = searchResults.primary;
   const contextualSearchResults = searchResults.contextual;
 
-  const counts = useMemo(
-    () =>
-      releases.reduce(
-        (result, release) => {
-          result.ALL += 1;
-          result[release.releaseType] = (result[release.releaseType] ?? 0) + 1;
-          return result;
-        },
-        { ALL: 0, LP: 0, EP: 0, SINGLE: 0 },
-      ),
-    [releases],
-  );
+  const counts = useMemo(() => countReleaseTypes(releases), [releases]);
   const displayedReleases = visibleReleases.slice(0, visibleLimit);
   const displayedContextualResults = contextualSearchResults.slice(
     0,
@@ -816,7 +543,7 @@ function LibraryApp() {
 
   function updateReleaseType(releaseId, releaseType) {
     let updatedTitle = "";
-    const baseRelease = BASE_RELEASE_BY_ID.get(releaseId);
+    const baseRelease = getBaseRelease(releaseId);
     setReleases((current) =>
       current.map((release) => {
         if (release.id !== releaseId) return release;
@@ -952,6 +679,22 @@ function LibraryApp() {
           coverMatchedAt: update.coverMatchedAt ?? release.coverMatchedAt,
         };
       }),
+    );
+  }
+
+  function applyMotionArtworkUpdates(updates = []) {
+    const updatesById = new Map(
+      updates
+        .filter((update) => update?.id && update.motionArtwork?.checkedAt)
+        .map((update) => [update.id, update.motionArtwork]),
+    );
+    if (!updatesById.size) return;
+    setReleases((current) =>
+      current.map((release) =>
+        updatesById.has(release.id)
+          ? { ...release, motionArtwork: updatesById.get(release.id) }
+          : release,
+      ),
     );
   }
 
@@ -1152,7 +895,6 @@ function LibraryApp() {
     navigate("/?view=grid");
   }
 
-  const detailReturnTarget = new URLSearchParams(location.search).get("from");
   const activeBasePath = isDuplicateRoute || detailReturnTarget === "duplicates"
     ? "/settings/duplicates"
     : isArtistRoute || detailReturnTarget === "artists"
@@ -1580,6 +1322,7 @@ function LibraryApp() {
         onFindMergeCandidate={findMergeCandidate}
         onMergeRelease={mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
+        onApplyMotionArtworkUpdates={applyMotionArtworkUpdates}
       />
       {isAddRoute ? (
         <AddReleaseDialog

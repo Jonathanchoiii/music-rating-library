@@ -17,6 +17,7 @@ import {
 import { Rating } from "./Rating.jsx";
 import { useReleaseIdMenu } from "./ReleaseIdMenu.jsx";
 import { markCoverLoadFailed } from "../lib/coverStatus.js";
+import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
 
 const QUICK_RELEASE_TYPES = ["OTHER", "LP", "EP", "SINGLE"];
 const RELEASES_PER_SHELF = 5;
@@ -248,6 +249,7 @@ function shelfCardStyle(release, index) {
 
 export function ReleaseShelf({ releases, onOpen, onCopyReleaseId }) {
   const releaseIdMenu = useReleaseIdMenu(onCopyReleaseId);
+  const [activeMotionId, setActiveMotionId] = useState("");
   const shelves = Array.from(
     { length: Math.ceil(releases.length / RELEASES_PER_SHELF) },
     (_, index) =>
@@ -284,6 +286,14 @@ export function ReleaseShelf({ releases, onOpen, onCopyReleaseId }) {
                     className="release-shelf-record"
                     key={release.id}
                     style={shelfCardStyle(release, index)}
+                    onPointerEnter={() => setActiveMotionId(release.id)}
+                    onPointerLeave={() => setActiveMotionId("")}
+                    onFocus={() => setActiveMotionId(release.id)}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setActiveMotionId("");
+                      }
+                    }}
                     {...releaseIdMenu.bindRelease(release)}
                   >
                     <button
@@ -295,7 +305,11 @@ export function ReleaseShelf({ releases, onOpen, onCopyReleaseId }) {
                       aria-label={`打开 ${release.artists.join("、")} 的 ${release.title}`}
                     >
                       <span className="release-shelf-sleeve">
-                        <Cover release={release} />
+                        <ReleaseArtwork
+                          release={release}
+                          active={activeMotionId === release.id}
+                          onStaticError={() => markCoverLoadFailed(release.id)}
+                        />
                         <span className="release-shelf-glare" aria-hidden="true" />
                         {release.isPrivate ? (
                           <span className="cover-lock" aria-label="私密记录">

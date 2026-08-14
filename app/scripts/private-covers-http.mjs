@@ -7,6 +7,7 @@ import {
   getPrivateCoverRoutePrefix,
   runCoverEnrichment,
 } from "./enrich-cover-art.mjs";
+import { readJsonBody, sendJson } from "./http-json.mjs";
 
 const CONTENT_TYPES = new Map([
   [".gif", "image/gif"],
@@ -18,35 +19,6 @@ const CONTENT_TYPES = new Map([
 
 let enrichQueue = Promise.resolve();
 let enrichRunning = false;
-
-function sendJson(response, status, payload) {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(payload));
-}
-
-async function readJsonBody(request, limit = 4_000_000) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > limit) {
-      const error = new Error("PAYLOAD_TOO_LARGE");
-      error.statusCode = 413;
-      throw error;
-    }
-    chunks.push(chunk);
-  }
-  if (!chunks.length) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    const error = new Error("INVALID_JSON");
-    error.statusCode = 400;
-    throw error;
-  }
-}
 
 function safeCoverFileName(pathname) {
   const prefix = `${getPrivateCoverRoutePrefix()}/`;

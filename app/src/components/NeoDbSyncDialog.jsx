@@ -70,6 +70,7 @@ export function NeoDbSyncDialog({
     async (accessToken, { forceFull = false } = {}) => {
       setPhase("syncing");
       setError("");
+      let changesWritten = false;
       try {
         const currentState = loadNeoDbSyncState();
         const identityPool = [
@@ -151,6 +152,7 @@ export function NeoDbSyncDialog({
           removalReviewCandidates: [],
           backgroundPending: true,
         });
+        changesWritten = true;
         setPhase("background");
         onToast(
           changeCount(result.plan)
@@ -330,6 +332,23 @@ export function NeoDbSyncDialog({
           );
         }
       } catch (syncError) {
+        if (changesWritten) {
+          console.warn("NeoDB background verification did not finish", syncError);
+          setError("");
+          setLastResult((currentResult) =>
+            currentResult
+              ? {
+                  ...currentResult,
+                  backgroundPending: false,
+                  backgroundWarning:
+                    "收藏变化已经成功写入；后台校验暂未完成，下次同步会继续。",
+                }
+              : currentResult,
+          );
+          setPhase("done");
+          onToast("NeoDB 同步完成；后台校验将在下次同步时继续");
+          return;
+        }
         if (syncError.code === "NEODB_AUTH") {
           clearNeoDbAccessToken();
           setToken(null);
@@ -534,7 +553,7 @@ export function NeoDbSyncDialog({
                     <strong>
                       {lastResult.backgroundPending
                         ? "NeoDB 增量对比完成"
-                        : "本轮同步与后台校验完成"}
+                        : "NeoDB 同步完成"}
                     </strong>
                     <span>
                       {lastResult.backgroundPending
@@ -567,6 +586,11 @@ export function NeoDbSyncDialog({
                     <span>无变化</span>
                   </div>
                 </div>
+                {lastResult.backgroundWarning ? (
+                  <p className="sync-cache-summary">
+                    {lastResult.backgroundWarning}
+                  </p>
+                ) : null}
                 {lastResult.typeVerification &&
                 !lastResult.backgroundPending ? (
                   <p className="sync-cache-summary">

@@ -8,8 +8,9 @@ import {
   resolveArtistCredit,
 } from "./artists.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
+import { LIBRARY_FILTER_STORAGE_KEY } from "./sharedStorageKeys.js";
 
-export const LIBRARY_FILTER_STORAGE_KEY = "recordshelf-library-filters-v1";
+export { LIBRARY_FILTER_STORAGE_KEY };
 
 export const EMPTY_LIBRARY_FILTERS = {
   releaseDateFrom: "",

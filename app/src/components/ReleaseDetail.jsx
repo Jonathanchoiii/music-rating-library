@@ -4,9 +4,11 @@ import {
   ArrowSquareOut,
   CalendarBlank,
   ClockCounterClockwise,
+  FilmStrip,
   LinkSimple,
   Plus,
   SpotifyLogo,
+  SpinnerGap,
   X,
 } from "@phosphor-icons/react";
 import {
@@ -22,6 +24,14 @@ import { Rating } from "./Rating.jsx";
 import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
 import { ListeningGuideSection } from "./ListeningGuideSection.jsx";
 import { AppleMusicEditorialNotes } from "./AppleMusicEditorialNotes.jsx";
+import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
+import {
+  convertMotionArtworkToWebp,
+  hasLocalMotionArtwork,
+  isMotionArtworkEnabled,
+  motionArtworkNeedsUpgrade,
+  setMotionArtworkEnabled,
+} from "../lib/motionArtwork.js";
 
 const PLATFORM_SLOTS = [
   {
@@ -79,17 +89,23 @@ export function ReleaseDetail({
   onMergeRelease,
   onOpenArtist,
   onSaveAlbumIntroduction,
+  onApplyMotionArtworkUpdates,
 }) {
   const [editingProvider, setEditingProvider] = useState(null);
   const [draftUrl, setDraftUrl] = useState("");
   const [linkError, setLinkError] = useState("");
   const [coverLoadFailed, setCoverLoadFailed] = useState(false);
+  const [motionLookup, setMotionLookup] = useState({
+    running: false,
+    message: "",
+  });
 
   useEffect(() => {
     setEditingProvider(null);
     setDraftUrl("");
     setLinkError("");
     setCoverLoadFailed(false);
+    setMotionLookup({ running: false, message: "" });
   }, [release?.id, release?.coverUrl]);
 
   if (!release) return null;
@@ -133,6 +149,119 @@ export function ReleaseDetail({
   const editingSlot = PLATFORM_SLOTS.find(
     (slot) => slot.provider === editingProvider,
   );
+  const exactAppleLink = confirmedLinks.get("APPLE_MUSIC");
+  const hasMotionArtwork = hasLocalMotionArtwork(release);
+  const motionArtworkEnabled = isMotionArtworkEnabled(release);
+  const needsMotionArtworkUpgrade = motionArtworkNeedsUpgrade(release);
+
+  function toggleMotionArtwork() {
+    if (!hasMotionArtwork) return;
+    onApplyMotionArtworkUpdates?.([
+      {
+        id: release.id,
+        motionArtwork: setMotionArtworkEnabled(
+          release.motionArtwork,
+          !motionArtworkEnabled,
+        ),
+      },
+    ]);
+    setMotionLookup({ running: false, message: "" });
+  }
+
+  async function requestMotionArtwork() {
+    if (motionLookup.running) return;
+    const cachedMotionSource =
+      release.motionArtwork?.squareUrl || release.motionArtwork?.sourceUrl;
+    if (needsMotionArtworkUpgrade && cachedMotionSource) {
+      setMotionLookup({ running: true, message: "正在优化动态封面清晰度…" });
+      try {
+        const localMotionArtwork = await convertMotionArtworkToWebp(
+          release,
+          cachedMotionSource,
+          (message) => setMotionLookup({ running: true, message }),
+        );
+        onApplyMotionArtworkUpdates?.([
+          { id: release.id, motionArtwork: localMotionArtwork },
+        ]);
+        setMotionLookup({
+          running: false,
+          message: "清晰版已写入，旧版文件已安全替换",
+        });
+      } catch (error) {
+        const label =
+          error.message === "MOTION_ARTWORK_TOO_LARGE"
+            ? "清晰版自动降档后仍超过 8 MB，已保留旧版"
+            : "清晰度优化失败，旧版动态封面仍可继续使用";
+        setMotionLookup({ running: false, message: label });
+      }
+      return;
+    }
+    if (!exactAppleLink) {
+      openLinkEditor("APPLE_MUSIC");
+      setMotionLookup({
+        running: false,
+        message: "先添加这张唱片的精确 Apple Music 专辑链接，再进行单张检测。",
+      });
+      return;
+    }
+    setMotionLookup({ running: true, message: "正在检测动态封面…" });
+    try {
+      const response = await fetch("/api/apple-motion-artwork", {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({
+          releases: [{ id: release.id, externalLinks: release.externalLinks }],
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "动态封面检测失败");
+      const lookup = payload.updates?.[0]?.motionArtwork;
+      if (lookup?.status === "AVAILABLE" && lookup.squareUrl) {
+        const localMotionArtwork = await convertMotionArtworkToWebp(
+          release,
+          lookup.squareUrl,
+          (message) => setMotionLookup({ running: true, message }),
+        );
+        onApplyMotionArtworkUpdates?.([
+          { id: release.id, motionArtwork: localMotionArtwork },
+        ]);
+      } else {
+        onApplyMotionArtworkUpdates?.(payload.updates ?? []);
+      }
+      setMotionLookup({
+        running: false,
+        message: payload.available
+          ? "动态封面已压缩并写入，正在当前详情页展示"
+          : "Apple Music 暂无动态封面",
+      });
+    } catch (error) {
+      const labels = {
+        FFMPEG_TIMEOUT: "动态封面下载或压缩超时，请稍后重试",
+        MOTION_RUNTIME_DOWNLOAD_FAILED:
+          "转码组件下载失败，请检查网络后重试",
+        MOTION_RUNTIME_INTEGRITY_FAILED:
+          "转码组件校验失败，未执行或写入",
+        FFMPEG_FAILED: "Apple 动态封面读取失败，请稍后重试",
+        MOTION_CDN_UNREACHABLE:
+          "已找到动态封面，但当前网络无法读取 Apple 视频；请检查代理后重试",
+        MOTION_SOURCE_DOWNLOAD_FAILED:
+          "已找到动态封面，但 Apple 视频下载中断；点击可再次尝试",
+        MOTION_SOURCE_HTTP_403:
+          "Apple 暂时拒绝读取这张动态封面，请稍后重试",
+        MOTION_SOURCE_HTTP_404:
+          "Apple 上的动态封面资源已失效，可稍后重新检测",
+        MOTION_PLAYLIST_UNSUPPORTED:
+          "已找到动态封面，但这张封面的 Apple 格式暂不支持",
+        MOTION_SOURCE_TOO_LARGE: "动态封面源文件超过 32 MB，未写入",
+        DYNAMIC_ARTWORK_TOO_LARGE: "清晰版自动降档后仍超过 8 MB，未写入",
+        INVALID_MOTION_ARTWORK_STREAM: "没有找到可转码的视频片段",
+      };
+      setMotionLookup({
+        running: false,
+        message: labels[error.message] || "检测或转码失败，请稍后重试",
+      });
+    }
+  }
 
   function closeLinkEditor() {
     setEditingProvider(null);
@@ -183,10 +312,11 @@ export function ReleaseDetail({
         </div>
         <div className="detail-hero">
           {release.coverUrl && !coverLoadFailed ? (
-            <img
-              src={release.coverUrl}
-              alt={`${release.artists.join("、")}《${release.title}》封面`}
-              onError={() => {
+            <ReleaseArtwork
+              release={release}
+              active
+              userRequested
+              onStaticError={() => {
                 setCoverLoadFailed(true);
                 markCoverLoadFailed(release.id);
               }}
@@ -337,6 +467,72 @@ export function ReleaseDetail({
               </div>
               {linkError ? <p className="platform-link-error">{linkError}</p> : null}
             </form>
+          ) : null}
+        </div>
+        <div className="motion-artwork-action">
+          <div>
+            <FilmStrip aria-hidden="true" />
+            <span>
+              <strong>动态封面</strong>
+              <small>
+                {hasMotionArtwork
+                  ? needsMotionArtworkUpgrade
+                    ? "旧版封面可继续使用，也可单次优化清晰度"
+                    : `已保存清晰版 · ${release.motionArtwork.width ?? 960}px`
+                  : exactAppleLink
+                    ? "单张检测 Apple Music 动态封面"
+                    : "需要先添加精确 Apple Music 专辑链接"}
+              </small>
+            </span>
+          </div>
+          {hasMotionArtwork ? (
+            <div className="motion-artwork-controls">
+              {needsMotionArtworkUpgrade ? (
+                <button
+                  type="button"
+                  className="secondary-button motion-artwork-upgrade"
+                  onClick={requestMotionArtwork}
+                  disabled={motionLookup.running}
+                >
+                  {motionLookup.running ? (
+                    <SpinnerGap className="spin" aria-hidden="true" />
+                  ) : null}
+                  {motionLookup.running ? "正在优化" : "优化清晰度"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={`motion-artwork-toggle${
+                  motionArtworkEnabled ? " is-active" : ""
+                }`}
+                role="switch"
+                aria-label="动态封面"
+                aria-checked={motionArtworkEnabled}
+                onClick={toggleMotionArtwork}
+              >
+                <span>{motionArtworkEnabled ? "开启" : "关闭"}</span>
+                <span className="motion-artwork-switch" aria-hidden="true">
+                  <span />
+                </span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="secondary-button motion-artwork-button"
+              onClick={requestMotionArtwork}
+              disabled={motionLookup.running}
+            >
+              {motionLookup.running ? (
+                <SpinnerGap className="spin" aria-hidden="true" />
+              ) : (
+                <FilmStrip aria-hidden="true" />
+              )}
+              {motionLookup.running ? "正在请求" : "请求动态封面"}
+            </button>
+          )}
+          {motionLookup.message ? (
+            <small className="motion-artwork-message">{motionLookup.message}</small>
           ) : null}
         </div>
         <AppleMusicEditorialNotes

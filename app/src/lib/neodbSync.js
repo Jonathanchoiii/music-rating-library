@@ -6,10 +6,13 @@ import {
   normalizeText,
 } from "./music.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
+import {
+  NEODB_OAUTH_CLIENT_KEY,
+  NEODB_SYNC_STATE_KEY,
+} from "./sharedStorageKeys.js";
 
 export const NEODB_ORIGIN = "https://neodb.social";
-export const NEODB_SYNC_STATE_KEY = "recordshelf-neodb-sync-v1";
-export const NEODB_OAUTH_CLIENT_KEY = "recordshelf-neodb-oauth-client-v1";
+export { NEODB_SYNC_STATE_KEY, NEODB_OAUTH_CLIENT_KEY };
 export const NEODB_OAUTH_PENDING_KEY = "recordshelf-neodb-oauth-pending-v1";
 export const NEODB_ACCESS_TOKEN_KEY = "recordshelf-neodb-access-token-v1";
 
@@ -70,6 +73,7 @@ const METADATA_FIELDS = [
   "coverSource",
   "coverMatchedFrom",
   "coverMatchedAt",
+  "motionArtwork",
   "isPrivate",
   "externalLinks",
   "markStatus",
@@ -467,9 +471,11 @@ export async function refreshNeoDbCanonicalIdentity(
   );
   const urls = neoDbUrlsFromReleases(known.releases);
   let urlsToCheck = urls;
+  let start = 0;
+  let count = urls.length;
   if (!forceFull) {
-    const start = urls.length ? auditCursor % urls.length : 0;
-    const count = Math.min(auditSize, urls.length);
+    start = urls.length ? auditCursor % urls.length : 0;
+    count = Math.min(auditSize, urls.length);
     const auditUrls = Array.from(
       { length: count },
       (_, offset) => urls[(start + offset) % urls.length],

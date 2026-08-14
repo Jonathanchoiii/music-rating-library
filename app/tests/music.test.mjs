@@ -52,8 +52,52 @@ import {
   neoDbMarkHash,
   neoDbMarkToRelease,
   pullNeoDbDelta,
+  refreshNeoDbCanonicalIdentity,
   verifyChangedReleaseTypes,
 } from "../src/lib/neodbSync.js";
+
+test("rotating NeoDB canonical audits advance their cursor without a scope error", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrls = [];
+  globalThis.fetch = async (_url, options) => {
+    requestedUrls = JSON.parse(options.body).urls;
+    return {
+      ok: true,
+      async json() {
+        return { canonicalUrls: {} };
+      },
+    };
+  };
+
+  try {
+    const result = await refreshNeoDbCanonicalIdentity(
+      [
+        {
+          id: "release-one",
+          externalLinks: [
+            { provider: "NEODB", url: "https://neodb.social/album/one" },
+          ],
+          listeningEntries: [],
+        },
+        {
+          id: "release-two",
+          externalLinks: [
+            { provider: "NEODB", url: "https://neodb.social/album/two" },
+          ],
+          listeningEntries: [],
+        },
+      ],
+      [],
+      { auditCursor: 1, auditSize: 1 },
+    );
+
+    assert.deepEqual(requestedUrls, ["https://neodb.social/album/two"]);
+    assert.equal(result.checkedUrlCount, 1);
+    assert.equal(result.nextAuditCursor, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("NeoDB CSV snapshots keep stable source ids and row fingerprints", () => {
   const snapshot = buildNeoDbCsvSnapshot([

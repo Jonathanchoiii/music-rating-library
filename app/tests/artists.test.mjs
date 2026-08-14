@@ -14,6 +14,7 @@ import {
   mergePossibleDuplicateArtists,
   removeResolvedDuplicateArtistCandidates,
   releaseMatchesMappedArtistQuery,
+  sanitizeArtistIdentityState,
   saveArtistIdentityState,
   sortArtistGroups,
 } from "../src/lib/artists.js";
@@ -139,6 +140,40 @@ test("OpenCC creates deterministic simplified and traditional name variants", ()
     "张震岳",
     "張震嶽",
   ]);
+});
+
+test("OpenCC does not recursively expand MusicBrainz aliases on every load", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "artist-adele",
+        canonicalName: "Adele",
+        aliases: [
+          {
+            name: "Adele",
+            type: "PRIMARY",
+            source: "USER",
+          },
+          {
+            name: "阿黛尔",
+            type: "ARTIST_NAME",
+            source: "MUSICBRAINZ",
+          },
+        ],
+      },
+    ],
+  };
+
+  const first = reconcileChineseArtistVariants([], state);
+  const second = reconcileChineseArtistVariants([], first.state);
+
+  assert.equal(first.aliasesAdded, 0);
+  assert.equal(second.aliasesAdded, 0);
+  assert.deepEqual(
+    second.state.identities[0].aliases.map((alias) => alias.name),
+    ["Adele", "阿黛尔"],
+  );
 });
 
 test("script variants create one identity only when the same work is shared", () => {
@@ -541,4 +576,15 @@ test("artist identity edits persist with a rolling recovery snapshot", () => {
   assert.equal(backups.length, 2);
   storage.setItem(ARTIST_IDENTITY_STORAGE_KEY, "{broken");
   assert.equal(loadArtistIdentityState(storage).identities.length, 2);
+});
+
+test("sanitizing artist identities does not mint a new id on each pass", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [{ canonicalName: "No Id Yet", aliases: [] }],
+  };
+  const first = sanitizeArtistIdentityState(state);
+  const second = sanitizeArtistIdentityState(first);
+  assert.equal(first.identities[0].id, "");
+  assert.deepEqual(first, second);
 });

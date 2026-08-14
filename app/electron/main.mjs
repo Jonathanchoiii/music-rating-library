@@ -1,13 +1,8 @@
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, net, shell } from "electron";
 import { startRecordShelfServer } from "./server.mjs";
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let mainWindow = null;
 let localServer = null;
-
-if (!hasSingleInstanceLock) {
-  app.quit();
-}
 
 function createWindow(origin) {
   mainWindow = new BrowserWindow({
@@ -45,7 +40,12 @@ async function launch() {
       Number.isInteger(requestedPort) && requestedPort > 0
         ? requestedPort
         : 4173;
-    localServer = await startRecordShelfServer(port);
+    localServer = await startRecordShelfServer(port, {
+      // Chromium's network stack follows the same proxy/TUN route as the UI.
+      // Plain Node/FFmpeg downloads do not, which made Apple HLS fail on Macs
+      // using a virtual-IP proxy even though the artwork was visible in-browser.
+      fetchImpl: (input, init) => net.fetch(input, init),
+    });
     createWindow(localServer.origin);
   } catch (error) {
     dialog.showErrorBox(
@@ -57,16 +57,6 @@ async function launch() {
 }
 
 app.whenReady().then(launch);
-
-app.on("second-instance", () => {
-  if (!mainWindow) {
-    if (localServer) createWindow(localServer.origin);
-    return;
-  }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
-});
 
 app.on("activate", () => {
   if (!mainWindow && localServer) createWindow(localServer.origin);

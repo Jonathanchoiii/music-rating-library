@@ -310,15 +310,15 @@ async function refreshFromSharedState() {
   try {
     const remote = await requestSharedState();
     if ((remote.revision ?? 0) <= knownRevision) return;
-    if (!Object.keys(changedValues(localSnapshot(), remote.storage)).length) {
+    const current = localSnapshot();
+    if (!Object.keys(changedValues(current, remote.storage ?? {})).length) {
       knownRevision = remote.revision ?? knownRevision;
-      lastSnapshot = localSnapshot();
+      lastSnapshot = current;
       return;
     }
     applyRemoteStorage(remote.storage);
     knownRevision = remote.revision ?? knownRevision;
     lastSnapshot = localSnapshot();
-    window.location.reload();
   } catch (error) {
     console.warn("RecordShelf 无法读取另一端的最新修改", error);
   }

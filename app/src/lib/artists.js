@@ -4,11 +4,15 @@ import {
   splitArtistCredits,
 } from "./music.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
+import {
+  ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
+  ARTIST_IDENTITY_STORAGE_KEY,
+} from "./sharedStorageKeys.js";
 
-export const ARTIST_IDENTITY_STORAGE_KEY =
-  "recordshelf-artist-identities-v1";
-export const ARTIST_IDENTITY_BACKUP_STORAGE_KEY =
-  "recordshelf-artist-identities-backups-v1";
+export {
+  ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
+  ARTIST_IDENTITY_STORAGE_KEY,
+};
 
 const MUSICBRAINZ_AUDIT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -52,7 +56,7 @@ function createLocalId(prefix = "artist") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function cleanName(value = "") {
+export function cleanName(value = "") {
   return String(value).normalize("NFKC").replace(/\s+/g, " ").trim();
 }
 
@@ -103,7 +107,7 @@ function sanitizeIdentity(identity) {
     })
     .slice(0, 12);
   return {
-    id: cleanName(identity?.id) || createLocalId(),
+    id: cleanName(identity?.id),
     canonicalName,
     sortName: cleanName(identity?.sortName) || canonicalName,
     musicBrainzMbid: cleanName(identity?.musicBrainzMbid),
@@ -160,7 +164,8 @@ export function saveArtistIdentityState(
   const sanitized = sanitizeArtistIdentityState(state);
   try {
     const serialized = JSON.stringify(sanitized);
-    if (storage?.getItem(ARTIST_IDENTITY_STORAGE_KEY) === serialized) {
+    const previousSerialized = storage?.getItem(ARTIST_IDENTITY_STORAGE_KEY);
+    if (previousSerialized === serialized) {
       return sanitized;
     }
     let backups = [];
@@ -177,6 +182,7 @@ export function saveArtistIdentityState(
           sanitizeArtistIdentityState(backups.at(-1).state),
         )
       : "";
+    let backupsChanged = false;
     if (serialized !== latestFingerprint) {
       backups.push({
         savedAt: new Date().toISOString(),
@@ -186,12 +192,16 @@ export function saveArtistIdentityState(
         ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
         JSON.stringify(backups.slice(-10)),
       );
+      backupsChanged = true;
     }
-    storage?.setItem(
-      ARTIST_IDENTITY_STORAGE_KEY,
-      serialized,
-    );
-    if (storage === globalThis.localStorage) {
+    const identityChanged = serialized !== previousSerialized;
+    if (identityChanged) {
+      storage?.setItem(ARTIST_IDENTITY_STORAGE_KEY, serialized);
+    }
+    if (
+      (identityChanged || backupsChanged) &&
+      storage === globalThis.localStorage
+    ) {
       notifySharedLocalStateChanged();
     }
   } catch (error) {

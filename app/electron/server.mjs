@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, get } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import worker from "../worker/index.js";
@@ -11,6 +11,10 @@ import {
   handleLocalCoverEnrichRequest,
   handlePrivateCoverStatic,
 } from "../scripts/private-covers-http.mjs";
+import {
+  handleAppleMotionArtworkRequest,
+  handleMotionArtworkFileRequest,
+} from "../scripts/apple-motion-artwork.mjs";
 
 const CLIENT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -63,15 +67,36 @@ async function handleApi(request, response, origin) {
 }
 
 async function existingRecordShelf(origin) {
-  try {
-    const response = await fetch(origin, {
-      headers: { accept: "text/html" },
-      signal: AbortSignal.timeout(1_500),
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const request = get(
+      origin,
+      { headers: { accept: "text/html" } },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          if (body.length < 256_000) body += chunk;
+        });
+        response.on("end", () => {
+          finish(
+            (response.statusCode ?? 500) < 400 &&
+              body.includes("<title>RecordShelf"),
+          );
+        });
+      },
+    );
+    request.setTimeout(1_500, () => {
+      request.destroy();
+      finish(false);
     });
-    return response.ok && (await response.text()).includes("<title>RecordShelf");
-  } catch {
-    return false;
-  }
+    request.on("error", () => finish(false));
+  });
 }
 
 function safeStaticPath(pathname) {
@@ -136,7 +161,7 @@ async function handleStatic(request, response) {
     .pipe(response);
 }
 
-export async function startRecordShelfServer(port = 4173) {
+export async function startRecordShelfServer(port = 4173, options = {}) {
   const origin = `http://127.0.0.1:${port}`;
   const server = createServer(async (request, response) => {
     try {
@@ -144,6 +169,12 @@ export async function startRecordShelfServer(port = 4173) {
         return;
       }
       if (await handleLocalCoverEnrichRequest(request, response)) {
+        return;
+      }
+      if (await handleAppleMotionArtworkRequest(request, response, options)) {
+        return;
+      }
+      if (await handleMotionArtworkFileRequest(request, response, options)) {
         return;
       }
       if (await handleListeningGuideRequest(request, response)) {

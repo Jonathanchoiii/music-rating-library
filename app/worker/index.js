@@ -35,7 +35,7 @@ async function resolveNeoDbUrl(sourceUrl, fetcher) {
   }
 }
 
-async function canonicalizeNeoDbUrls(request, env) {
+export async function canonicalizeNeoDbUrls(request, env) {
   let payload;
   try {
     payload = await request.json();

@@ -3,6 +3,7 @@ import {
   AppleLogo,
   ArrowSquareOut,
   CaretDown,
+  Plus,
   SpinnerGap,
 } from "@phosphor-icons/react";
 import { findConfirmedAppleMusicAlbum } from "../lib/appleMusicUrl.js";
@@ -270,35 +271,47 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
           <h3>专辑介绍</h3>
           {subtitle ? <p>{subtitle}</p> : null}
         </div>
-        {!editing && versions.length > 1 ? (
-          <label className="apple-editorial-versions">
-            <span className="sr-only">文案版本</span>
-            <select
-              value={
-                showingUser
-                  ? USER_ALBUM_INTRODUCTION_VERSION_ID
-                  : (selectedVersion?.id ?? "")
-              }
-              onChange={(event) => setSelectedVersionId(event.target.value)}
+        <div className="apple-editorial-header-actions">
+          {!editing && versions.length > 1 ? (
+            <label className="apple-editorial-versions">
+              <span className="sr-only">文案版本</span>
+              <select
+                value={
+                  showingUser
+                    ? USER_ALBUM_INTRODUCTION_VERSION_ID
+                    : (selectedVersion?.id ?? "")
+                }
+                onChange={(event) => setSelectedVersionId(event.target.value)}
+              >
+                {hasUserIntroduction ? (
+                  <option value={USER_ALBUM_INTRODUCTION_VERSION_ID}>
+                    专辑介绍
+                  </option>
+                ) : null}
+                {versionOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <CaretDown aria-hidden="true" />
+            </label>
+          ) : !editing && !showingUser && selectedVersion ? (
+            <span className="apple-editorial-single-version">
+              {editorialVersionLabel(selectedVersion, { locale, versions })}
+            </span>
+          ) : null}
+          {canEdit && !editing && !hasUserIntroduction ? (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={startEditing}
             >
-              {hasUserIntroduction ? (
-                <option value={USER_ALBUM_INTRODUCTION_VERSION_ID}>
-                  专辑介绍
-                </option>
-              ) : null}
-              {versionOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <CaretDown aria-hidden="true" />
-          </label>
-        ) : !editing && !showingUser && selectedVersion ? (
-          <span className="apple-editorial-single-version">
-            {editorialVersionLabel(selectedVersion, { locale, versions })}
-          </span>
-        ) : null}
+              <Plus aria-hidden="true" />
+              添加介绍
+            </button>
+          ) : null}
+        </div>
       </header>
 
       <div className="apple-editorial-body">
@@ -394,16 +407,17 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
           </p>
         ) : null}
 
-        {!editing && (canEdit || canScanMore || appleMusicUrl) ? (
+        {!editing &&
+        ((canEdit && hasUserIntroduction) || canScanMore || appleMusicUrl) ? (
           <div className="apple-editorial-footer">
             <div className="apple-editorial-footer-actions">
-              {canEdit ? (
+              {canEdit && hasUserIntroduction ? (
                 <button
                   type="button"
                   className="apple-editorial-muted-button"
                   onClick={startEditing}
                 >
-                  {hasUserIntroduction ? "编辑" : "添加介绍"}
+                  编辑
                 </button>
               ) : null}
               {canEdit && showingUser && hasUserIntroduction ? (

@@ -130,3 +130,25 @@ test("semantically equal JSON is not treated as a remote change", () => {
     false,
   );
 });
+
+test("equivalent JSON with a different key order is not a remote change", () => {
+  const userStateKey = "recordshelf-user-state-v2";
+  const localState = JSON.stringify({
+    userReleases: [],
+    removedReleaseIds: ["release-1"],
+  });
+  const remoteState = JSON.stringify({
+    removedReleaseIds: ["release-1"],
+    userReleases: [],
+  });
+
+  const result = reconcileSharedStateResponse(
+    { [userStateKey]: localState },
+    { [userStateKey]: localState },
+    { [userStateKey]: remoteState },
+  );
+
+  assert.equal(result.storage[userStateKey], localState);
+  assert.equal(result.appliedRemoteChanges, false);
+  assert.equal(result.hasPendingChanges, false);
+});

@@ -1330,6 +1330,13 @@ html.is-desktop-shell .desktop-sidebar {
   border-radius: inherit;
 }
 
+.release-motion-artwork {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .release-shelf-glare {
   position: absolute;
   inset: -20%;
@@ -2250,6 +2257,10 @@ html.is-desktop-shell .desktop-sidebar {
   color: var(--muted);
 }
 
+.duplicates-empty .secondary-button {
+  margin-top: 20px;
+}
+
 .drawer-backdrop,
 .modal-backdrop {
   position: fixed;
@@ -2297,6 +2308,7 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .detail-hero > img,
+.detail-hero > video,
 .detail-cover-placeholder {
   grid-column: 1;
   grid-row: 1;
@@ -2507,6 +2519,147 @@ html.is-desktop-shell .desktop-sidebar {
   color: var(--accent);
 }
 
+.motion-artwork-action {
+  min-height: 64px;
+  padding: 12px 0 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.motion-artwork-action > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.motion-artwork-action > div > svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  color: var(--muted-dark);
+}
+
+.motion-artwork-action > div > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.motion-artwork-action strong {
+  font-size: 13px;
+}
+
+.motion-artwork-action > div small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.motion-artwork-action .motion-artwork-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.motion-artwork-controls {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.motion-artwork-action .motion-artwork-upgrade {
+  min-height: 40px;
+  padding-inline: 12px;
+  white-space: nowrap;
+}
+
+.motion-artwork-toggle {
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.motion-artwork-toggle:hover,
+.motion-artwork-toggle:focus,
+.motion-artwork-toggle:focus-visible,
+.motion-artwork-toggle:active,
+.motion-artwork-toggle.is-active {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.motion-artwork-toggle:focus,
+.motion-artwork-toggle:focus-visible {
+  outline: none;
+}
+
+.motion-artwork-toggle:focus-visible .motion-artwork-switch {
+  outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  outline-offset: 3px;
+}
+
+.motion-artwork-toggle:active {
+  transform: translateY(1px);
+}
+
+.motion-artwork-switch {
+  width: 34px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  display: inline-flex;
+  align-items: center;
+  transition: background 180ms ease;
+}
+
+.motion-artwork-switch > span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(20, 18, 16, 0.2);
+  transform: translateX(0);
+  transition: transform 180ms ease;
+}
+
+.motion-artwork-toggle.is-active .motion-artwork-switch {
+  background: var(--accent);
+}
+
+.motion-artwork-toggle.is-active .motion-artwork-switch > span {
+  transform: translateX(14px);
+}
+
+.motion-artwork-action button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.motion-artwork-message {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .platform-link-editor {
   display: grid;
   gap: 7px;
@@ -2639,13 +2792,14 @@ html.is-desktop-shell .desktop-sidebar {
   margin-top: 4px;
   padding: 24px 0 22px;
   border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 
 .apple-editorial-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 20px;
 }
 
 .apple-editorial-header h3 {
@@ -2658,6 +2812,14 @@ html.is-desktop-shell .desktop-sidebar {
   margin: 5px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.apple-editorial-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 .apple-editorial-versions {
@@ -3120,15 +3282,12 @@ html.is-desktop-shell .desktop-sidebar {
 .listening-guide-article {
   max-width: 46em;
   margin-top: 26px;
+  display: grid;
+  gap: 28px;
 }
 
 .listening-guide-article > section {
-  padding: 0 0 22px;
-}
-
-.listening-guide-article > section + section {
-  padding-top: 22px;
-  border-top: 1px solid var(--line);
+  padding: 0;
 }
 
 .listening-guide-article h4 {
@@ -3258,6 +3417,7 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .listening-guide + .release-merge-panel {
+  margin-top: 4px;
   border-top: 0;
 }
 
@@ -4084,6 +4244,10 @@ button.settings-entry:disabled {
   color: var(--muted-dark);
   font-size: 13px;
   line-height: 1.65;
+}
+
+.artist-manager-overview {
+  min-width: 0;
 }
 
 .artist-identity-audit {
@@ -5320,6 +5484,108 @@ button.settings-entry:disabled {
   }
 }
 
+@media (max-width: 750px) {
+  .release-shelf-view {
+    --mobile-shelf-size: min(42vw, 360px);
+    --mobile-shelf-step: 74px;
+  }
+
+  .release-shelf-stream {
+    gap: 0;
+  }
+
+  .release-shelf {
+    min-height: 0;
+    padding: 0;
+  }
+
+  .release-shelf:has(.release-shelf-record:hover),
+  .release-shelf:has(.release-shelf-cover-button:focus-visible) {
+    z-index: 30;
+  }
+
+  .release-shelf + .release-shelf {
+    margin-top: calc(
+      var(--mobile-shelf-step) - var(--mobile-shelf-size) - 10px
+    );
+  }
+
+  .release-shelf-index,
+  .release-shelf-board {
+    display: none;
+  }
+
+  .release-shelf-row {
+    display: flex;
+    height: auto;
+    padding-bottom: 10px;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .release-shelf-record {
+    position: relative;
+    z-index: calc(var(--shelf-slot) + 1);
+    width: var(--mobile-shelf-size);
+    min-width: 0;
+    max-width: none;
+    margin-top: calc(var(--mobile-shelf-step) - var(--mobile-shelf-size));
+    transform: scale(0.86);
+    transform-origin: center;
+    transition:
+      margin 360ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .release-shelf-record:first-child {
+    margin-top: 0;
+  }
+
+  .release-shelf-record:hover,
+  .release-shelf-record:has(.release-shelf-cover-button:focus-visible) {
+    z-index: 20;
+    transform: scale(1.045);
+  }
+
+  .release-shelf-record:hover::before,
+  .release-shelf-record:has(
+      .release-shelf-cover-button:focus-visible
+    )::before {
+    position: absolute;
+    z-index: -1;
+    inset: -20px;
+    border-radius: 14px;
+    background: var(--bg);
+    content: "";
+  }
+
+  .release-shelf-caption {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    min-height: 100%;
+    padding: 45% 16px 14px;
+    align-items: end;
+    align-content: end;
+    border-radius: clamp(3px, 0.45vw, 7px);
+    background: linear-gradient(
+      180deg,
+      transparent 42%,
+      rgba(0, 0, 0, 0.78) 100%
+    );
+    pointer-events: none;
+  }
+
+  .release-shelf-caption strong,
+  .release-shelf-caption small {
+    color: white;
+  }
+
+  .release-shelf-caption em {
+    color: #ffd16b;
+  }
+}
+
 @media (max-width: 1050px) {
   .desktop-sidebar {
     display: none;
@@ -5567,101 +5833,6 @@ button.settings-entry:disabled {
     align-self: center;
   }
 
-  .release-shelf-stream {
-    gap: 0;
-  }
-
-  .release-shelf {
-    min-height: 0;
-    padding: 0;
-  }
-
-  .release-shelf:has(.release-shelf-record:hover),
-  .release-shelf:has(.release-shelf-cover-button:focus-visible) {
-    z-index: 30;
-  }
-
-  .release-shelf + .release-shelf {
-    margin-top: calc(
-      var(--mobile-shelf-step) - var(--mobile-shelf-size) - 10px
-    );
-  }
-
-  .release-shelf-index,
-  .release-shelf-board {
-    display: none;
-  }
-
-  .release-shelf-row {
-    display: flex;
-    height: auto;
-    padding-bottom: 10px;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .release-shelf-record {
-    position: relative;
-    z-index: calc(var(--shelf-slot) + 1);
-    width: var(--mobile-shelf-size);
-    min-width: 0;
-    max-width: none;
-    margin-top: calc(var(--mobile-shelf-step) - var(--mobile-shelf-size));
-    transform: scale(0.86);
-    transform-origin: center;
-    transition:
-      margin 360ms cubic-bezier(0.22, 1, 0.36, 1),
-      transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .release-shelf-record:first-child {
-    margin-top: 0;
-  }
-
-  .release-shelf-record:hover,
-  .release-shelf-record:has(.release-shelf-cover-button:focus-visible) {
-    z-index: 20;
-    transform: scale(1.045);
-  }
-
-  .release-shelf-record:hover::before,
-  .release-shelf-record:has(
-      .release-shelf-cover-button:focus-visible
-    )::before {
-    position: absolute;
-    z-index: -1;
-    inset: -20px;
-    border-radius: 14px;
-    background: var(--bg);
-    content: "";
-  }
-
-  .release-shelf-caption {
-    position: absolute;
-    inset: 0;
-    width: auto;
-    min-height: 100%;
-    padding: 45% 16px 14px;
-    align-items: end;
-    align-content: end;
-    border-radius: clamp(3px, 0.45vw, 7px);
-    background: linear-gradient(
-      180deg,
-      transparent 42%,
-      rgba(0, 0, 0, 0.78) 100%
-    );
-    pointer-events: none;
-  }
-
-  .release-shelf-caption strong,
-  .release-shelf-caption small {
-    color: white;
-  }
-
-  .release-shelf-caption em {
-    color: #ffd16b;
-  }
-
   .wall-overlay {
     display: none;
   }
@@ -5819,6 +5990,7 @@ button.settings-entry:disabled {
   }
 
   .detail-hero > img,
+  .detail-hero > video,
   .detail-cover-placeholder {
     grid-column: 1;
     grid-row: 1;
@@ -5856,6 +6028,10 @@ button.settings-entry:disabled {
     margin-top: 10px;
     gap: 6px 14px;
     font-size: 11px;
+  }
+
+  .motion-artwork-toggle {
+    min-height: 44px;
   }
 
   .detail-type-editor {
@@ -5907,24 +6083,45 @@ button.settings-entry:disabled {
   }
 
   .apple-editorial-header {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 12px;
+    align-items: center;
   }
 
   .apple-editorial-header h3 {
     font-size: 19px;
   }
 
+  .apple-editorial-header-actions {
+    gap: 8px;
+  }
+
+  .apple-editorial-header .secondary-button {
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+    line-height: 0;
+  }
+
+  .apple-editorial-header .secondary-button svg {
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    display: block;
+    flex: none;
+  }
+
   .apple-editorial-versions select {
-    width: 100%;
+    width: min(100%, 180px);
     max-width: none;
     min-height: 44px;
   }
 
   .apple-editorial-single-version {
     padding-top: 0;
-    text-align: left;
+    text-align: right;
   }
 
   .apple-editorial-footer .apple-editorial-muted-button,
@@ -6136,24 +6333,30 @@ button.settings-entry:disabled {
 
   .artist-manager-layout {
     min-height: 0;
-    grid-template-columns: 1fr;
-    gap: 18px;
+    display: block;
+    overflow: visible;
+  }
+
+  .artist-manager-overview.is-mobile-hidden,
+  .artist-manager-layout.is-mobile-list .artist-identity-editor,
+  .artist-manager-layout.is-mobile-detail .artist-identity-list {
+    display: none;
   }
 
   .artist-identity-list {
-    padding: 0 0 14px;
+    padding: 0;
     border-right: 0;
-    border-bottom: 1px solid var(--line);
   }
 
   .artist-identity-scroll {
     max-height: none;
     min-height: auto;
-    margin-top: 8px;
-    display: flex;
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     flex: none;
-    gap: 6px;
-    overflow-x: auto;
+    gap: 8px;
+    overflow: visible;
   }
 
   .artist-identity-editor {
@@ -6162,7 +6365,16 @@ button.settings-entry:disabled {
   }
 
   .artist-identity-scroll > button {
-    flex: 0 0 150px;
+    width: 100%;
+    min-height: 72px;
+    padding: 11px 12px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    align-items: flex-start;
+  }
+
+  .artist-identity-scroll > button:active {
+    transform: scale(0.98);
   }
 
   .artist-fields {

@@ -70,6 +70,33 @@ test("shared state persists only approved local keys", async (context) => {
   assert.deepEqual(onDisk, state);
 });
 
+test("equivalent JSON with a different key order does not bump the shared revision", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const key = "recordshelf-user-state-v2";
+  const firstValue = JSON.stringify({
+    userReleases: [],
+    removedReleaseIds: ["release-1"],
+  });
+  const reorderedValue = JSON.stringify({
+    removedReleaseIds: ["release-1"],
+    userReleases: [],
+  });
+
+  const first = await applySharedStateChanges(
+    { [key]: firstValue },
+    statePath,
+  );
+  const second = await applySharedStateChanges(
+    { [key]: reorderedValue },
+    statePath,
+    { baseStorage: { [key]: firstValue } },
+  );
+
+  assert.equal(second.revision, first.revision);
+  assert.equal(second.storage[key], firstValue);
+});
+
 test("NeoDB CSV snapshots are private, retained locally, and content-addressed", async (context) => {
   const { directory, statePath } = await temporaryStatePath();
   context.after(() => fs.rm(directory, { recursive: true, force: true }));
