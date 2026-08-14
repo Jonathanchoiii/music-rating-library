@@ -42,7 +42,7 @@ function productLocale() {
 
 function sectionSubtitle({ editing, showingUser, hasOfficialVersion }) {
   if (editing) return "保存在本机音乐库，不会覆盖 Apple Music 官方原文。";
-  if (showingUser) return "你添加的介绍，保存在本机音乐库。";
+  if (showingUser) return "保存在本机音乐库。";
   if (hasOfficialVersion) return "Apple Music 官方编辑介绍，不改写原文。";
   return "可以自己写，也可以在配置令牌后读取 Apple Music 官方介绍。";
 }
@@ -236,15 +236,10 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
   const scan = state.result?.scan;
   const canScanMore = Boolean(album) && scan?.mode === "quick";
   const canEdit = typeof onSaveIntroduction === "function";
-  const versionOptions = [
-    ...(hasUserIntroduction
-      ? [{ id: USER_ALBUM_INTRODUCTION_VERSION_ID, label: "我写的" }]
-      : []),
-    ...versions.map((version) => ({
-      id: version.id,
-      label: editorialVersionLabel(version, { locale, versions }),
-    })),
-  ];
+  const versionOptions = versions.map((version) => ({
+    id: version.id,
+    label: editorialVersionLabel(version, { locale, versions }),
+  }));
   const showOfficialError =
     Boolean(album) &&
     !editing &&
@@ -276,7 +271,7 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
             })}
           </p>
         </div>
-        {!editing && versionOptions.length > 1 ? (
+        {!editing && versions.length > 1 ? (
           <label className="apple-editorial-versions">
             <span className="sr-only">文案版本</span>
             <select
@@ -287,6 +282,11 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
               }
               onChange={(event) => setSelectedVersionId(event.target.value)}
             >
+              {hasUserIntroduction ? (
+                <option value={USER_ALBUM_INTRODUCTION_VERSION_ID}>
+                  专辑介绍
+                </option>
+              ) : null}
               {versionOptions.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
@@ -295,7 +295,7 @@ export function AppleMusicEditorialNotes({ release, onSaveIntroduction }) {
             </select>
             <CaretDown aria-hidden="true" />
           </label>
-        ) : !editing && selectedVersion ? (
+        ) : !editing && !showingUser && selectedVersion ? (
           <span className="apple-editorial-single-version">
             {editorialVersionLabel(selectedVersion, { locale, versions })}
           </span>
