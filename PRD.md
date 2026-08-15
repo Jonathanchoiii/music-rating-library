@@ -2946,7 +2946,7 @@ NeoDB 官方批量收藏接口核对全部已知条目的当前内容指纹；�
 | NeoDB 原地改分与资料回填 | 对照最新 Listening Entry；同 `created_time` 改分追加更新戳；长评纳入指纹；目录日期与缺失 Apple/Spotify 精确外链可回填 | FR-023、FR-026、FR-030、10.11、AC-020A～020B |
 | Apple Music 动态封面 | 仅单张用户点击；保留 storefront；本机 WebP；Mac 用 Chromium 网络栈下载 HLS | 24 |
 | 外部平台评分 | 与个人评分分离；单张按需刷新；多豆瓣取评分人数最多；手动豆瓣优先；AOTY/Metacritic/Record Club 可取分，RYM 暂仅链接 | 25 |
-| 精确曲目列表 | 专辑介绍之后、收听时间之前；优先确认的 Apple Music；无 Apple 身份或 Apple lookup 无可用曲目时回退确认的 Spotify | 26 |
+| 精确曲目列表 | 专辑介绍之后、收听时间之前；只读确认的 Apple Music；链接地区或美国无曲目时改查其他国家，写入第一个精确匹配 | 26 |
 
 ### 22.2 当前前端数据基线
 
@@ -3158,26 +3158,26 @@ AI 服务由“设置 → AI 聆听指南”单独管理。首期支持可信提
 ### 26.1 范围与位置
 
 - 详情页在“专辑介绍”之后、“收听时间”之前增加“曲目列表”；首版只展示曲序、发行时的原始曲目标题和时长，不加入单曲评分、制作名单、歌词或播放控制；
-- 没有已确认精确目录身份时不展示空模块。存在精确 Apple Music 或精确 Spotify 专辑链接但尚未读取时，提供当前单张的“获取曲目列表”按钮；已有数据时同一按钮用于用户主动更新；
-- 不在打开详情、应用启动、NeoDB 同步或全库加载时自动请求，也不提供全库批量入口。
+- 没有已确认精确目录身份时不展示空模块。存在精确 Apple Music 专辑链接但尚未读取时，提供当前单张的“获取曲目列表”按钮；已有数据时同一按钮用于用户主动更新；
+- 不在打开详情、应用启动、NeoDB 同步或全库加载时自动请求，也不提供全库批量入口。曲目列表不从 Spotify 读取。
 
 ### 26.2 精确匹配
 
-- 优先使用状态为 `CONFIRMED` / `AUTO_CONFIRMED` 且包含明确数字专辑 ID 的 Apple Music 专辑 URL。带地区的 URL 同时解析 storefront；历史数据中的 `https://music.apple.com/album/{数字ID}` 也属于精确 ID 证据，但请求时省略未知地区，不得猜测 storefront；
+- 只接受状态为 `CONFIRMED` / `AUTO_CONFIRMED` 且包含明确数字专辑 ID 的 Apple Music 专辑 URL。带地区的 URL 先按该 storefront lookup；历史数据中的 `https://music.apple.com/album/{数字ID}` 也属于精确 ID 证据，lookup 从 `us` 开始；
 - 使用 Apple 的 ID lookup 请求该专辑下的 song 实体；写入前逐条要求 `collectionId` 与链接中的专辑 ID 完全一致，同时要求有效曲目 ID、正整数曲序、非空标题和非负时长；
-- 没有可用的精确 Apple Music 专辑身份，或已确认的 Apple Music 链接 lookup 后得不到可写入曲目（空结果、只有专辑壳、曲目 `collectionId` 与专辑 ID 不一致）时，回退到已确认的 Spotify 专辑 URL（`open.spotify.com/.../album/{22位ID}`），经 Spotify Web API Client Credentials 读取该专辑曲目；凭证来自本机 `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` 或 Application Support 私人文件，默认 `market=hk`。Apple 上游超时/5xx 不改走 Spotify，以免用另一平台填补暂时故障。
+- 当前 storefront 返回空结果、只有专辑壳、或没有任何 `collectionId` 一致的 song 时，按固定顺序改查其他国家（`us`、`gb`、`hk`、`tw`、`jp`、`cn` 等），写入**第一个**通过精确校验的结果，并记录实际命中的 storefront；不得按标题搜索，也不得改走 Spotify；
 - 只按 `discNumber`、`trackNumber` 排序；多碟发行以“碟号.曲序”显示。错误版本、其他 collection、缺字段、重复行和非 song 资源全部丢弃；
-- 不按标题、艺人或封面模糊匹配。没有任何通过精确校验的曲目时留空并说明无法确认，不写入猜测结果。
+- 所有尝试的 storefront 都没有通过精确校验的曲目时留空并说明无法确认，不写入猜测结果。
 
 ### 26.3 数据与隐私
 
-- 成功结果保存为 Release 的 `tracklist` 元数据，包含来源平台、专辑 ID、storefront（Apple）、来源 URL、检查时间、曲目数量，以及每首曲目的稳定 ID、碟号、曲序、标题和毫秒时长；
+- 成功结果保存为 Release 的 `tracklist` 元数据，包含来源平台、专辑 ID、实际命中的 storefront、来源 URL、检查时间、曲目数量，以及每首曲目的稳定 ID、碟号、曲序、标题和毫秒时长；
 - `tracklist` 写入 Web 4173 与 Mac 共用的本地发行增量，进入私人音乐库备份，不进入公开演示数据或 Git；
-- 请求只向 Apple / Spotify 发送公开专辑 ID（及必要的 storefront / market），不得发送用户评分、评论、听过时间、收藏状态、艺人映射或其他私人字段。
+- 请求只向 Apple 发送公开专辑 ID 与 storefront，不得发送用户评分、评论、听过时间、收藏状态、艺人映射或其他私人字段。
 
 ### 26.4 验收标准
 
-1. 精确 Apple Music 链接可返回曲目时，详情按顺序显示标题与 `m:ss`；多碟顺序稳定且时长不足一小时不显示小时位；无 Apple、或 Apple lookup 无可用曲目结构但有精确 Spotify 链接且本机已配置凭证时，写入并展示 Spotify 曲目；
+1. 精确 Apple Music 链接在链接地区或美国可返回曲目时，详情按顺序显示标题与 `m:ss`；该地区无曲目而其他国家同一专辑 ID 有精确曲目时，写入第一个命中国家的列表；多碟顺序稳定且时长不足一小时不显示小时位；
 2. 同一 Release 在网页和 Mac 客户端读取同一份已保存曲目表，重新打开详情不需要再次请求；
-3. 未确认链接、版本不匹配、接口失败或资料为空时不写入曲目，也不以搜索结果或模型内容补齐；
+3. 未确认链接、所有 storefront 版本不匹配、接口失败或资料为空时不写入曲目，也不以 Spotify、搜索结果或模型内容补齐；
 4. 用户点击更新只刷新当前发行，失败时保留上一份成功曲目表。
