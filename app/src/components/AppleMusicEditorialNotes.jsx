@@ -275,6 +275,10 @@ export function AppleMusicEditorialNotes({
     !showLoading &&
     !showOfficialError &&
     fallbackGenres.length > 0;
+  const showGenresAboveBody =
+    !editing &&
+    fallbackGenres.length > 0 &&
+    (showingUser || Boolean(selectedVersion) || showGenreFallback);
   const subtitle = sectionSubtitle({
     editing,
     showingUser,
@@ -389,13 +393,13 @@ export function AppleMusicEditorialNotes({
           </p>
         ) : null}
 
-        {showOfficialEmpty && !showGenreFallback ? (
+        {showOfficialEmpty && !showGenresAboveBody ? (
           <p className="apple-editorial-status">
             这张专辑暂未发现 Apple Music 官方介绍。
           </p>
         ) : null}
 
-        {showGenreFallback ? (
+        {showGenresAboveBody ? (
           <div className="genre-row apple-editorial-genre-fallback" aria-label="专辑流派">
             {fallbackGenres.map((genre) => (
               <span key={genre}>{genre}</span>
@@ -407,7 +411,7 @@ export function AppleMusicEditorialNotes({
         !showingUser &&
         !album &&
         !hasUserIntroduction &&
-        !showGenreFallback ? (
+        !showGenresAboveBody ? (
           <p className="apple-editorial-status">还没有介绍。</p>
         ) : null}
 

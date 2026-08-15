@@ -5,6 +5,7 @@ import {
   normalizeExternalReleaseType,
   normalizeSupportedReleaseUrl,
   normalizeText,
+  sortListeningEntriesNewestFirst,
 } from "./music.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
 import {
@@ -54,6 +55,7 @@ const METADATA_FIELDS = [
   "releaseType",
   "releaseDate",
   "releaseDatePrecision",
+  "releaseDateCheckedAt",
   "genres",
   "styles",
   "catalogLanguages",
@@ -89,6 +91,7 @@ const METADATA_FIELDS = [
   "neodbPlatformLinksCheckedAt",
   "albumIntroduction",
   "externalRatings",
+  "tracklist",
 ];
 
 function stableHash(value) {
@@ -720,6 +723,13 @@ function combinedComment(mark, review) {
     .join("\n\n") || null;
 }
 
+export function neoDbReviewHash(review = null) {
+  const body = typeof review?.body === "string" ? review.body.trim() : "";
+  const title = typeof review?.title === "string" ? review.title.trim() : "";
+  if (!body && !title) return "";
+  return jsonHash({ title, body });
+}
+
 export function neoDbMarkToEntry(mark, review = null, suffix = "") {
   const sourceItemId = mark.item.uuid;
   const createdAt = mark.created_time;
@@ -767,6 +777,22 @@ function markLogToEntry(mark, log) {
   };
 }
 
+function releaseDateFromItem(item = {}) {
+  const raw =
+    item.release_date ||
+    item.releaseDate ||
+    (Number.isInteger(item.release_year) ? String(item.release_year) : "") ||
+    (Number.isInteger(item.year) ? String(item.year) : "");
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    return { releaseDate: null, releaseDatePrecision: "UNKNOWN" };
+  }
+  return {
+    releaseDate: value,
+    releaseDatePrecision: getDatePrecision(value),
+  };
+}
+
 export function neoDbMarkToRelease(mark, review = null, logs = []) {
   const item = mark.item;
   const translatedTitle = translatedTitleFromItem(item);
@@ -775,6 +801,7 @@ export function neoDbMarkToRelease(mark, review = null, logs = []) {
   const historicalEntries = logs
     .map((log) => markLogToEntry(mark, log))
     .filter((entry) => !entriesAreEquivalent(entry, currentEntry));
+  const releaseDateFields = releaseDateFromItem(item);
   return {
     id: `release-neodb-sync-${item.uuid}`,
     title: item.title,
@@ -791,8 +818,8 @@ export function neoDbMarkToRelease(mark, review = null, logs = []) {
     releaseTypeMatchedFrom: catalogUrlFromItem(item) ?? item.url,
     releaseTypeMatchedAt: null,
     neodbSourceType: item.type ?? null,
-    releaseDate: null,
-    releaseDatePrecision: "UNKNOWN",
+    ...releaseDateFields,
+    releaseDateCheckedAt: new Date().toISOString(),
     genres: [],
     coverUrl: item.cover_image_url ?? null,
     isPrivate: mark.visibility === 2,
@@ -1155,13 +1182,68 @@ function entriesAreEquivalent(a, b) {
 }
 
 export function dedupeEquivalentListeningEntries(entries = []) {
-  const seen = new Set();
-  return entries.filter((entry) => {
+  const preferredByKey = new Map();
+  for (const entry of entries) {
     const key = JSON.stringify(comparableEntry(entry));
-    if (seen.has(key)) return false;
+    const current = preferredByKey.get(key);
+    if (!current) {
+      preferredByKey.set(key, entry);
+      continue;
+    }
+    const currentStamp = Date.parse(
+      current.updatedAt ?? current.createdAt ?? current.ratedAt ?? 0,
+    );
+    const nextStamp = Date.parse(
+      entry.updatedAt ?? entry.createdAt ?? entry.ratedAt ?? 0,
+    );
+    if (
+      nextStamp > currentStamp ||
+      (nextStamp === currentStamp && Boolean(entry.updatedAt) && !current.updatedAt)
+    ) {
+      preferredByKey.set(key, entry);
+    }
+  }
+  const seen = new Set();
+  const deduped = [];
+  for (const entry of entries) {
+    const key = JSON.stringify(comparableEntry(entry));
+    if (seen.has(key)) continue;
     seen.add(key);
-    return true;
+    deduped.push(preferredByKey.get(key));
+  }
+  return deduped;
+}
+
+function latestNeoDbListeningEntry(release, sourceItemId) {
+  if (!release || !sourceItemId) return null;
+  const entries = (release.listeningEntries ?? []).filter((entry) => {
+    if (entry.source !== "NEODB") return false;
+    const entrySourceId =
+      entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl);
+    return entrySourceId === sourceItemId;
   });
+  if (!entries.length) return null;
+  return sortListeningEntriesNewestFirst(entries)[0];
+}
+
+function localNeoDbNeedsMarkRefresh(release, mark) {
+  const latest = latestNeoDbListeningEntry(release, mark.item?.uuid);
+  if (!latest) return Boolean(release);
+  if ((latest.rating10 ?? null) !== (mark.rating_grade ?? null)) return true;
+  if ((latest.markStatus ?? null) !== (mark.shelf_type ?? null)) return true;
+  if (
+    !String(release.releaseDate ?? "").trim() &&
+    !release.releaseDateCheckedAt
+  ) {
+    return true;
+  }
+  const remoteComment = String(mark.comment_text ?? "").trim();
+  const localComment = String(latest.comment ?? "").trim();
+  if (!remoteComment) return false;
+  return (
+    localComment !== remoteComment &&
+    !localComment.startsWith(`${remoteComment}\n`)
+  );
 }
 
 function mergeExternalLinks(existing = [], incoming = []) {
@@ -1271,6 +1353,14 @@ function metadataPatch(existing, incoming) {
   ) {
     patch.releaseType = incoming.releaseType;
   }
+  if (!String(existing.releaseDate ?? "").trim() && incoming.releaseDate) {
+    patch.releaseDate = incoming.releaseDate;
+    patch.releaseDatePrecision =
+      incoming.releaseDatePrecision ?? getDatePrecision(incoming.releaseDate);
+  }
+  if (incoming.releaseDateCheckedAt) {
+    patch.releaseDateCheckedAt = incoming.releaseDateCheckedAt;
+  }
   return patch;
 }
 
@@ -1308,25 +1398,38 @@ export function buildNeoDbSyncPlan(
     }
 
     const currentEntry = incoming.listeningEntries.at(-1);
-    const entryExists = existing.listeningEntries.some((entry) =>
-      entriesAreEquivalent(entry, currentEntry),
+    const latestLocalNeoDb = latestNeoDbListeningEntry(
+      existing,
+      mark.item.uuid,
     );
-    const newEntries = incoming.listeningEntries.filter(
-      (entry) =>
-        !existing.listeningEntries.some(
-          (current) =>
-            current.id === entry.id || entriesAreEquivalent(current, entry),
-        ),
-    );
+    const latestMatchesRemote =
+      latestLocalNeoDb && entriesAreEquivalent(latestLocalNeoDb, currentEntry);
+    // Always refresh the current remote mark when the latest local NeoDB copy
+    // drifted, even if an older historical row already matches the remote body.
+    const entriesToMerge = incoming.listeningEntries.filter((entry) => {
+      if (entry === currentEntry) return !latestMatchesRemote;
+      return !existing.listeningEntries.some(
+        (current) =>
+          current.id === entry.id || entriesAreEquivalent(current, entry),
+      );
+    });
     const patch = metadataPatch(existing, incoming);
     const changedMetadataFields = metadataChangedFields(existing, patch);
-    if (!entryExists || newEntries.length || metadataChanged(existing, patch)) {
+    if (
+      !latestMatchesRemote ||
+      entriesToMerge.length ||
+      metadataChanged(existing, patch)
+    ) {
+      const syncedAt = new Date().toISOString();
       updates.push({
         sourceItemId: mark.item.uuid,
         releaseId: existing.id,
         title: existing.title,
         patch,
-        entries: newEntries,
+        entries: entriesToMerge.map((entry) => ({
+          ...entry,
+          updatedAt: entry.updatedAt ?? syncedAt,
+        })),
         changedMetadataFields,
         typeVerificationRelevant:
           existing.releaseType === "OTHER" ||
@@ -1381,7 +1484,7 @@ export function applyNeoDbSyncPlan(
           ...update.patch,
           listeningEntries: dedupeEquivalentListeningEntries([
             ...release.listeningEntries,
-            ...update.entries,
+            ...(update.entries ?? []),
           ]),
         }
       : release;
@@ -1821,8 +1924,12 @@ export async function pullNeoDbDelta(
   }
   const fetchedMarks = [...fetchedMarkMap.values()];
   const previousSnapshot = previousState.snapshot ?? {};
+  const previousReviewSnapshot = previousState.reviewSnapshot ?? {};
   const snapshot = shouldReconcile ? {} : { ...previousSnapshot };
+  const reviewSnapshot = shouldReconcile ? {} : { ...previousReviewSnapshot };
   const changedMarks = [];
+  const changedMarkIds = new Set();
+  const pendingSnapshotHashes = new Map();
   for (const mark of fetchedMarks) {
     const hash = neoDbMarkHash(mark);
     const needsLinkAttach =
@@ -1832,25 +1939,66 @@ export async function pullNeoDbDelta(
     const missingLocally =
       !localSourceIds.has(mark.item.uuid) &&
       !identitySourceIds.has(mark.item.uuid);
+    const localRelease = findReleaseByNeoDbId(releases, mark.item.uuid);
+    const localOutOfDate =
+      Boolean(localRelease) && localNeoDbNeedsMarkRefresh(localRelease, mark);
     if (
       forceFull ||
       previousSnapshot[mark.item.uuid] !== hash ||
       needsLinkAttach ||
-      missingLocally
+      missingLocally ||
+      localOutOfDate
     ) {
       changedMarks.push(mark);
+      changedMarkIds.add(mark.item.uuid);
+      pendingSnapshotHashes.set(mark.item.uuid, hash);
+    } else {
+      snapshot[mark.item.uuid] = hash;
     }
-    snapshot[mark.item.uuid] = hash;
+  }
+  const reviewCheckMarks = fetchedMarks.filter(
+    (mark) =>
+      mark?.item?.uuid &&
+      !changedMarkIds.has(mark.item.uuid) &&
+      (localSourceIds.has(mark.item.uuid) ||
+        identitySourceIds.has(mark.item.uuid) ||
+        orphanLinkedSourceIds.has(mark.item.uuid)),
+  );
+  const reviewChecks = await mapWithConcurrency(
+    reviewCheckMarks,
+    5,
+    async (mark) => {
+      const review = await fetchNeoDb(
+        `/api/me/review/item/${encodeURIComponent(mark.item.uuid)}`,
+        token,
+        { allow404: true },
+      );
+      return { mark, review };
+    },
+  );
+  for (const { mark, review } of reviewChecks) {
+    const reviewHash = neoDbReviewHash(review);
+    if (
+      forceFull ||
+      previousReviewSnapshot[mark.item.uuid] !== reviewHash
+    ) {
+      changedMarks.push(mark);
+      changedMarkIds.add(mark.item.uuid);
+    }
+    reviewSnapshot[mark.item.uuid] = reviewHash;
   }
   const enrichedMarks = await mapWithConcurrency(
     changedMarks,
     5,
-    (mark) =>
-      enrichChangedMark(
+    async (mark) => {
+      const enriched = await enrichChangedMark(
         mark,
         token,
         !localSourceIds.has(mark.item.uuid),
-      ),
+      );
+      reviewSnapshot[mark.item.uuid] = neoDbReviewHash(enriched.review);
+      return enriched;
+    },
   );
 
   const remoteIds = shouldReconcile
@@ -1866,6 +2014,7 @@ export async function pullNeoDbDelta(
     schemaVersion: SYNC_SCHEMA_VERSION,
     profile,
     snapshot,
+    reviewSnapshot,
     remoteCount,
     auditCursor: auditCandidateCount
       ? ((previousState.auditCursor ?? 0) + 1) %
@@ -1881,6 +2030,17 @@ export async function pullNeoDbDelta(
     enrichedMarks,
     removedSourceIds,
   );
+  const resolvedSourceIds = new Set([
+    ...plan.unchanged,
+    ...plan.updates.map((item) => item.sourceItemId),
+    ...plan.additions.map((item) => item.sourceItemId),
+  ]);
+  for (const mark of changedMarks) {
+    const sourceItemId = mark.item?.uuid;
+    if (!sourceItemId || !resolvedSourceIds.has(sourceItemId)) continue;
+    snapshot[sourceItemId] =
+      pendingSnapshotHashes.get(sourceItemId) ?? neoDbMarkHash(mark);
+  }
   return {
     plan,
     nextState,

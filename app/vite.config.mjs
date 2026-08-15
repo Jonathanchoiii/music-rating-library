@@ -19,6 +19,7 @@ import {
   handleMotionArtworkFileRequest,
 } from "./scripts/apple-motion-artwork.mjs";
 import { handleExternalRatingsRequest } from "./external-ratings/index.mjs";
+import { handleTracklistRequest } from "./tracklists/index.mjs";
 
 const VIRTUAL_LIBRARY_ID = "virtual:recordshelf-library";
 const RESOLVED_VIRTUAL_LIBRARY_ID = `\0${VIRTUAL_LIBRARY_ID}`;
@@ -91,6 +92,7 @@ function localMetadataApi() {
         if (await handleAppleMotionArtworkRequest(request, response)) return;
         if (await handleMotionArtworkFileRequest(request, response)) return;
         if (await handleExternalRatingsRequest(request, response)) return;
+        if (await handleTracklistRequest(request, response)) return;
         if (await handleListeningGuideRequest(request, response)) return;
         if (await handleAppleMusicEditorialRequest(request, response)) return;
         if (await handleSharedStateRequest(request, response)) return;

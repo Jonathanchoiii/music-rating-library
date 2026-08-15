@@ -115,12 +115,73 @@ test("平台评分只接受 NeoDB 精确外链及匹配的豆瓣条目", async (
   assert.equal(result.sources[0].matchedVia, "NEODB_EXTERNAL_RESOURCE");
 });
 
+test("多个匹配的豆瓣候选取评分人数最多的作为专辑得分", async () => {
+  const fewerVotesHtml = `
+    <meta property="og:title" content="安和桥北" />
+    <meta property="music:musician" content="宋冬野" />
+    <span class="pl">发行时间:</span>&nbsp;2013-08-26<br />
+    <strong class="ll rating_num" property="v:average">9.2</strong>
+    <span property="v:votes">120</span>人评价
+  `;
+  const moreVotesHtml = `
+    <meta property="og:title" content="安和桥北" />
+    <meta property="music:musician" content="宋冬野" />
+    <span class="pl">发行时间:</span>&nbsp;2013<br />
+    <strong class="ll rating_num" property="v:average">8.5</strong>
+    <span property="v:votes">56,775</span>人评价
+  `;
+  const fetchImpl = async (url) => {
+    const target = String(url);
+    if (target.includes("/api/album/abc123")) {
+      return new Response(
+        JSON.stringify({
+          external_resources: [
+            { url: "https://music.douban.com/subject/11111111/" },
+            { url: "https://music.douban.com/subject/25709562/" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (target.includes("/subject/11111111/")) {
+      return Object.defineProperty(new Response(fewerVotesHtml, { status: 200 }), "url", {
+        value: "https://music.douban.com/subject/11111111/",
+      });
+    }
+    return Object.defineProperty(new Response(moreVotesHtml, { status: 200 }), "url", {
+      value: "https://music.douban.com/subject/25709562/",
+    });
+  };
+  const result = await refreshExternalRatings(
+    {
+      id: "release-douban-votes",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      releaseDate: "2013-08-26",
+      externalLinks: [
+        {
+          provider: "NEODB",
+          status: "CONFIRMED",
+          url: "https://neodb.social/album/abc123",
+        },
+      ],
+    },
+    { fetchImpl },
+  );
+  assert.equal(result.status, "SUCCESS");
+  assert.equal(result.sources[0].provider, "DOUBAN");
+  assert.equal(result.sources[0].score, 8.5);
+  assert.equal(result.sources[0].ratingCount, 56775);
+  assert.equal(result.sources[0].url, "https://music.douban.com/subject/25709562/");
+});
+
 test("平台评分属于可持久化的发行元数据", () => {
   assert.ok(getReleaseMetadataFields().includes("externalRatings"));
 });
 
 test("手动评分链接只接受指定平台的 HTTPS 专辑页", () => {
   const links = normalizeExternalRatingLinks([
+    { url: "https://music.douban.com/subject/25709562/?from=subject_search" },
     { url: "https://www.albumoftheyear.org/album/123-example.php?x=1" },
     { url: "https://rateyourmusic.com/release/album/artist/title/" },
     { url: "https://www.metacritic.com/music/renaissance/beyonce" },
@@ -129,17 +190,99 @@ test("手动评分链接只接受指定平台的 HTTPS 专辑页", () => {
     },
     { url: "http://www.metacritic.com/music/unsafe/example" },
     { url: "https://example.com/album/not-supported" },
+    { url: "https://www.douban.com/subject/25709562/" },
   ]);
   assert.deepEqual(
-    links.map((link) => [link.provider, link.fetchPolicy]),
+    links.map((link) => [link.provider, link.fetchPolicy, link.url]),
     [
-      ["AOTY", "ON_DEMAND"],
-      ["RATEYOURMUSIC", "MANUAL_LINK_ONLY"],
-      ["METACRITIC", "ON_DEMAND"],
-      ["RECORD_CLUB", "ON_DEMAND"],
+      [
+        "DOUBAN",
+        "ON_DEMAND",
+        "https://music.douban.com/subject/25709562/",
+      ],
+      ["AOTY", "ON_DEMAND", "https://www.albumoftheyear.org/album/123-example.php"],
+      [
+        "RATEYOURMUSIC",
+        "MANUAL_LINK_ONLY",
+        "https://rateyourmusic.com/release/album/artist/title",
+      ],
+      [
+        "METACRITIC",
+        "ON_DEMAND",
+        "https://www.metacritic.com/music/renaissance/beyonce",
+      ],
+      [
+        "RECORD_CLUB",
+        "ON_DEMAND",
+        "https://record.club/releases/albums/phoebe-bridgers-lost-weekend",
+      ],
     ],
   );
-  assert.equal(links[0].url.includes("?"), false);
+});
+
+test("手动豆瓣链接按需取分，并优先于 NeoDB 外链", async () => {
+  const requested = [];
+  const fetchImpl = async (url) => {
+    requested.push(String(url));
+    if (String(url).includes("/api/album/")) {
+      return new Response(
+        JSON.stringify({
+          external_resources: [
+            { url: "https://music.douban.com/subject/11111111/" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return Object.defineProperty(new Response(DOUBAN_HTML, { status: 200 }), "url", {
+      value: "https://music.douban.com/subject/25709562/",
+    });
+  };
+  const result = await refreshExternalRatings(
+    {
+      id: "release-manual-douban",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [
+        {
+          provider: "NEODB",
+          status: "CONFIRMED",
+          url: "https://neodb.social/album/abc123",
+        },
+      ],
+      ratingLinks: [{ url: "https://music.douban.com/subject/25709562/" }],
+    },
+    { fetchImpl },
+  );
+  assert.deepEqual(requested, [
+    "https://neodb.social/api/album/abc123",
+    "https://music.douban.com/subject/25709562/",
+  ]);
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0].provider, "DOUBAN");
+  assert.equal(result.sources[0].score, 8.9);
+  assert.equal(result.sources[0].matchedVia, "USER_CONFIRMED_LINK");
+  assert.equal(result.links[0].status, "SCORE_UPDATED");
+});
+
+test("仅手动豆瓣链接、无 NeoDB 时也能取分", async () => {
+  const result = await refreshExternalRatings(
+    {
+      id: "release-douban-only",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      ratingLinks: [{ url: "https://music.douban.com/subject/25709562/" }],
+    },
+    {
+      fetchImpl: async () =>
+        Object.defineProperty(new Response(DOUBAN_HTML, { status: 200 }), "url", {
+          value: "https://music.douban.com/subject/25709562/",
+        }),
+    },
+  );
+  assert.equal(result.status, "SUCCESS");
+  assert.equal(result.sources[0].provider, "DOUBAN");
+  assert.equal(result.sources[0].matchedVia, "USER_CONFIRMED_LINK");
 });
 
 test("Record Club 读取页面对应的平均分、评分人数与发行身份", () => {

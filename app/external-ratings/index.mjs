@@ -2,6 +2,12 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_DOUBAN_CANDIDATES = 8;
 
 const RATING_LINK_PROVIDERS = {
+  DOUBAN: {
+    label: "豆瓣",
+    hosts: new Set(["music.douban.com"]),
+    pathname: /^\/subject\/\d+\/?$/,
+    fetchPolicy: "ON_DEMAND",
+  },
   AOTY: {
     label: "AOTY",
     hosts: new Set(["albumoftheyear.org", "www.albumoftheyear.org"]),
@@ -122,10 +128,15 @@ export function normalizeExternalRatingLinks(values = []) {
       const [provider, config] = providerEntry;
       parsed.search = "";
       parsed.hash = "";
+      const normalizedUrl =
+        provider === "DOUBAN"
+          ? normalizeDoubanUrl(parsed.toString())
+          : parsed.toString().replace(/\/$/, "");
+      if (!normalizedUrl) continue;
       byProvider.set(provider, {
         provider,
         providerLabel: config.label,
-        url: parsed.toString(),
+        url: normalizedUrl,
         addedAt: cleanText(value?.addedAt, 40) || new Date().toISOString(),
         fetchPolicy: config.fetchPolicy,
       });
@@ -415,8 +426,23 @@ function candidateConfidence(candidate, identity) {
 async function fetchDoubanCandidate(fetcher, url) {
   try {
     const response = await fetchWithTimeout(fetcher, url);
-    if (!response.ok) return null;
-    const parsed = parseDoubanMusicRating(await response.text(), response.url);
+    const html = await response.text();
+    if (!response.ok || isBlockedRatingPage(html, response.status)) return null;
+    const parsed = parseDoubanMusicRating(html, response.url || url);
+    return parsed.score != null && parsed.url ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchDoubanRating(fetcher, link) {
+  try {
+    const response = await fetchWithTimeout(fetcher, link.url);
+    const html = await response.text();
+    if (!response.ok || isBlockedRatingPage(html, response.status)) {
+      return { provider: "DOUBAN", blocked: true };
+    }
+    const parsed = parseDoubanMusicRating(html, response.url || link.url);
     return parsed.score != null && parsed.url ? parsed : null;
   } catch {
     return null;
@@ -551,13 +577,16 @@ export async function refreshExternalRatings(release, options = {}) {
       }
     }
   }
-  const doubanUrls = [
-    ...new Set(
-      (catalog.external_resources ?? [])
-        .map((resource) => normalizeDoubanUrl(resource?.url))
-        .filter(Boolean),
-    ),
-  ].slice(0, MAX_DOUBAN_CANDIDATES);
+  const hasManualDouban = links.some((link) => link.provider === "DOUBAN");
+  const doubanUrls = hasManualDouban
+    ? []
+    : [
+        ...new Set(
+          (catalog.external_resources ?? [])
+            .map((resource) => normalizeDoubanUrl(resource?.url))
+            .filter(Boolean),
+        ),
+      ].slice(0, MAX_DOUBAN_CANDIDATES);
   const checkedAt = new Date().toISOString();
   const doubanCandidates = (
     await Promise.all(doubanUrls.map((url) => fetchDoubanCandidate(fetcher, url)))
@@ -573,12 +602,13 @@ export async function refreshExternalRatings(release, options = {}) {
     .filter((entry) => entry.confidence >= 0)
     .sort(
       (left, right) =>
-        right.confidence - left.confidence ||
-        (right.candidate.ratingCount ?? 0) - (left.candidate.ratingCount ?? 0),
+        (right.candidate.ratingCount ?? 0) - (left.candidate.ratingCount ?? 0) ||
+        right.confidence - left.confidence,
     )[0]?.candidate;
 
   const linkedFetches = await Promise.all(
     links.map(async (link) => {
+      if (link.provider === "DOUBAN") return fetchDoubanRating(fetcher, link);
       if (link.provider === "METACRITIC") return fetchMetacriticRating(fetcher, link);
       if (link.provider === "RECORD_CLUB") return fetchRecordClubRating(fetcher, link);
       if (link.provider === "AOTY") return fetchAotyRating(fetcher, link);

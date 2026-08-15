@@ -709,6 +709,15 @@ function LibraryApp() {
     );
   }
 
+  function applyTracklist(releaseId, tracklist) {
+    if (!releaseId || tracklist?.status !== "SUCCESS") return;
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId ? { ...release, tracklist } : release,
+      ),
+    );
+  }
+
   function findMergeCandidate(releaseId, inputUrl) {
     return findReleaseByReferenceUrl(
       releases,
@@ -1335,6 +1344,7 @@ function LibraryApp() {
         onOpenArtist={openArtistFromDetail}
         onApplyMotionArtworkUpdates={applyMotionArtworkUpdates}
         onApplyExternalRatings={applyExternalRatings}
+        onApplyTracklist={applyTracklist}
       />
       {isAddRoute ? (
         <AddReleaseDialog

@@ -24,6 +24,7 @@ import { ListeningGuideSection } from "./ListeningGuideSection.jsx";
 import { AppleMusicEditorialNotes } from "./AppleMusicEditorialNotes.jsx";
 import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
 import { ExternalRatings } from "./ExternalRatings.jsx";
+import { Tracklist } from "./Tracklist.jsx";
 import {
   convertMotionArtworkToWebp,
   hasLocalMotionArtwork,
@@ -66,6 +67,7 @@ export function ReleaseDetail({
   onSaveAlbumIntroduction,
   onApplyMotionArtworkUpdates,
   onApplyExternalRatings,
+  onApplyTracklist,
 }) {
   const [editingProvider, setEditingProvider] = useState(null);
   const [draftUrl, setDraftUrl] = useState("");
@@ -239,6 +241,11 @@ export function ReleaseDetail({
         MOTION_SOURCE_TOO_LARGE: "动态封面源文件超过 32 MB，未写入",
         DYNAMIC_ARTWORK_TOO_LARGE: "清晰版自动降档后仍超过 8 MB，未写入",
         INVALID_MOTION_ARTWORK_STREAM: "没有找到可转码的视频片段",
+        LOOKUP_TIMEOUT: "Apple 动态封面查询超时，请稍后重试",
+        MOTION_LOOKUP_UNREACHABLE:
+          "暂时无法连接动态封面资料服务，请检查网络后重试",
+        MOTION_LOOKUP_INVALID_RESPONSE:
+          "动态封面资料服务返回异常，请稍后重试",
       };
       setMotionLookup({
         running: false,
@@ -467,20 +474,12 @@ export function ReleaseDetail({
             ) : null}
           </div>
         </div>
-        {release.genres.length ? (
-          <div className="detail-genres">
-            <div className="genre-row">
-              {release.genres.map((genre) => (
-                <span key={genre}>{genre}</span>
-              ))}
-            </div>
-          </div>
-        ) : null}
         <ExternalRatings release={release} onApply={onApplyExternalRatings} />
         <AppleMusicEditorialNotes
           release={release}
           onSaveIntroduction={onSaveAlbumIntroduction}
         />
+        <Tracklist release={release} onApply={onApplyTracklist} />
         <div className="timeline-header">
           <div>
             <h3>收听时间</h3>

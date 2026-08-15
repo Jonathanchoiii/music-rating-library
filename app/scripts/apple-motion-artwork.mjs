@@ -15,6 +15,12 @@ const DEFAULT_ARTWORK_API = "https://artwork.m8tec.top";
 const MOTION_ARTWORK_ROUTE = "/private-motion-artwork";
 const APPLE_HOST_RE = /(^|\.)music\.apple\.com$/i;
 const APPLE_MOTION_HOST_RE = /(^|\.)itunes\.apple\.com$/i;
+const APPLE_STOREFRONT_RE = /^[a-z]{2}$/i;
+const APPLE_WEB_ORIGIN = "https://music.apple.com";
+const APPLE_CATALOG_ORIGIN = "https://amp-api.music.apple.com";
+const APPLE_WEB_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 const ALLOWED_RELEASE_STATUSES = new Set(["CONFIRMED", "AUTO_CONFIRMED"]);
 const MOTION_ARTWORK_PROFILE_VERSION = 2;
 const MOTION_ARTWORK_PROFILES = Object.freeze([
@@ -59,10 +65,34 @@ function normalizeAppleAlbumUrl(value) {
       url.pathname.match(/\/album\/(\d+)(?:\/|$)/i)?.[1] ||
       url.pathname.match(/\/(\d+)(?:\/|$)/)?.[1];
     if (!id || !/^\d+$/.test(id)) return null;
-    return `https://music.apple.com/album/${id}`;
+    const pathParts = url.pathname.split("/").filter(Boolean);
+    const albumIndex = pathParts.findIndex(
+      (part) => part.toLocaleLowerCase() === "album",
+    );
+    const possibleStorefront = albumIndex > 0 ? pathParts[albumIndex - 1] : "";
+    const storefront = APPLE_STOREFRONT_RE.test(possibleStorefront)
+      ? possibleStorefront.toLocaleLowerCase()
+      : null;
+    return storefront
+      ? `https://music.apple.com/${storefront}/album/${id}`
+      : `https://music.apple.com/album/${id}`;
   } catch {
     return null;
   }
+}
+
+function appleAlbumIdentity(value) {
+  const normalizedUrl = normalizeAppleAlbumUrl(value);
+  if (!normalizedUrl) return null;
+  const url = new URL(normalizedUrl);
+  const parts = url.pathname.split("/").filter(Boolean);
+  const albumIndex = parts.indexOf("album");
+  const albumId = parts[albumIndex + 1];
+  const storefront = albumIndex > 0 ? parts[albumIndex - 1] : "us";
+  if (!/^\d+$/.test(albumId) || !APPLE_STOREFRONT_RE.test(storefront)) {
+    return null;
+  }
+  return { albumId, storefront: storefront.toLocaleLowerCase(), normalizedUrl };
 }
 
 function exactAppleLink(release) {
@@ -88,6 +118,110 @@ function safeMotionUrl(value) {
   } catch {
     return null;
   }
+}
+
+function decodeJwtPayload(token) {
+  try {
+    const encoded = String(token ?? "").split(".")[1];
+    if (!encoded) return null;
+    const padded = encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(
+      Math.ceil(encoded.length / 4) * 4,
+      "=",
+    );
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function appleGuestToken(scriptText) {
+  const tokens = String(scriptText ?? "").match(
+    /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+  );
+  return (
+    tokens?.find((token) => decodeJwtPayload(token)?.iss === "AMPWebPlay") ??
+    null
+  );
+}
+
+function appleAssetUrls(html) {
+  const matches = String(html ?? "").matchAll(
+    /(?:src|href)=["']([^"']*\/assets\/[^"']+\.js(?:\?[^"']*)?)["']/gi,
+  );
+  const urls = [];
+  for (const match of matches) {
+    try {
+      const url = new URL(match[1], APPLE_WEB_ORIGIN);
+      if (url.origin !== APPLE_WEB_ORIGIN) continue;
+      urls.push(url.toString());
+    } catch {
+      // Ignore malformed asset references from the public page.
+    }
+  }
+  return [...new Set(urls)].sort((left, right) => {
+    const priority = (value) =>
+      /\/(?:index|web-client|apple-music)[^/]*\.js/i.test(value) ? 0 : 1;
+    return priority(left) - priority(right);
+  });
+}
+
+async function lookupAppleCatalogMotionArtwork(appleMusicUrl, fetchImpl = fetch) {
+  const identity = appleAlbumIdentity(appleMusicUrl);
+  if (!identity) throw new Error("INVALID_APPLE_MUSIC_ALBUM_URL");
+  const commonHeaders = {
+    accept: "text/html,application/xhtml+xml,application/javascript,*/*;q=0.8",
+    "user-agent": APPLE_WEB_USER_AGENT,
+  };
+  const pageResponse = await fetchImpl(identity.normalizedUrl, {
+    headers: commonHeaders,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!pageResponse.ok) {
+    throw new Error(`APPLE_PAGE_HTTP_${pageResponse.status}`);
+  }
+  const assetUrls = appleAssetUrls(await pageResponse.text()).slice(0, 8);
+  let token = null;
+  for (const assetUrl of assetUrls) {
+    const assetResponse = await fetchImpl(assetUrl, {
+      headers: commonHeaders,
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!assetResponse.ok) continue;
+    token = appleGuestToken(await assetResponse.text());
+    if (token) break;
+  }
+  if (!token) throw new Error("APPLE_WEB_TOKEN_NOT_FOUND");
+
+  const catalogUrl = new URL(
+    `/v1/catalog/${identity.storefront}/albums/${identity.albumId}`,
+    APPLE_CATALOG_ORIGIN,
+  );
+  catalogUrl.searchParams.set("extend", "editorialVideo");
+  catalogUrl.searchParams.set("platform", "web");
+  const catalogResponse = await fetchImpl(catalogUrl, {
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+      origin: APPLE_WEB_ORIGIN,
+      referer: `${APPLE_WEB_ORIGIN}/`,
+      "user-agent": APPLE_WEB_USER_AGENT,
+    },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!catalogResponse.ok) {
+    throw new Error(`APPLE_CATALOG_HTTP_${catalogResponse.status}`);
+  }
+  const payload = await catalogResponse.json();
+  const editorialVideo = payload?.data?.[0]?.attributes?.editorialVideo ?? {};
+  const squareUrl = safeMotionUrl(
+    editorialVideo.motionDetailSquare?.video ??
+      editorialVideo.motionSquareVideo1x1?.video,
+  );
+  const tallUrl = safeMotionUrl(
+    editorialVideo.motionDetailTall?.video ??
+      editorialVideo.motionTallVideo3x4?.video,
+  );
+  return { squareUrl, tallUrl };
 }
 
 async function preferredMotionStreamUrl(sourceUrl, fetchImpl = fetch) {
@@ -251,21 +385,49 @@ async function lookupMotionArtwork(release, fetchImpl = fetch) {
   if (!appleMusicUrl) {
     return { id: release.id, skipped: true, reason: "NO_EXACT_APPLE_LINK" };
   }
-  const requestUrl = new URL("/api/v1/artwork/url", artworkApiBase());
-  requestUrl.searchParams.set("url", appleMusicUrl);
-  const response = await fetchImpl(requestUrl, {
-    headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(25_000),
-  });
-  const payload = await response.json().catch(() => ({}));
-  const squareUrl = safeMotionUrl(payload.url);
-  const tallUrl = safeMotionUrl(payload.url_tall);
+  let squareUrl;
+  let tallUrl;
+  let lookupProvider = "APPLE_MUSIC_PUBLIC_CATALOG";
+  try {
+    ({ squareUrl, tallUrl } = await lookupAppleCatalogMotionArtwork(
+      appleMusicUrl,
+      fetchImpl,
+    ));
+  } catch (appleError) {
+    // The open-source adapter is a compatibility fallback for temporary
+    // changes in Apple's web client. Keep the storefront in the input URL.
+    const requestUrl = new URL("/api/v1/artwork/url", artworkApiBase());
+    requestUrl.searchParams.set("url", appleMusicUrl);
+    let response;
+    try {
+      response = await fetchImpl(requestUrl, {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(25_000),
+      });
+    } catch (adapterError) {
+      throw new Error(
+        adapterError?.name === "TimeoutError"
+          ? "LOOKUP_TIMEOUT"
+          : "MOTION_LOOKUP_UNREACHABLE",
+      );
+    }
+    if (!response.ok) {
+      throw new Error(`MOTION_LOOKUP_HTTP_${response.status}`);
+    }
+    const payload = await response.json().catch(() => null);
+    if (!payload || typeof payload !== "object") {
+      throw new Error("MOTION_LOOKUP_INVALID_RESPONSE");
+    }
+    squareUrl = safeMotionUrl(payload.url);
+    tallUrl = safeMotionUrl(payload.url_tall);
+    lookupProvider = "APPLE_MUSIC_OPEN_SOURCE_ADAPTER";
+  }
   const checkedAt = new Date().toISOString();
   return {
     id: release.id,
     motionArtwork: {
       status: squareUrl || tallUrl ? "AVAILABLE" : "UNAVAILABLE",
-      provider: "APPLE_MUSIC_UNDOCUMENTED",
+      provider: lookupProvider,
       sourceAlbumUrl: appleMusicUrl,
       squareUrl,
       tallUrl,
@@ -346,9 +508,15 @@ async function mapWithConcurrency(items, concurrency, mapper) {
         try {
           results[index] = await mapper(items[index]);
         } catch (error) {
+          const message = String(error?.message ?? "LOOKUP_FAILED");
           results[index] = {
             id: items[index].id,
-            error: error?.name === "TimeoutError" ? "LOOKUP_TIMEOUT" : "LOOKUP_FAILED",
+            error:
+              error?.name === "TimeoutError"
+                ? "LOOKUP_TIMEOUT"
+                : /^[A-Z][A-Z0-9_]*(?:_\d{3})?$/.test(message)
+                  ? message
+                  : "LOOKUP_FAILED",
           };
         }
       }
@@ -402,6 +570,11 @@ export async function handleAppleMotionArtworkRequest(
       lookupMotionArtwork(release, fetchImpl),
     );
     const updates = results.filter((result) => result.motionArtwork);
+    const failedResult = results.find((result) => result.error);
+    if (failedResult && updates.length === 0) {
+      sendJson(response, 502, { error: failedResult.error });
+      return true;
+    }
     for (const update of updates) {
       update.motionArtwork = await persistMotionArtwork(
         update.id,
@@ -851,6 +1024,11 @@ export const __test = {
   playlistMediaUrl,
   preferredMotionStreamUrl,
   exactAppleLink,
+  appleAlbumIdentity,
+  appleAssetUrls,
+  appleGuestToken,
+  lookupAppleCatalogMotionArtwork,
+  lookupMotionArtwork,
   normalizeAppleAlbumUrl,
   persistMotionArtwork,
   safeMotionUrl,

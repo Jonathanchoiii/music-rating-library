@@ -2535,11 +2535,6 @@ html.is-desktop-shell .desktop-sidebar {
   margin: 22px 0;
 }
 
-/* 流派已作为“专辑介绍”的冷启动内容时，不在详情顶部重复展示。 */
-.detail-genres:has(~ .apple-editorial .apple-editorial-genre-fallback) {
-  display: none;
-}
-
 .genre-row {
   display: flex;
   flex-wrap: wrap;
@@ -3056,6 +3051,10 @@ html.is-desktop-shell .desktop-sidebar {
   overflow-wrap: anywhere;
 }
 
+.apple-editorial-genre-fallback {
+  margin: 0 0 12px;
+}
+
 .apple-editorial-prose.is-user {
   white-space: pre-wrap;
 }
@@ -3083,6 +3082,80 @@ html.is-desktop-shell .desktop-sidebar {
   flex-wrap: wrap;
   align-items: center;
   gap: 14px;
+}
+
+.release-tracklist {
+  padding: 24px 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.release-tracklist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.release-tracklist-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.release-tracklist-header p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.release-tracklist-refresh:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.release-tracklist-list {
+  margin: 16px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.release-tracklist-list li {
+  min-height: 42px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.release-track-number,
+.release-track-duration {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.release-track-title {
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.release-track-duration {
+  text-align: right;
+}
+
+.release-tracklist-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .apple-editorial-regions {

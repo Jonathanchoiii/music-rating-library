@@ -7,6 +7,7 @@ import {
 import { useEffect, useState } from "react";
 
 const SUPPORTED_RATING_HOSTS = new Map([
+  ["music.douban.com", "DOUBAN"],
   ["albumoftheyear.org", "AOTY"],
   ["www.albumoftheyear.org", "AOTY"],
   ["rateyourmusic.com", "RATEYOURMUSIC"],
@@ -24,6 +25,9 @@ const PROVIDER_LABELS = {
   RECORD_CLUB: "Record Club",
   DOUBAN: "豆瓣",
 };
+
+const RATING_LINK_HINT =
+  "请填写豆瓣、AOTY、Rate Your Music、Metacritic 或 Record Club 的 HTTPS 专辑页链接";
 
 function compactCount(value) {
   if (!Number.isFinite(value)) return "";
@@ -59,7 +63,7 @@ function refreshResultMessage(payload, options = {}) {
     : null;
 
   if (options.adding && !addedLink) {
-    return "请填写 AOTY、Rate Your Music、Metacritic 或 Record Club 的专辑页链接";
+    return RATING_LINK_HINT;
   }
   if (blocked.length) {
     const labels = blocked
@@ -148,7 +152,7 @@ export function ExternalRatings({ release, onApply }) {
       }
       provider = SUPPORTED_RATING_HOSTS.get(parsed.hostname);
     } catch {
-      setMessage("请填写 AOTY、Rate Your Music、Metacritic 或 Record Club 的 HTTPS 专辑页链接");
+      setMessage(RATING_LINK_HINT);
       return;
     }
     refresh([...links, { url: value }], { adding: value, addingProvider: provider });
@@ -206,7 +210,7 @@ export function ExternalRatings({ release, onApply }) {
               inputMode="url"
               value={ratingUrl}
               onChange={(event) => setRatingUrl(event.target.value)}
-              placeholder="粘贴 AOTY、RYM、Metacritic 或 Record Club 链接"
+              placeholder="粘贴豆瓣、AOTY、RYM、Metacritic 或 Record Club 链接"
               autoFocus
               required
             />

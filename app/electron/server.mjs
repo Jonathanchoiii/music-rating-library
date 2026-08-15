@@ -16,6 +16,7 @@ import {
   handleMotionArtworkFileRequest,
 } from "../scripts/apple-motion-artwork.mjs";
 import { handleExternalRatingsRequest } from "../external-ratings/index.mjs";
+import { handleTracklistRequest } from "../tracklists/index.mjs";
 
 const CLIENT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -179,6 +180,9 @@ export async function startRecordShelfServer(port = 4173, options = {}) {
         return;
       }
       if (await handleExternalRatingsRequest(request, response, options)) {
+        return;
+      }
+      if (await handleTracklistRequest(request, response, options)) {
         return;
       }
       if (await handleListeningGuideRequest(request, response)) {

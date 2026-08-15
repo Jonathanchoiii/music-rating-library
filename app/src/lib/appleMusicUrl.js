@@ -44,6 +44,41 @@ export function parseAppleMusicAlbumUrl(input) {
   };
 }
 
+export function parseAppleMusicCatalogAlbumUrl(input) {
+  const storefrontAlbum = parseAppleMusicAlbumUrl(input);
+  if (storefrontAlbum) return storefrontAlbum;
+
+  const value = typeof input === "string" ? input.trim() : "";
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username ||
+      parsed.password ||
+      !APPLE_MUSIC_HOSTNAMES.has(parsed.hostname.toLocaleLowerCase())
+    ) {
+      return null;
+    }
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (
+      segments.length !== 2 ||
+      segments[0].toLocaleLowerCase() !== "album" ||
+      !ALBUM_ID_PATTERN.test(segments[1])
+    ) {
+      return null;
+    }
+    return {
+      provider: "appleMusic",
+      sourceStorefront: null,
+      sourceAlbumId: segments[1],
+      canonicalUrl: `https://music.apple.com/album/${segments[1]}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function findConfirmedAppleMusicAlbum(release) {
   return (
     (release?.externalLinks ?? [])
@@ -53,6 +88,19 @@ export function findConfirmedAppleMusicAlbum(release) {
           ["CONFIRMED", "AUTO_CONFIRMED"].includes(link?.status),
       )
       .map((link) => parseAppleMusicAlbumUrl(link.url))
+      .find(Boolean) ?? null
+  );
+}
+
+export function findConfirmedAppleMusicCatalogAlbum(release) {
+  return (
+    (release?.externalLinks ?? [])
+      .filter(
+        (link) =>
+          link?.provider === "APPLE_MUSIC" &&
+          ["CONFIRMED", "AUTO_CONFIRMED"].includes(link?.status),
+      )
+      .map((link) => parseAppleMusicCatalogAlbumUrl(link.url))
       .find(Boolean) ?? null
   );
 }

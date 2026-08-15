@@ -910,13 +910,15 @@ function firstValidTimestamp(...values) {
 }
 
 function listeningEntryPrimaryTimestamp(entry = {}) {
-  return firstValidTimestamp(
+  const primary = firstValidTimestamp(
     entry.listenedAt,
     entry.ratedAt,
     entry.markedAt,
-    entry.updatedAt,
     entry.createdAt,
   );
+  const updated = timestampOrMinimum(entry.updatedAt);
+  // Prefer an explicit sync/edit stamp when NeoDB keeps the original mark time.
+  return Number.isFinite(updated) ? Math.max(updated, primary) : primary;
 }
 
 export function sortListeningEntriesNewestFirst(entries = []) {
@@ -934,13 +936,25 @@ export function sortListeningEntriesNewestFirst(entries = []) {
 
 export function getCurrentRating(entries = []) {
   const rated = entries
-    .filter((entry) => Number.isInteger(entry.rating10))
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => Number.isInteger(entry.rating10))
     .sort((a, b) => {
-      const dateA = Date.parse(a.ratedAt ?? a.createdAt ?? 0);
-      const dateB = Date.parse(b.ratedAt ?? b.createdAt ?? 0);
-      return dateB - dateA;
+      const dateA = firstValidTimestamp(
+        a.entry.updatedAt,
+        a.entry.ratedAt,
+        a.entry.createdAt,
+      );
+      const dateB = firstValidTimestamp(
+        b.entry.updatedAt,
+        b.entry.ratedAt,
+        b.entry.createdAt,
+      );
+      if (dateB !== dateA) return dateB - dateA;
+      // NeoDB in-place edits often keep the original created_time; the later
+      // appended local copy should win when timestamps tie.
+      return b.index - a.index;
     });
-  return rated[0]?.rating10 ?? null;
+  return rated[0]?.entry.rating10 ?? null;
 }
 
 export function getLatestListenedAt(entries = []) {

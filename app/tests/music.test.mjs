@@ -718,6 +718,120 @@ test("current rating uses the latest rated entry and preserves history", () => {
   assert.equal(entries.length, 2);
 });
 
+test("current rating prefers NeoDB in-place edits that keep the original mark time", () => {
+  const entries = [
+    {
+      id: "old-copy",
+      rating10: 7,
+      ratedAt: "2025-07-25T10:00:00Z",
+      createdAt: "2025-07-25T10:00:00Z",
+      comment: "旧短评",
+    },
+    {
+      id: "synced-edit",
+      rating10: 9,
+      ratedAt: "2025-07-25T10:00:00Z",
+      createdAt: "2025-07-25T10:00:00Z",
+      updatedAt: "2026-08-15T03:00:00Z",
+      comment: "新短评",
+    },
+  ];
+  assert.equal(getCurrentRating(entries), 9);
+  assert.equal(
+    sortListeningEntriesNewestFirst(entries).map((entry) => entry.id)[0],
+    "synced-edit",
+  );
+});
+
+test("NeoDB rating edits with the same created_time append history and become current", () => {
+  const existing = neoDbMarkToRelease({
+    ...neoDbMark,
+    rating_grade: 7,
+    comment_text: "旧短评",
+    created_time: "2025-07-25T10:00:00Z",
+  });
+  const plan = buildNeoDbSyncPlan(
+    [existing],
+    [
+      {
+        mark: {
+          ...neoDbMark,
+          rating_grade: 9,
+          comment_text: "新短评",
+          created_time: "2025-07-25T10:00:00Z",
+        },
+        review: { body: "新写的长评" },
+        logs: [],
+      },
+    ],
+  );
+  const next = applyNeoDbSyncPlan([existing], plan);
+  assert.equal(plan.updates.length, 1);
+  assert.equal(getCurrentRating(next[0].listeningEntries), 9);
+  const newest = sortListeningEntriesNewestFirst(next[0].listeningEntries)[0];
+  assert.match(newest.comment, /新短评[\s\S]*新写的长评/);
+  assert.ok(newest.updatedAt);
+});
+
+test("NeoDB current mark still refreshes when only an older local row matches", () => {
+  const sourceItemId = neoDbMark.item.uuid;
+  const existing = {
+    ...neoDbMarkToRelease({
+      ...neoDbMark,
+      rating_grade: 8,
+      comment_text: "中间态",
+      created_time: "2025-07-25T10:00:00Z",
+    }),
+    listeningEntries: [
+      {
+        id: "older-matching-remote",
+        source: "NEODB",
+        sourceItemId,
+        rating10: 7,
+        comment: "旧短评",
+        markStatus: "complete",
+        ratedAt: "2025-07-25T10:00:00Z",
+        createdAt: "2025-07-25T10:00:00Z",
+        listenedAt: "2025-07-25T10:00:00Z",
+      },
+      {
+        id: "latest-local",
+        source: "NEODB",
+        sourceItemId,
+        rating10: 10,
+        comment: "本地仍显示的高分",
+        markStatus: "complete",
+        ratedAt: "2025-07-25T10:00:00Z",
+        createdAt: "2025-07-25T10:00:00Z",
+        updatedAt: "2026-08-15T02:00:00Z",
+        listenedAt: "2025-07-25T10:00:00Z",
+      },
+    ],
+  };
+  const plan = buildNeoDbSyncPlan(
+    [existing],
+    [
+      {
+        mark: {
+          ...neoDbMark,
+          rating_grade: 7,
+          comment_text: "旧短评",
+          created_time: "2025-07-25T10:00:00Z",
+        },
+        review: null,
+        logs: [],
+      },
+    ],
+  );
+  const next = applyNeoDbSyncPlan([existing], plan);
+  assert.equal(plan.updates.length, 1);
+  assert.equal(getCurrentRating(next[0].listeningEntries), 7);
+  assert.equal(
+    sortListeningEntriesNewestFirst(next[0].listeningEntries)[0].comment,
+    "旧短评",
+  );
+});
+
 test("listening timeline sorts the newest listening event first without mutating history", () => {
   const entries = [
     {
@@ -1231,6 +1345,48 @@ test("NeoDB mark keeps original title and stores localized title as translation"
     release.externalLinks.find((link) => link.provider === "NEODB")?.url,
     "https://neodb.social/album/neodb-album-1",
   );
+});
+
+test("NeoDB sync release keeps catalog release_date for sorting", () => {
+  const release = neoDbMarkToRelease({
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      release_date: "2025-06-09",
+    },
+  });
+  assert.equal(release.releaseDate, "2025-06-09");
+  assert.equal(release.releaseDatePrecision, "DAY");
+  assert.ok(release.releaseDateCheckedAt);
+});
+
+test("NeoDB sync plan backfills missing release dates from catalog", () => {
+  const existing = {
+    ...neoDbMarkToRelease(neoDbMark),
+    releaseDate: null,
+    releaseDatePrecision: "UNKNOWN",
+    releaseDateCheckedAt: null,
+  };
+  const plan = buildNeoDbSyncPlan(
+    [existing],
+    [
+      {
+        mark: {
+          ...neoDbMark,
+          item: {
+            ...neoDbMark.item,
+            release_date: "1990-09-17",
+          },
+        },
+        review: null,
+        logs: [],
+      },
+    ],
+  );
+  assert.equal(plan.updates.length, 1);
+  assert.equal(plan.updates[0].patch.releaseDate, "1990-09-17");
+  const next = applyNeoDbSyncPlan([existing], plan);
+  assert.equal(next[0].releaseDate, "1990-09-17");
 });
 
 test("NeoDB relative catalog urls become detail-page platform links", () => {
@@ -1901,6 +2057,9 @@ test("a user-removed base release is not revived by snapshot recovery", async ()
       );
     }
     if (neoDbCatalogNotFound(url)) return emptyCatalogResponse();
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
     throw new Error(`Unexpected fetch: ${url}`);
   };
   try {
@@ -1913,6 +2072,9 @@ test("a user-removed base release is not revived by snapshot recovery", async ()
         remoteCount: 1,
         snapshot: {
           "removed-base-release": neoDbMarkHash(mark),
+        },
+        reviewSnapshot: {
+          "removed-base-release": "",
         },
         auditCursor: 0,
       },
@@ -2245,9 +2407,13 @@ test("NeoDB sync compares every music shelf before deciding a record was removed
   const requestedShelves = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
-    const shelf = String(url).match(/\/api\/me\/shelf\/([^?]+)/)?.[1];
-    if (neoDbCatalogNotFound(url)) return emptyCatalogResponse();
-    if (!shelf) throw new Error(`Unexpected URL: ${url}`);
+    const href = String(url);
+    if (neoDbCatalogNotFound(href)) return emptyCatalogResponse();
+    if (href.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    const shelf = href.match(/\/api\/me\/shelf\/([^?]+)/)?.[1];
+    if (!shelf) throw new Error(`Unexpected URL: ${href}`);
     requestedShelves.push(shelf);
     const data =
       shelf === "complete"
@@ -2271,6 +2437,10 @@ test("NeoDB sync compares every music shelf before deciding a record was removed
         snapshot: {
           [neoDbMark.item.uuid]: neoDbMarkHash(neoDbMark),
           [wishlistMark.item.uuid]: neoDbMarkHash(wishlistMark),
+        },
+        reviewSnapshot: {
+          [neoDbMark.item.uuid]: "",
+          [wishlistMark.item.uuid]: "",
         },
         auditCursor: 0,
       },

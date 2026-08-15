@@ -49,12 +49,114 @@ test("normalizes exact Apple Music album links without retaining tracking data",
     __test.normalizeAppleAlbumUrl(
       "https://music.apple.com/cn/album/example-title/1440755899?uo=4",
     ),
-    "https://music.apple.com/album/1440755899",
+    "https://music.apple.com/cn/album/1440755899",
+  );
+  assert.equal(
+    __test.normalizeAppleAlbumUrl(
+      "https://music.apple.com/tw/album/%E5%90%89%E4%BB%96%E6%89%8B/152197399",
+    ),
+    "https://music.apple.com/tw/album/152197399",
   );
   assert.equal(
     __test.normalizeAppleAlbumUrl("https://example.com/album/1440755899"),
     null,
   );
+});
+
+test("reads Apple motion artwork from the confirmed storefront catalog", async () => {
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const guestToken = `${encode({ alg: "none" })}.${encode({
+    iss: "AMPWebPlay",
+  })}.signature`;
+  const requested = [];
+  const fetchImpl = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url === "https://music.apple.com/tw/album/152197399") {
+      return new Response('<script src="/assets/index~test.js"></script>');
+    }
+    if (url === "https://music.apple.com/assets/index~test.js") {
+      return new Response(`window.__token = "${guestToken}";`);
+    }
+    if (url.startsWith("https://amp-api.music.apple.com/v1/catalog/tw/albums/152197399")) {
+      return Response.json({
+        data: [
+          {
+            attributes: {
+              editorialVideo: {
+                motionDetailSquare: {
+                  video:
+                    "https://mvod.itunes.apple.com/itunes-assets/square/default.m3u8",
+                },
+                motionDetailTall: {
+                  video:
+                    "https://mvod.itunes.apple.com/itunes-assets/tall/default.m3u8",
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const result = await __test.lookupAppleCatalogMotionArtwork(
+    "https://music.apple.com/tw/album/152197399",
+    fetchImpl,
+  );
+  assert.equal(
+    result.squareUrl,
+    "https://mvod.itunes.apple.com/itunes-assets/square/default.m3u8",
+  );
+  assert.equal(
+    result.tallUrl,
+    "https://mvod.itunes.apple.com/itunes-assets/tall/default.m3u8",
+  );
+  assert.ok(
+    requested.some((url) =>
+      url.includes("/v1/catalog/tw/albums/152197399?extend=editorialVideo"),
+    ),
+  );
+});
+
+test("treats an authoritative empty Apple editorial video as unavailable", async () => {
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const guestToken = `${encode({ alg: "none" })}.${encode({
+    iss: "AMPWebPlay",
+  })}.signature`;
+  let adapterWasCalled = false;
+  const fetchImpl = async (input) => {
+    const url = String(input);
+    if (url === "https://music.apple.com/tw/album/152197399") {
+      return new Response('<script src="/assets/index~test.js"></script>');
+    }
+    if (url === "https://music.apple.com/assets/index~test.js") {
+      return new Response(guestToken);
+    }
+    if (url.startsWith("https://amp-api.music.apple.com/v1/catalog/tw/albums/152197399")) {
+      return Response.json({ data: [{ attributes: { editorialVideo: {} } }] });
+    }
+    adapterWasCalled = true;
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  const result = await __test.lookupMotionArtwork(
+    {
+      id: "release-guitarist",
+      externalLinks: [
+        {
+          provider: "APPLE_MUSIC",
+          status: "CONFIRMED",
+          url: "https://music.apple.com/tw/album/152197399",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.equal(result.motionArtwork.status, "UNAVAILABLE");
+  assert.equal(adapterWasCalled, false);
 });
 
 test("requires a confirmed Apple Music link before lookup", () => {
