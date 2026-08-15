@@ -26,12 +26,14 @@
     "backfill:listening-guides": "node scripts/backfill-listening-guides.mjs",
     "research:listening-guides:codex": "node scripts/research-listening-guides-with-codex.mjs",
     "preview": "vite preview",
-    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs tests/listening-guides.test.mjs tests/apple-music-notes.test.mjs tests/motion-artwork.test.mjs tests/external-ratings.test.mjs tests/tracklists.test.mjs tests/release-metadata-persist.test.mjs",
+    "remote-preview:sync": "node scripts/sync-remote-preview.mjs",
+    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs tests/listening-guides.test.mjs tests/apple-music-notes.test.mjs tests/motion-artwork.test.mjs tests/external-ratings.test.mjs tests/tracklists.test.mjs tests/release-metadata-persist.test.mjs tests/remote-preview.test.mjs",
     "test:build-privacy": "node scripts/verify-build-privacy.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
+    "@vercel/blob": "^2.8.0",
     "@vitejs/plugin-react": "5.0.4",
     "opencc-js": "^1.4.1",
     "papaparse": "^5.5.4",
@@ -64,6 +66,7 @@
       "scripts/private-covers-http.mjs",
       "scripts/enrich-cover-art.mjs",
       "scripts/http-json.mjs",
+      "remote-preview/**/*",
       "src/lib/sharedStorageKeys.js",
       "src/lib/appleMusicUrl.js",
       "src/lib/releaseMetadataOverlay.js",

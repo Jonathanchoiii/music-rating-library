@@ -199,7 +199,8 @@ function TracklistPanel({ release, onApply }) {
           </p>
         </div>
         <div className="release-tracklist-actions">
-          <button
+          {onApply ? (
+            <button
             type="button"
             className="release-tracklist-refresh"
             aria-label={adding ? "完成添加" : "添加曲目"}
@@ -218,7 +219,8 @@ function TracklistPanel({ release, onApply }) {
               <Plus aria-hidden="true" />
             )}
           </button>
-          {exactAlbum ? (
+          ) : null}
+          {onApply && exactAlbum ? (
             <button
               type="button"
               className="release-tracklist-refresh"
@@ -234,7 +236,7 @@ function TracklistPanel({ release, onApply }) {
               )}
             </button>
           ) : null}
-        </div>
+          </div>
       </header>
 
       {tracks.length ? (
@@ -248,7 +250,7 @@ function TracklistPanel({ release, onApply }) {
               <time className="release-track-duration">
                 {formatTrackDuration(track.durationMs)}
               </time>
-              {isUserTrack(track) ? (
+              {onApply && isUserTrack(track) ? (
                 <button
                   type="button"
                   className="icon-button release-track-remove"
@@ -266,7 +268,7 @@ function TracklistPanel({ release, onApply }) {
         </ol>
       ) : null}
 
-      {adding ? (
+      {onApply && adding ? (
         <ManualAddForm releaseId={release.id} onAdd={addManualTrack} />
       ) : null}
       {state.error ? <p className="release-tracklist-error">{state.error}</p> : null}

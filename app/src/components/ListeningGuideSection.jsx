@@ -5,7 +5,7 @@ import {
   CaretDown,
 } from "@phosphor-icons/react";
 import { displayDate } from "../lib/music.js";
-import { publicListeningGuideIdentity } from "../lib/listeningGuides.js";
+import { isReadOnlyMode } from "../lib/readonlyMode.js";
 
 function guideEndpoint(release) {
   const params = new URLSearchParams({ title: release.title });
@@ -295,7 +295,7 @@ export function ListeningGuideSection({ release }) {
               : "基于可核验资料整理，不使用你的评分与评论"}
           </p>
         </div>
-        {!state.loading ? (
+        {!state.loading && !isReadOnlyMode() ? (
           <button
             type="button"
             className={`listening-guide-update${state.saving ? " is-saving" : ""}`}

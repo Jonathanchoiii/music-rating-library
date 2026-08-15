@@ -75,7 +75,7 @@ function isAuthoritativeWebOrigin() {
   );
 }
 
-function canWriteSharedState() {
+export function canWriteSharedState() {
   return isAuthoritativeSharedStateWriter({
     hostname: window.location.hostname,
     port: window.location.port,

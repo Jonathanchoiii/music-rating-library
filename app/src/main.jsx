@@ -2,8 +2,11 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   bootstrapSharedLocalState,
+  canWriteSharedState,
   startSharedLocalStateSync,
 } from "./lib/sharedLocalState.js";
+import { isReadOnlyMode } from "./lib/readonlyMode.js";
+import { bootstrapRemotePreview } from "./lib/remotePreview.js";
 import "./styles.css";
 
 const isDesktopShell =
@@ -18,15 +21,43 @@ if (isDesktopShell) {
   document.body.prepend(dragRegion);
 }
 
-async function startApplication() {
-  await bootstrapSharedLocalState();
+const root = createRoot(document.getElementById("root"));
+
+async function renderApp() {
   const { App } = await import("./App.jsx");
-  createRoot(document.getElementById("root")).render(
+  root.render(
     <React.StrictMode>
       <App />
     </React.StrictMode>,
   );
-  startSharedLocalStateSync();
+  if (canWriteSharedState()) startSharedLocalStateSync();
+}
+
+async function startApplication() {
+  if (isReadOnlyMode()) {
+    document.documentElement.classList.add("is-readonly-preview");
+  }
+  if (canWriteSharedState()) {
+    await bootstrapSharedLocalState();
+    await renderApp();
+    return;
+  }
+  const preview = await bootstrapRemotePreview();
+  if (preview.status !== "ready") {
+    const { PreviewGate } = await import("./components/PreviewGate.jsx");
+    root.render(
+      <React.StrictMode>
+        <PreviewGate
+          status={preview.status}
+          onReady={() => {
+            startApplication();
+          }}
+        />
+      </React.StrictMode>,
+    );
+    return;
+  }
+  await renderApp();
 }
 
 startApplication();

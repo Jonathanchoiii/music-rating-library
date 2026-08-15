@@ -19,6 +19,7 @@ export function SettingsDialog({
   onRestore,
   onToast,
   onApplyCoverUpdates,
+  readOnly = false,
 }) {
   return (
     <div
@@ -60,6 +61,7 @@ export function SettingsDialog({
             onRestore={onRestore}
             onToast={onToast}
             onApplyCoverUpdates={onApplyCoverUpdates}
+            readOnly={readOnly}
           />
         )}
       </section>

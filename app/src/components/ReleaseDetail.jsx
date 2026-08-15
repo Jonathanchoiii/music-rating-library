@@ -26,12 +26,18 @@ import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
 import { ExternalRatings } from "./ExternalRatings.jsx";
 import { Tracklist } from "./Tracklist.jsx";
 import {
+  MOTION_ARTWORK_SLOT,
+  PlatformLinkMenu,
+  usePlatformLinkMenu,
+} from "./PlatformLinkMenu.jsx";
+import {
   convertMotionArtworkToWebp,
   hasLocalMotionArtwork,
   isMotionArtworkEnabled,
   motionArtworkNeedsUpgrade,
   setMotionArtworkEnabled,
 } from "../lib/motionArtwork.js";
+import { isReadOnlyMode } from "../lib/readonlyMode.js";
 
 const PLATFORM_SLOTS = [
   {
@@ -61,6 +67,7 @@ export function ReleaseDetail({
   onAddListening,
   onChangeType,
   onUpdatePlatformLink,
+  onClearPlatformLink,
   onFindMergeCandidate,
   onMergeRelease,
   onOpenArtist,
@@ -77,6 +84,7 @@ export function ReleaseDetail({
     running: false,
     message: "",
   });
+  const platformLinkMenu = usePlatformLinkMenu();
 
   useEffect(() => {
     setEditingProvider(null);
@@ -84,6 +92,7 @@ export function ReleaseDetail({
     setLinkError("");
     setCoverLoadFailed(false);
     setMotionLookup({ running: false, message: "" });
+    platformLinkMenu.closeMenu();
   }, [release?.id, release?.coverUrl]);
 
   if (!release) return null;
@@ -137,6 +146,7 @@ export function ReleaseDetail({
       toggleMotionArtwork();
       return;
     }
+    if (isReadOnlyMode()) return;
     requestMotionArtwork();
   }
 
@@ -260,10 +270,16 @@ export function ReleaseDetail({
     setLinkError("");
   }
 
-  function openLinkEditor(provider) {
+  function openLinkEditor(provider, currentUrl = "") {
+    platformLinkMenu.closeMenu();
     setEditingProvider(provider);
-    setDraftUrl("");
+    setDraftUrl(currentUrl);
     setLinkError("");
+  }
+
+  function clearPlatformLink(provider) {
+    platformLinkMenu.closeMenu();
+    onClearPlatformLink?.(release.id, provider);
   }
 
   function savePlatformLink(event) {
@@ -362,27 +378,37 @@ export function ReleaseDetail({
           <div className="detail-type-editor">
             <span>发行类型</span>
             <div className="detail-release-tools">
-              <div className="detail-type-buttons" role="group" aria-label="快速设置发行类型">
+              <div className="detail-type-buttons" role="group" aria-label="发行类型">
                 {[
                   ["LP", "LP"],
                   ["EP", "EP"],
                   ["SINGLE", "Single"],
                   ["OTHER", "未分类"],
                 ].map(([value, label]) => (
-                  <button
-                    type="button"
-                    key={value}
-                    className={release.releaseType === value ? "is-active" : ""}
-                    onClick={() => onChangeType?.(release.id, value)}
-                  >
-                    {label}
-                  </button>
+                  onChangeType ? (
+                    <button
+                      type="button"
+                      key={value}
+                      className={release.releaseType === value ? "is-active" : ""}
+                      onClick={() => onChangeType(release.id, value)}
+                    >
+                      {label}
+                    </button>
+                  ) : (
+                    <span
+                      key={value}
+                      className={release.releaseType === value ? "is-active" : ""}
+                    >
+                      {label}
+                    </span>
+                  )
                 ))}
               </div>
               <div className="detail-utility-icons" aria-label="发行工具">
                 {PLATFORM_SLOTS.map((slot) => {
                   const link = confirmedLinks.get(slot.provider);
                   const Icon = slot.Icon;
+                  const menuBind = platformLinkMenu.bindSlot(slot, link);
                   if (link) {
                     return (
                       <a
@@ -392,10 +418,29 @@ export function ReleaseDetail({
                         rel="noreferrer"
                         key={slot.provider}
                         aria-label={slot.label}
-                        title={slot.label}
+                        title={`${slot.label}。右键或长按可修改链接`}
+                        {...menuBind}
+                        onClick={(event) => {
+                          platformLinkMenu.swallowSuppressedClick(
+                            event,
+                            slot.provider,
+                          );
+                        }}
                       >
                         <Icon weight="fill" aria-hidden="true" />
                       </a>
+                    );
+                  }
+                  if (!onUpdatePlatformLink) {
+                    return (
+                      <span
+                        className="detail-utility-icon is-missing"
+                        key={slot.provider}
+                        aria-label={slot.label}
+                        title={slot.label}
+                      >
+                        <Icon aria-hidden="true" />
+                      </span>
                     );
                   }
                   return (
@@ -405,9 +450,20 @@ export function ReleaseDetail({
                       className={`detail-utility-icon is-missing${
                         editingProvider === slot.provider ? " is-editing" : ""
                       }`}
-                      onClick={() => openLinkEditor(slot.provider)}
+                      {...menuBind}
+                      onClick={(event) => {
+                        if (
+                          platformLinkMenu.swallowSuppressedClick(
+                            event,
+                            slot.provider,
+                          )
+                        ) {
+                          return;
+                        }
+                        openLinkEditor(slot.provider);
+                      }}
                       aria-label={slot.addLabel}
-                      title={slot.addLabel}
+                      title={`${slot.addLabel}。右键或长按可修改`}
                     >
                       <Icon aria-hidden="true" />
                     </button>
@@ -418,7 +474,21 @@ export function ReleaseDetail({
                   className={`detail-utility-icon motion-artwork-icon${
                     hasMotionArtwork && motionArtworkEnabled ? " is-active" : ""
                   }`}
-                  onClick={activateMotionArtworkControl}
+                  {...platformLinkMenu.bindSlot(
+                    MOTION_ARTWORK_SLOT,
+                    hasMotionArtwork ? { url: "local" } : null,
+                  )}
+                  onClick={(event) => {
+                    if (
+                      platformLinkMenu.swallowSuppressedClick(
+                        event,
+                        MOTION_ARTWORK_SLOT.provider,
+                      )
+                    ) {
+                      return;
+                    }
+                    activateMotionArtworkControl();
+                  }}
                   disabled={motionLookup.running}
                   aria-label={
                     hasMotionArtwork
@@ -427,8 +497,8 @@ export function ReleaseDetail({
                   }
                   title={
                     hasMotionArtwork
-                      ? `动态封面：${motionArtworkEnabled ? "开启" : "关闭"}`
-                      : "请求动态封面"
+                      ? `动态封面：${motionArtworkEnabled ? "开启" : "关闭"}。右键或长按可重新检测`
+                      : "请求动态封面。右键或长按可重新检测"
                   }
                 >
                   {motionLookup.running ? (
@@ -454,6 +524,7 @@ export function ReleaseDetail({
                     value={draftUrl}
                     placeholder="https://"
                     autoFocus
+                    onFocus={(event) => event.target.select()}
                     onChange={(event) => {
                       setDraftUrl(event.target.value);
                       setLinkError("");
@@ -485,14 +556,16 @@ export function ReleaseDetail({
             <h3>收听时间</h3>
             <p>每次评分与评论都会独立保留</p>
           </div>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => onAddListening(release.id)}
-          >
-            <Plus aria-hidden="true" />
-            添加评论
-          </button>
+          {onAddListening ? (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => onAddListening(release.id)}
+            >
+              <Plus aria-hidden="true" />
+              添加评论
+            </button>
+          ) : null}
         </div>
         <ol className={`timeline${entries.length < 2 ? " is-single" : ""}`}>
           {entries.map((entry) => (
@@ -518,12 +591,25 @@ export function ReleaseDetail({
           ))}
         </ol>
         <ListeningGuideSection release={release} />
-        <ReleaseMergePanel
-          release={release}
-          onFindCandidate={onFindMergeCandidate}
-          onMerge={onMergeRelease}
-        />
+        {onMergeRelease ? (
+          <ReleaseMergePanel
+            release={release}
+            onFindCandidate={onFindMergeCandidate}
+            onMerge={onMergeRelease}
+          />
+        ) : null}
       </aside>
+      <PlatformLinkMenu
+        menu={platformLinkMenu.menu}
+        onClose={platformLinkMenu.closeMenu}
+        onEdit={(slot, link) => openLinkEditor(slot.provider, link?.url ?? "")}
+        onClear={(slot) => clearPlatformLink(slot.provider)}
+        onAdd={(slot) => openLinkEditor(slot.provider)}
+        onRefreshMotion={() => {
+          platformLinkMenu.closeMenu();
+          requestMotionArtwork();
+        }}
+      />
     </div>
   );
 }

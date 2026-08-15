@@ -17,6 +17,10 @@ backups/
 *music_mark*.csv
 *recordshelf-backup*.json
 
+# Vercel link metadata and remote-preview staging (never commit snapshots)
+.vercel
+app/.vercel
+
 # Credentials
 .env
 .env.*

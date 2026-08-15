@@ -2474,6 +2474,8 @@ html.is-desktop-shell .desktop-sidebar {
   display: inline-grid;
   place-items: center;
   cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
   transition:
     border-color 160ms ease,
     color 160ms ease,
@@ -5741,6 +5743,34 @@ button.settings-entry:disabled {
   background: var(--accent);
 }
 
+.platform-link-menu-clear {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 4px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--text);
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.platform-link-menu-clear svg {
+  width: 18px;
+  height: 18px;
+}
+
+.platform-link-menu-clear:hover,
+.platform-link-menu-clear:focus-visible {
+  background: var(--accent-soft);
+}
+
 @keyframes release-id-menu-enter {
   from {
     opacity: 0;
@@ -6967,3 +6997,56 @@ button.settings-entry:disabled {
     animation-iteration-count: 1 !important;
   }
 }
+
+.preview-gate {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 24px 80px;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.preview-gate h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.preview-gate p {
+  margin: 0;
+  color: var(--muted-dark);
+  line-height: 1.5;
+}
+
+.preview-gate form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.preview-gate input {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  padding: 12px 14px;
+  min-height: 44px;
+}
+
+.preview-gate-error {
+  color: var(--danger);
+}
+
+.settings-readonly-note {
+  margin: 0 16px 12px;
+  color: var(--muted-dark);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+html.is-readonly-preview .desktop-add,
+html.is-readonly-preview .import-link {
+  display: none;
+}
+

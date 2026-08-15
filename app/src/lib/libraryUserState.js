@@ -1,4 +1,4 @@
-import { seedReleases } from "../data/seed.js";
+import { getSeedReleases, installRuntimeLibrary } from "../data/seed.js";
 import {
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
@@ -15,16 +15,28 @@ import {
   USER_STATE_KEY,
 } from "./sharedStorageKeys.js";
 
-const BASE_RELEASE_BY_ID = new Map(
-  seedReleases.map((release) => [release.id, release]),
-);
-const BASE_ENTRY_IDS_BY_RELEASE = new Map(
-  seedReleases.map((release) => [
-    release.id,
-    new Set(release.listeningEntries.map((entry) => entry.id)),
-  ]),
-);
+let BASE_RELEASE_BY_ID = new Map();
+let BASE_ENTRY_IDS_BY_RELEASE = new Map();
 const RELEASE_METADATA_FIELDS = getReleaseMetadataFields();
+
+function rebuildBaseMaps(releases = getSeedReleases()) {
+  BASE_RELEASE_BY_ID = new Map(
+    releases.map((release) => [release.id, release]),
+  );
+  BASE_ENTRY_IDS_BY_RELEASE = new Map(
+    releases.map((release) => [
+      release.id,
+      new Set(release.listeningEntries.map((entry) => entry.id)),
+    ]),
+  );
+}
+
+rebuildBaseMaps();
+
+export function installRuntimeSeedLibrary(releases) {
+  installRuntimeLibrary(releases);
+  rebuildBaseMaps(getSeedReleases());
+}
 
 export function getBaseRelease(releaseId) {
   return BASE_RELEASE_BY_ID.get(releaseId);
@@ -36,7 +48,7 @@ export function deriveUserState(releases, releaseTypeOverrides = {}) {
   const releaseMetadataOverrides = {};
   const userReleases = [];
   const currentReleaseIds = new Set(releases.map((release) => release.id));
-  const removedReleaseIds = seedReleases
+  const removedReleaseIds = getSeedReleases()
     .filter((release) => !currentReleaseIds.has(release.id))
     .map((release) => release.id);
 
@@ -90,7 +102,7 @@ export function applyUserState(userState = {}) {
   const listeningEntryRemovals = userState.listeningEntryRemovals ?? {};
   const releaseMetadataOverrides = userState.releaseMetadataOverrides ?? {};
   const removedReleaseIds = new Set(userState.removedReleaseIds ?? []);
-  const baseReleases = seedReleases
+  const baseReleases = getSeedReleases()
     .filter((release) => !removedReleaseIds.has(release.id))
     .map((release) => {
       const removedEntryIds = new Set(
@@ -195,10 +207,10 @@ export function loadInitialLibraryState() {
         userState: migratedState,
       };
     }
-    const userState = deriveUserState(seedReleases);
+    const userState = deriveUserState(getSeedReleases());
     return { releases: applyUserState(userState), userState };
   } catch {
-    const userState = deriveUserState(seedReleases);
+    const userState = deriveUserState(getSeedReleases());
     return { releases: applyUserState(userState), userState };
   }
 }

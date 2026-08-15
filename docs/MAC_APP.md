@@ -29,6 +29,8 @@ npm run build:desktop
   `~/Library/Application Support/RecordShelf/shared-local-state.json`。
   删除、手动合并、疑似重复条目取舍、艺人映射、筛选和安全的同步状态都会
   在两端恢复；NeoDB 登录 token 不会写入该文件。
+- 手机在 Mac 关机后浏览需要只读网站快照，见
+  [手机只读预览](PHONE_PREVIEW.md)。iCloud Drive 只作文件备份。
 - 两端修改按稳定 ID 三方合并；同一字段冲突时保留共享文件里更新更晚的值，
   删除和人工取舍不会被旧端复活。每次写入前自动保存上一 revision，滚动保留
   最近 20 份私有恢复快照。

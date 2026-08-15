@@ -22,12 +22,13 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { seedReleases } from "./data/seed.js";
+import { getSeedReleases, seedReleases } from "./data/seed.js";
 import {
   findExactNeoDbDuplicateGroups,
   findReleaseByReferenceUrl,
   getNextVisibleLimit,
   upsertConfirmedExternalLink,
+  clearConfirmedExternalLink,
 } from "./lib/music.js";
 import {
   ArtistGroups,
@@ -98,6 +99,8 @@ import {
   getLibraryRouteState,
   getLibrarySearchResults,
 } from "./lib/librarySearch.js";
+import { isReadOnlyMode } from "./lib/readonlyMode.js";
+import { getRemotePreviewMeta } from "./lib/remotePreview.js";
 
 const PAGE_SIZE = 84;
 
@@ -127,6 +130,8 @@ function LibraryApp() {
   const [filters, setFilters] = useState(loadLibraryFilters);
   const [listeningGuideStatuses, setListeningGuideStatuses] = useState({});
   const [showFilters, setShowFilters] = useState(false);
+  const readOnly = isReadOnlyMode();
+  const previewMeta = getRemotePreviewMeta();
   const [sort, setSort] = useState("listened_desc");
   const [artistSort, setArtistSort] = useState("average_desc");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
@@ -185,10 +190,11 @@ function LibraryApp() {
       skipInitialUserStatePersistRef.current = false;
       return;
     }
+    if (readOnly) return;
     if (persistUserState(releases, releaseTypeOverrides)) {
       notifySharedLocalStateChanged();
     }
-  }, [releases, releaseTypeOverrides]);
+  }, [readOnly, releases, releaseTypeOverrides]);
 
   useEffect(() => {
     saveArtistIdentityState(artistIdentityState);
@@ -222,6 +228,28 @@ function LibraryApp() {
   useEffect(() => {
     if (showFilters) refreshListeningGuideStatuses();
   }, [refreshListeningGuideStatuses, showFilters]);
+
+  useEffect(() => {
+    if (!readOnly) return;
+    if (
+      isAddRoute ||
+      isImportRoute ||
+      isSyncRoute ||
+      isArtistSettingsRoute ||
+      isDuplicateRoute
+    ) {
+      navigate(`/?view=${view}`, { replace: true });
+    }
+  }, [
+    isAddRoute,
+    isArtistSettingsRoute,
+    isDuplicateRoute,
+    isImportRoute,
+    isSyncRoute,
+    navigate,
+    readOnly,
+    view,
+  ]);
 
   useEffect(() => {
     setReleases((current) => {
@@ -637,6 +665,34 @@ function LibraryApp() {
     return true;
   }
 
+  function clearReleasePlatformLink(releaseId, provider) {
+    const providerLabels = {
+      NEODB: "NeoDB",
+      APPLE_MUSIC: "Apple Music",
+      SPOTIFY: "Spotify",
+    };
+    const currentRelease = releases.find(
+      (release) => release.id === releaseId,
+    );
+    if (!currentRelease) return "未找到发行记录";
+    const result = clearConfirmedExternalLink(currentRelease, provider);
+    if (result.error) {
+      setToast(result.error);
+      return result.error;
+    }
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId ? result.release : release,
+      ),
+    );
+    setToast(
+      `已清除《${currentRelease.title}》的 ${
+        providerLabels[provider] ?? provider
+      } 链接`,
+    );
+    return true;
+  }
+
   function updateAlbumIntroduction(releaseId, rawText) {
     const text = normalizeAlbumIntroduction(rawText);
     let updatedTitle = "";
@@ -934,7 +990,7 @@ function LibraryApp() {
       () => {},
     );
 
-    setReleases(seedReleases);
+    setReleases(getSeedReleases());
     setArtistIdentityState(
       sanitizeArtistIdentityState(DEFAULT_ARTIST_IDENTITY_STATE),
     );
@@ -991,7 +1047,10 @@ function LibraryApp() {
           <img src="/recordshelf-logo.png" alt="" aria-hidden="true" />
         </Link>
         <nav>
-          {navItems.map(({ href, label, Icon }) => {
+          {(readOnly
+            ? navItems.filter((item) => item.href !== "/admin/add")
+            : navItems
+          ).map(({ href, label, Icon }) => {
             const active = navItemIsActive(href);
             return (
               <Link
@@ -1019,9 +1078,16 @@ function LibraryApp() {
       <main className="library-main">
         <header className="library-header">
           <div>
-            <p className="eyebrow">你的听歌档案</p>
+            <p className="eyebrow">
+              {readOnly ? "只读预览" : "你的听歌档案"}
+            </p>
             <h1>RecordShelf</h1>
-            <p>{releases.length} releases</p>
+            <p>
+              {releases.length} releases
+              {readOnly && previewMeta.updatedAt
+                ? ` · 更新于 ${new Date(previewMeta.updatedAt).toLocaleString("zh-CN")}`
+                : ""}
+            </p>
           </div>
           <div className="header-actions">
             <LibrarySearchField
@@ -1044,10 +1110,12 @@ function LibraryApp() {
                 </span>
               ) : null}
             </button>
-            <Link className="primary-button desktop-add" to="/admin/add">
-              <Plus aria-hidden="true" />
-              添加唱片
-            </Link>
+            {readOnly ? null : (
+              <Link className="primary-button desktop-add" to="/admin/add">
+                <Plus aria-hidden="true" />
+                添加唱片
+              </Link>
+            )}
           </div>
         </header>
 
@@ -1061,10 +1129,12 @@ function LibraryApp() {
                 按艺人
               </Link>
             </div>
-            <Link className="import-link" to="/admin/import">
-              <UploadSimple aria-hidden="true" />
-              导入 CSV
-            </Link>
+            {readOnly ? null : (
+              <Link className="import-link" to="/admin/import">
+                <UploadSimple aria-hidden="true" />
+                导入 CSV
+              </Link>
+            )}
           </div>
         ) : null}
 
@@ -1208,7 +1278,7 @@ function LibraryApp() {
                 onSelectArtist={selectArtist}
                 onClearArtist={clearSelectedArtist}
                 onOpen={openRelease}
-                onChangeType={updateReleaseType}
+                onChangeType={readOnly ? undefined : updateReleaseType}
                 onCopyReleaseId={copyReleaseId}
               />
             ) : view === "list" ? (
@@ -1227,7 +1297,7 @@ function LibraryApp() {
               <ReleaseGrid
                 releases={displayedReleases}
                 onOpen={openRelease}
-                onChangeType={updateReleaseType}
+                onChangeType={readOnly ? undefined : updateReleaseType}
                 onCopyReleaseId={copyReleaseId}
                 wall={view === "wall"}
               />
@@ -1301,7 +1371,10 @@ function LibraryApp() {
       </main>
 
       <nav className="mobile-nav" aria-label="移动端导航">
-        {navItems.map(({ href, label, Icon }) => {
+        {(readOnly
+          ? navItems.filter((item) => item.href !== "/admin/add")
+          : navItems
+        ).map(({ href, label, Icon }) => {
           const active = navItemIsActive(href);
           return (
             <Link
@@ -1346,18 +1419,21 @@ function LibraryApp() {
             preventScrollReset: true,
           });
         }}
-        onAddListening={(releaseId) => setListeningReleaseId(releaseId)}
-        onChangeType={updateReleaseType}
-        onUpdatePlatformLink={updateReleasePlatformLink}
-        onSaveAlbumIntroduction={updateAlbumIntroduction}
-        onFindMergeCandidate={findMergeCandidate}
-        onMergeRelease={mergeReleaseSelection}
+        onAddListening={
+          readOnly ? undefined : (releaseId) => setListeningReleaseId(releaseId)
+        }
+        onChangeType={readOnly ? undefined : updateReleaseType}
+        onUpdatePlatformLink={readOnly ? undefined : updateReleasePlatformLink}
+        onClearPlatformLink={readOnly ? undefined : clearReleasePlatformLink}
+        onSaveAlbumIntroduction={readOnly ? undefined : updateAlbumIntroduction}
+        onFindMergeCandidate={readOnly ? undefined : findMergeCandidate}
+        onMergeRelease={readOnly ? undefined : mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
         onApplyMotionArtworkUpdates={applyMotionArtworkUpdates}
-        onApplyExternalRatings={applyExternalRatings}
-        onApplyTracklist={applyTracklist}
+        onApplyExternalRatings={readOnly ? undefined : applyExternalRatings}
+        onApplyTracklist={readOnly ? undefined : applyTracklist}
       />
-      {isAddRoute ? (
+      {isAddRoute && !readOnly ? (
         <AddReleaseDialog
           onClose={() => navigate(`${activeBasePath}?view=${view}`)}
           onSaveRelease={saveRelease}
@@ -1371,14 +1447,14 @@ function LibraryApp() {
           onSaveListening={saveListening}
         />
       ) : null}
-      {isImportRoute ? (
+      {isImportRoute && !readOnly ? (
         <ImportDialog
           releases={releases}
           onClose={() => navigate(`${activeBasePath}?view=${view}`)}
           onCommit={commitImport}
         />
       ) : null}
-      {isSyncRoute ? (
+      {isSyncRoute && !readOnly ? (
         <NeoDbSyncDialog
           releases={releases}
           identityReleases={seedReleases}
@@ -1404,15 +1480,16 @@ function LibraryApp() {
           onOpenDuplicateManager={() =>
             navigate(`/settings/duplicates?view=${view}`)
           }
-          onOpenSync={() => navigate(`/sync?view=${view}`)}
+          onOpenSync={readOnly ? undefined : () => navigate(`/sync?view=${view}`)}
           onBack={() => navigate(`/settings?view=${view}`)}
           onClose={() => navigate(`/?view=${view}`)}
           onExport={exportJson}
           backupText={serializedLibraryExport()}
-          onMergeBackup={mergeJsonBackup}
-          onRestore={restoreFactorySettings}
+          onMergeBackup={readOnly ? undefined : mergeJsonBackup}
+          onRestore={readOnly ? undefined : restoreFactorySettings}
           onToast={setToast}
-          onApplyCoverUpdates={applyCoverUpdates}
+          onApplyCoverUpdates={readOnly ? undefined : applyCoverUpdates}
+          readOnly={readOnly}
         />
       ) : null}
       <FilterDrawer

@@ -21,6 +21,7 @@ import {
 import { handleExternalRatingsRequest } from "./external-ratings/index.mjs";
 import { handleTracklistRequest } from "./tracklists/index.mjs";
 import { handleReleaseMetadataPersistRequest } from "./shared-state/release-metadata.mjs";
+import { handleRemotePreviewSyncRequest } from "./remote-preview/local-http.mjs";
 
 const VIRTUAL_LIBRARY_ID = "virtual:recordshelf-library";
 const RESOLVED_VIRTUAL_LIBRARY_ID = `\0${VIRTUAL_LIBRARY_ID}`;
@@ -95,6 +96,9 @@ function localMetadataApi() {
         if (await handleExternalRatingsRequest(request, response)) return;
         if (await handleTracklistRequest(request, response)) return;
         if (await handleReleaseMetadataPersistRequest(request, response)) {
+          return;
+        }
+        if (await handleRemotePreviewSyncRequest(request, response)) {
           return;
         }
         if (await handleListeningGuideRequest(request, response)) return;

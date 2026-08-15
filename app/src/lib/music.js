@@ -479,6 +479,32 @@ export function upsertConfirmedExternalLink(
   };
 }
 
+export function clearConfirmedExternalLink(release, provider) {
+  const providerLabels = {
+    NEODB: "NeoDB",
+    APPLE_MUSIC: "Apple Music",
+    SPOTIFY: "Spotify",
+  };
+  if (!["NEODB", "APPLE_MUSIC", "SPOTIFY"].includes(provider)) {
+    return {
+      release,
+      error: `无法清除 ${providerLabels[provider] ?? provider} 链接`,
+    };
+  }
+  const previous = release.externalLinks ?? [];
+  const externalLinks = previous.filter((link) => link.provider !== provider);
+  if (externalLinks.length === previous.length) {
+    return { release, error: null };
+  }
+  return {
+    release: {
+      ...release,
+      externalLinks,
+    },
+    error: null,
+  };
+}
+
 export function buildConfirmedExternalLinks(values = {}) {
   const fields = [
     ["neodbUrl", "NEODB"],

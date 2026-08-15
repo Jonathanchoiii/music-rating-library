@@ -18,6 +18,7 @@ import {
 import { handleExternalRatingsRequest } from "../external-ratings/index.mjs";
 import { handleTracklistRequest } from "../tracklists/index.mjs";
 import { handleReleaseMetadataPersistRequest } from "../shared-state/release-metadata.mjs";
+import { handleRemotePreviewSyncRequest } from "../remote-preview/local-http.mjs";
 
 const CLIENT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -187,6 +188,9 @@ export async function startRecordShelfServer(port = 4173, options = {}) {
         return;
       }
       if (await handleReleaseMetadataPersistRequest(request, response)) {
+        return;
+      }
+      if (await handleRemotePreviewSyncRequest(request, response)) {
         return;
       }
       if (await handleListeningGuideRequest(request, response)) {

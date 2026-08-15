@@ -171,6 +171,8 @@ export function ExternalRatings({ release, onApply }) {
           </p>
         </div>
         <div className="external-ratings-actions">
+          {onApply ? (
+            <>
           <button
             type="button"
             className="external-ratings-refresh"
@@ -198,9 +200,11 @@ export function ExternalRatings({ release, onApply }) {
               <ArrowsClockwise aria-hidden="true" />
             )}
           </button>
+            </>
+          ) : null}
         </div>
       </header>
-      {adding ? (
+      {onApply && adding ? (
         <form className="external-rating-link-editor" onSubmit={submitRatingLink}>
           <label htmlFor={`external-rating-url-${release.id}`}>评分页链接</label>
           <div>

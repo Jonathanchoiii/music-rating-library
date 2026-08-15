@@ -1,0 +1,41 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npx vite build",
+  "outputDirectory": "dist/client",
+  "installCommand": "npm install",
+  "framework": null,
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/private-covers/:name",
+      "destination": "/api/preview/media?kind=cover&name=:name"
+    },
+    {
+      "source": "/private-motion-artwork/:name",
+      "destination": "/api/preview/media?kind=motion&name=:name"
+    },
+    {
+      "source": "/api/apple-music/editorial-notes",
+      "destination": "/api/preview/notes"
+    },
+    {
+      "source": "/api/listening-guides/statuses",
+      "destination": "/api/preview/guides?kind=statuses"
+    },
+    {
+      "source": "/api/releases/:id/listening-guide",
+      "destination": "/api/preview/guides?kind=guide&id=:id"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

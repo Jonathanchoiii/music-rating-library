@@ -123,7 +123,8 @@ export function ReleaseGrid({
                 ) : null}
                 <p className="release-artist">{release.artists.join("、")}</p>
                 <div className="release-meta">
-                  <button
+                  {onChangeType ? (
+                    <button
                     type="button"
                     className="release-type-quick"
                     onClick={() => {
@@ -135,7 +136,7 @@ export function ReleaseGrid({
                           (Math.max(currentIndex, 0) + 1) %
                             QUICK_RELEASE_TYPES.length
                         ];
-                      onChangeType?.(release.id, nextType);
+                      onChangeType(release.id, nextType);
                     }}
                     aria-label={`《${release.title}》当前类型为 ${
                       release.releaseType === "OTHER"
@@ -148,6 +149,13 @@ export function ReleaseGrid({
                       ? "未分类"
                       : release.releaseType}
                   </button>
+                  ) : (
+                    <span className="release-type-quick">
+                      {release.releaseType === "OTHER"
+                        ? "未分类"
+                        : release.releaseType}
+                    </span>
+                  )}
                   <span aria-hidden="true">·</span>
                   <span>
                     {release.releaseDate

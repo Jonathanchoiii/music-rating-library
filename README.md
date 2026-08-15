@@ -40,6 +40,9 @@ npm run dev
 
 打开 `http://127.0.0.1:4173`。
 
+Mac 关机后若还想用手机浏览，需要单独的只读网站快照，而不是 iCloud 文件夹。
+配置步骤见 [手机只读预览](docs/PHONE_PREVIEW.md)。
+
 导入 NeoDB CSV 时，脚本默认把规范化结果写入被忽略的本机数据目录：
 
 ```bash

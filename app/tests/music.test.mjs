@@ -26,6 +26,7 @@ import {
   normalizeSupportedReleaseUrl,
   normalizeReleaseType,
   upsertConfirmedExternalLink,
+  clearConfirmedExternalLink,
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
   reconcileCanonicalTitleOverride,
@@ -199,6 +200,35 @@ test("upsertConfirmedExternalLink rejects wrong provider and non-album URLs", ()
   );
   assert.match(nonAlbum.error, /Spotify/);
   assert.equal(nonAlbum.release, release);
+});
+
+test("clearConfirmedExternalLink removes only the named platform URL", () => {
+  const release = {
+    id: "release-links",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/source-one",
+        status: "CONFIRMED",
+      },
+      {
+        provider: "SPOTIFY",
+        url: "https://open.spotify.com/album/platform-one",
+        status: "AUTO_CONFIRMED",
+      },
+    ],
+  };
+  const cleared = clearConfirmedExternalLink(release, "SPOTIFY");
+  assert.equal(cleared.error, null);
+  assert.deepEqual(
+    cleared.release.externalLinks.map((link) => link.provider),
+    ["NEODB"],
+  );
+
+  const empty = clearConfirmedExternalLink(cleared.release, "NEODB");
+  assert.equal(empty.error, null);
+  assert.deepEqual(empty.release.externalLinks, []);
+  assert.equal(clearConfirmedExternalLink(empty.release, "NEODB").release, empty.release);
 });
 
 test("manual add builds all confirmed platform links and reports field errors", () => {

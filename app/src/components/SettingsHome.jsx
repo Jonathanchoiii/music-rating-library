@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowsClockwise,
+  CloudArrowUp,
   Copy,
   DownloadSimple,
   ImageSquare,
@@ -46,6 +47,7 @@ export function SettingsHome({
   onRestore,
   onToast,
   onApplyCoverUpdates,
+  readOnly = false,
 }) {
   const mergeBackupInputRef = useRef(null);
   const [coverUpdate, setCoverUpdate] = useState({
@@ -71,6 +73,10 @@ export function SettingsHome({
   });
   const [providerKeyDraft, setProviderKeyDraft] = useState("");
   const [providerModelDraft, setProviderModelDraft] = useState("gpt-5.6-terra");
+  const [previewSync, setPreviewSync] = useState({
+    running: false,
+    message: "",
+  });
   const aliasCount = (identityState.identities ?? []).reduce(
     (sum, identity) => sum + identity.aliases.length,
     0,
@@ -283,6 +289,41 @@ export function SettingsHome({
     }
   }
 
+  async function syncPhonePreview() {
+    if (previewSync.running) return;
+    setPreviewSync({ running: true, message: "正在打包本机快照…" });
+    try {
+      const response = await fetch("/api/remote-preview/sync", {
+        method: "POST",
+        headers: { accept: "application/json" },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || "PREVIEW_SYNC_FAILED");
+      }
+      const blobNote = payload.blob?.uploaded
+        ? `已上传 ${payload.blob.files} 个文件`
+        : payload.blob?.reason === "BLOB_TOKEN_MISSING"
+          ? "本机快照已备好；尚未配置 BLOB_READ_WRITE_TOKEN，手机网站还看不到"
+          : `网站上传未完成（${payload.blob?.reason || "未知原因"}）`;
+      const icloudNote = payload.icloud?.copied
+        ? "；iCloud Drive 备份已更新"
+        : payload.icloud?.reason === "ICLOUD_DRIVE_MISSING"
+          ? "；当前 Mac 没有 iCloud Drive"
+          : "";
+      const message = `快照 ${payload.updatedAt}：${payload.catalogCount} 张发行、${payload.coverCount} 张封面、${payload.motionCount} 段动态封面。${blobNote}${icloudNote}`;
+      setPreviewSync({ running: false, message });
+      onToast?.(message);
+    } catch (error) {
+      const message =
+        error.message === "PREVIEW_CATALOG_MISSING"
+          ? "缺少本机私人目录，无法生成手机预览"
+          : "同步到手机预览失败，请查看 docs/PHONE_PREVIEW.md";
+      setPreviewSync({ running: false, message });
+      onToast?.(message);
+    }
+  }
+
   return (
     <>
       <header>
@@ -295,6 +336,57 @@ export function SettingsHome({
           <span className="sr-only">关闭</span>
         </button>
       </header>
+
+      {readOnly ? (
+        <div className="settings-section">
+          <p className="settings-section-label">只读预览</p>
+          <p className="settings-readonly-note">
+            手机上看到的是 Mac 上次成功同步的快照。Mac 关机后仍可浏览封面、评分、专辑介绍、曲目和动态封面，但不能改资料。iCloud Drive 只备份文件，不能替代这个网站。
+          </p>
+          <button type="button" className="settings-entry" onClick={onExport}>
+            <span className="settings-entry-icon">
+              <DownloadSimple aria-hidden="true" />
+            </span>
+            <span>
+              <strong>下载当前快照</strong>
+              <small>把这次打开的档案另存为 JSON</small>
+            </span>
+            <span className="settings-entry-arrow" aria-hidden="true">
+              →
+            </span>
+          </button>
+        </div>
+      ) : (
+        <>
+      <div className="settings-section">
+        <p className="settings-section-label">手机预览</p>
+        <button
+          type="button"
+          className="settings-entry"
+          onClick={syncPhonePreview}
+          disabled={previewSync.running}
+        >
+          <span className="settings-entry-icon">
+            {previewSync.running ? (
+              <SpinnerGap className="spin" aria-hidden="true" />
+            ) : (
+              <CloudArrowUp weight="fill" aria-hidden="true" />
+            )}
+          </span>
+          <span>
+            <strong>同步到手机预览</strong>
+            <small>
+              {previewSync.message ||
+                "打包本机音乐库、封面和动态封面；上传后即使 Mac 关机也能在手机浏览器只读浏览"}
+            </small>
+          </span>
+          {!previewSync.running ? (
+            <span className="settings-entry-arrow" aria-hidden="true">
+              →
+            </span>
+          ) : null}
+        </button>
+      </div>
 
       <div className="settings-section">
         <p className="settings-section-label">资料管理</p>
@@ -540,6 +632,8 @@ export function SettingsHome({
           恢复出厂设置
         </button>
       </div>
+        </>
+      )}
     </>
   );
 }
