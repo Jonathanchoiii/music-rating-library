@@ -96,8 +96,10 @@ export function NeoDbSyncDialog({
           },
         );
         const safePlan = { ...result.plan, removals: [] };
+        const deltaBaseReleases =
+          result.reconciledReleases ?? reconciledReleases;
         let nextReleases = applyNeoDbSyncPlan(
-          reconciledReleases,
+          deltaBaseReleases,
           safePlan,
         );
         const additionReleaseIds = result.plan.additions.map(
@@ -106,6 +108,7 @@ export function NeoDbSyncDialog({
         const typeRelevantReleaseIds = [
           ...new Set([
             ...additionReleaseIds,
+            ...(result.canonicalChangedReleaseIds ?? []),
             ...result.plan.updates
               .filter((item) => item.typeVerificationRelevant)
               .map((item) => item.releaseId),
@@ -114,6 +117,7 @@ export function NeoDbSyncDialog({
         const canonicalPriorityReleaseIds = [
           ...new Set([
             ...additionReleaseIds,
+            ...(result.canonicalChangedReleaseIds ?? []),
             ...result.plan.updates
               .filter((item) =>
                 item.changedMetadataFields.includes("externalLinks"),
@@ -136,7 +140,8 @@ export function NeoDbSyncDialog({
         };
         if (
           changeCount(result.plan) ||
-          knownCanonicalResult.changedReleaseIds.length
+          knownCanonicalResult.changedReleaseIds.length ||
+          result.canonicalChangedReleaseIds?.length
         ) {
           onApply(nextReleases);
         }
@@ -160,22 +165,20 @@ export function NeoDbSyncDialog({
             : "已读取 NeoDB 最新变化；正在后台抽查地址与元数据",
         );
 
-        const [canonicalResult, snapshotResult] = await Promise.all([
-          refreshNeoDbCanonicalIdentity(
-            nextReleases,
-            [...identityPool, ...nextReleases],
-            {
-              auditCursor: currentState.canonicalAuditCursor ?? 0,
-              forceFull: forceFull || result.fullReconcile,
-              priorityReleaseIds: canonicalPriorityReleaseIds,
-            },
-          ),
-          saveNeoDbCsvSnapshot(nextReleases, {
-            syncedAt: result.nextState.lastSyncedAt,
-            previousSnapshot: currentState.lastCsvSnapshot ?? null,
-          }),
-        ]);
+        const canonicalResult = await refreshNeoDbCanonicalIdentity(
+          nextReleases,
+          [...identityPool, ...nextReleases],
+          {
+            auditCursor: currentState.canonicalAuditCursor ?? 0,
+            forceFull: forceFull || result.fullReconcile,
+            priorityReleaseIds: canonicalPriorityReleaseIds,
+          },
+        );
         nextReleases = canonicalResult.releases;
+        const snapshotResult = await saveNeoDbCsvSnapshot(nextReleases, {
+          syncedAt: result.nextState.lastSyncedAt,
+          previousSnapshot: currentState.lastCsvSnapshot ?? null,
+        });
         let typeVerification = {
           checked: 0,
           matched: 0,

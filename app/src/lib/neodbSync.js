@@ -479,6 +479,21 @@ async function fetchCanonicalNeoDbUrls(urls) {
   return canonicalUrls;
 }
 
+function remapNeoDbSnapshotIds(snapshot = {}, aliases = new Map()) {
+  const next = {};
+  const deferredAliases = [];
+  for (const [sourceItemId, value] of Object.entries(snapshot)) {
+    const canonicalUrl = aliases.get(sourceItemId);
+    const canonicalId = sourceItemIdFromUrl(canonicalUrl) ?? sourceItemId;
+    if (canonicalId === sourceItemId) next[sourceItemId] = value;
+    else deferredAliases.push([canonicalId, value]);
+  }
+  for (const [canonicalId, value] of deferredAliases) {
+    if (!(canonicalId in next)) next[canonicalId] = value;
+  }
+  return next;
+}
+
 export async function refreshNeoDbCanonicalIdentity(
   releases,
   identityReleases = [],
@@ -1358,7 +1373,7 @@ function metadataPatch(existing, incoming) {
     patch.releaseDatePrecision =
       incoming.releaseDatePrecision ?? getDatePrecision(incoming.releaseDate);
   }
-  if (incoming.releaseDateCheckedAt) {
+  if (!existing.releaseDateCheckedAt && incoming.releaseDateCheckedAt) {
     patch.releaseDateCheckedAt = incoming.releaseDateCheckedAt;
   }
   return patch;
@@ -1774,7 +1789,7 @@ export async function pullNeoDbDelta(
   previousState = {},
   { forceFull = false, identityReleases = releases } = {},
 ) {
-  const canonicalAliases = buildNeoDbCanonicalAliases(identityReleases);
+  let canonicalAliases = buildNeoDbCanonicalAliases(identityReleases);
   const localSourceIds = getNeoDbSourceIds(releases);
   const identitySourceIds = getNeoDbSourceIds(identityReleases);
   const orphanLinkedSourceIds = getOrphanNeoDbLinkedSourceIds(releases);
@@ -1891,7 +1906,7 @@ export async function pullNeoDbDelta(
   const knownAuditMarks = knownSourceIdsToAudit.length
     ? await fetchKnownMarks(token, knownSourceIdsToAudit)
     : [];
-  const fetchedMarkMap = new Map(
+  let fetchedMarkMap = new Map(
     [...pagedMarks, ...knownAuditMarks]
       .sort(
         (markA, markB) =>
@@ -1922,9 +1937,92 @@ export async function pullNeoDbDelta(
       if (mark?.item?.uuid) fetchedMarkMap.set(mark.item.uuid, mark);
     }
   }
+
+  // NeoDB may merge a catalog item and keep the old URL as a redirect while
+  // returning the replacement UUID from the shelf API. Resolve only the old
+  // local IDs that disappeared in the same run as an unmatched remote ID, so
+  // normal incremental sync does not turn into a full-library URL audit.
+  const unmatchedRemoteIds = new Set(
+    [...fetchedMarkMap.keys()].filter(
+      (sourceItemId) =>
+        !findReleaseByNeoDbId(releases, sourceItemId) &&
+        !findReleaseByNeoDbId(identityReleases, sourceItemId),
+    ),
+  );
+  const missingLocalIds = new Set(
+    [...auditableSourceIds].filter(
+      (sourceItemId) => !fetchedMarkMap.has(sourceItemId),
+    ),
+  );
+  let syncCanonicalResult = {
+    releases,
+    changedReleaseIds: [],
+  };
+  let canonicalIdentityError = null;
+  if (unmatchedRemoteIds.size && missingLocalIds.size) {
+    const candidateReleases = releases.filter((release) =>
+      [
+        ...neoDbIdsFromReleaseEntries(release),
+        ...neoDbIdsFromReleaseLinks(release),
+      ].some((sourceItemId) => missingLocalIds.has(sourceItemId)),
+    );
+    const candidateUrls = neoDbUrlsFromReleases(candidateReleases).filter(
+      (url) => missingLocalIds.has(sourceItemIdFromUrl(url)),
+    );
+    try {
+      const resolvedUrls = await fetchCanonicalNeoDbUrls(candidateUrls);
+      const relevantMappings = Object.fromEntries(
+        Object.entries(resolvedUrls).filter(([, canonicalUrl]) =>
+          unmatchedRemoteIds.has(sourceItemIdFromUrl(canonicalUrl)),
+        ),
+      );
+      if (Object.keys(relevantMappings).length) {
+        syncCanonicalResult = applyNeoDbCanonicalMappings(
+          releases,
+          relevantMappings,
+          identityReleases,
+        );
+        canonicalAliases = buildNeoDbCanonicalAliases([
+          ...identityReleases,
+          ...syncCanonicalResult.releases,
+        ]);
+        fetchedMarkMap = new Map(
+          [...fetchedMarkMap.values()].map((mark) => {
+            const canonicalMark = canonicalizeNeoDbMark(
+              mark,
+              canonicalAliases,
+            );
+            return [canonicalMark.item.uuid, canonicalMark];
+          }),
+        );
+      }
+    } catch (error) {
+      canonicalIdentityError =
+        error.message || "NeoDB 合并地址核验暂时不可用";
+    }
+  }
+
+  const reconciledReleases = syncCanonicalResult.releases;
+  const effectiveLocalSourceIds = getNeoDbSourceIds(reconciledReleases);
+  const effectiveIdentitySourceIds = getNeoDbSourceIds([
+    ...identityReleases,
+    ...reconciledReleases,
+  ]);
+  const effectiveOrphanLinkedSourceIds =
+    getOrphanNeoDbLinkedSourceIds(reconciledReleases);
+  const effectiveUnlinkedSourceIds =
+    getUnlinkedNeoDbSourceIds(reconciledReleases);
+  const effectiveUnlinkedPlatformSourceIds =
+    getUnlinkedPlatformSourceIds(reconciledReleases);
   const fetchedMarks = [...fetchedMarkMap.values()];
-  const previousSnapshot = previousState.snapshot ?? {};
-  const previousReviewSnapshot = previousState.reviewSnapshot ?? {};
+  const previousSnapshot = remapNeoDbSnapshotIds(
+    previousState.snapshot ?? {},
+    canonicalAliases,
+  );
+  const previousReviewSnapshot = remapNeoDbSnapshotIds(
+    previousState.reviewSnapshot ?? {},
+    canonicalAliases,
+  );
   const snapshot = shouldReconcile ? {} : { ...previousSnapshot };
   const reviewSnapshot = shouldReconcile ? {} : { ...previousReviewSnapshot };
   const changedMarks = [];
@@ -1933,13 +2031,16 @@ export async function pullNeoDbDelta(
   for (const mark of fetchedMarks) {
     const hash = neoDbMarkHash(mark);
     const needsLinkAttach =
-      orphanLinkedSourceIds.has(mark.item.uuid) ||
-      unlinkedSourceIds.has(mark.item.uuid) ||
-      unlinkedPlatformSourceIds.has(mark.item.uuid);
+      effectiveOrphanLinkedSourceIds.has(mark.item.uuid) ||
+      effectiveUnlinkedSourceIds.has(mark.item.uuid) ||
+      effectiveUnlinkedPlatformSourceIds.has(mark.item.uuid);
     const missingLocally =
-      !localSourceIds.has(mark.item.uuid) &&
-      !identitySourceIds.has(mark.item.uuid);
-    const localRelease = findReleaseByNeoDbId(releases, mark.item.uuid);
+      !effectiveLocalSourceIds.has(mark.item.uuid) &&
+      !effectiveIdentitySourceIds.has(mark.item.uuid);
+    const localRelease = findReleaseByNeoDbId(
+      reconciledReleases,
+      mark.item.uuid,
+    );
     const localOutOfDate =
       Boolean(localRelease) && localNeoDbNeedsMarkRefresh(localRelease, mark);
     if (
@@ -1960,9 +2061,9 @@ export async function pullNeoDbDelta(
     (mark) =>
       mark?.item?.uuid &&
       !changedMarkIds.has(mark.item.uuid) &&
-      (localSourceIds.has(mark.item.uuid) ||
-        identitySourceIds.has(mark.item.uuid) ||
-        orphanLinkedSourceIds.has(mark.item.uuid)),
+      (effectiveLocalSourceIds.has(mark.item.uuid) ||
+        effectiveIdentitySourceIds.has(mark.item.uuid) ||
+        effectiveOrphanLinkedSourceIds.has(mark.item.uuid)),
   );
   const reviewChecks = await mapWithConcurrency(
     reviewCheckMarks,
@@ -1994,7 +2095,7 @@ export async function pullNeoDbDelta(
       const enriched = await enrichChangedMark(
         mark,
         token,
-        !localSourceIds.has(mark.item.uuid),
+        !effectiveLocalSourceIds.has(mark.item.uuid),
       );
       reviewSnapshot[mark.item.uuid] = neoDbReviewHash(enriched.review);
       return enriched;
@@ -2004,8 +2105,14 @@ export async function pullNeoDbDelta(
   const remoteIds = shouldReconcile
     ? new Set(fetchedMarks.map((mark) => mark.item.uuid))
     : null;
+  const effectiveKnownIds = new Set([
+    ...effectiveLocalSourceIds,
+    ...effectiveOrphanLinkedSourceIds,
+    ...effectiveUnlinkedPlatformSourceIds,
+    ...Object.keys(previousSnapshot),
+  ]);
   const removedSourceIds = shouldReconcile
-    ? [...knownIds].filter((id) => !remoteIds.has(id))
+    ? [...effectiveKnownIds].filter((id) => !remoteIds.has(id))
     : [];
   const auditCandidateCount = pagesBeyondFirst.length;
   const profile = previousState.profile ?? (await getNeoDbProfile(token));
@@ -2026,7 +2133,7 @@ export async function pullNeoDbDelta(
       : previousState.lastFullReconcileAt ?? null,
   };
   const plan = buildNeoDbSyncPlan(
-    releases,
+    reconciledReleases,
     enrichedMarks,
     removedSourceIds,
   );
@@ -2051,6 +2158,9 @@ export async function pullNeoDbDelta(
     ),
     fullReconcile: shouldReconcile,
     remoteSourceIds: shouldReconcile ? [...remoteIds] : null,
+    reconciledReleases,
+    canonicalChangedReleaseIds: syncCanonicalResult.changedReleaseIds,
+    canonicalIdentityError,
   };
 }
 

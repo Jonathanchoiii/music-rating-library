@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, SpinnerGap } from "@phosphor-icons/react";
 import { findConfirmedAppleMusicCatalogAlbum } from "../lib/appleMusicUrl.js";
-import { findConfirmedSpotifyAlbum } from "../lib/spotifyUrl.js";
 
 const ERROR_MESSAGES = Object.freeze({
-  EXACT_ALBUM_LINK_REQUIRED:
-    "需要先添加并确认 Apple Music 或 Spotify 专辑链接。",
-  EXACT_APPLE_MUSIC_LINK_REQUIRED:
-    "需要先添加并确认 Apple Music 或 Spotify 专辑链接。",
+  EXACT_APPLE_MUSIC_LINK_REQUIRED: "需要先添加并确认 Apple Music 专辑链接。",
+  EXACT_ALBUM_LINK_REQUIRED: "需要先添加并确认 Apple Music 专辑链接。",
   NO_EXACT_TRACKLIST: "没有找到与当前专辑链接完全一致的曲目。",
-  SPOTIFY_CREDENTIALS_REQUIRED:
-    "本机尚未配置 Spotify Client ID / Secret，无法读取 Spotify 曲目。",
-  TRACKLIST_UPSTREAM_UNAVAILABLE: "曲目暂时无法读取，请稍后重试。",
+  TRACKLIST_UPSTREAM_UNAVAILABLE: "Apple Music 曲目暂时无法读取，请稍后重试。",
 });
 
 function formatDuration(durationMs) {
@@ -30,24 +25,11 @@ function trackSequence(track, multipleDiscs) {
     : String(track.trackNumber).padStart(2, "0");
 }
 
-function sourceHint(exactAppleAlbum, exactSpotifyAlbum, savedProvider) {
-  if (exactAppleAlbum) return "优先从已确认的 Apple Music 专辑读取";
-  if (exactSpotifyAlbum) return "从已确认的 Spotify 专辑读取";
-  if (savedProvider === "APPLE_MUSIC") return "已保存自 Apple Music";
-  if (savedProvider === "SPOTIFY") return "已保存自 Spotify";
-  return "";
-}
-
 export function Tracklist({ release, onApply }) {
-  const exactAppleAlbum = useMemo(
+  const exactAlbum = useMemo(
     () => findConfirmedAppleMusicCatalogAlbum(release),
     [release],
   );
-  const exactSpotifyAlbum = useMemo(
-    () => findConfirmedSpotifyAlbum(release),
-    [release],
-  );
-  const canRefresh = Boolean(exactAppleAlbum || exactSpotifyAlbum);
   const savedTracklist = release?.tracklist;
   const tracks =
     savedTracklist?.status === "SUCCESS" &&
@@ -60,17 +42,12 @@ export function Tracklist({ release, onApply }) {
     setState({ running: false, error: "" });
   }, [release?.id]);
 
-  if (!canRefresh && !tracks.length) return null;
+  if (!exactAlbum && !tracks.length) return null;
 
   const multipleDiscs = new Set(tracks.map((track) => track.discNumber)).size > 1;
-  const hint = sourceHint(
-    exactAppleAlbum,
-    exactSpotifyAlbum,
-    savedTracklist?.provider,
-  );
 
   async function refresh() {
-    if (state.running || !canRefresh) return;
+    if (state.running || !exactAlbum) return;
     setState({ running: true, error: "" });
     try {
       const response = await fetch("/api/tracklists/refresh", {
@@ -82,8 +59,8 @@ export function Tracklist({ release, onApply }) {
         body: JSON.stringify({
           release: {
             id: release.id,
-            externalLinks: (release.externalLinks ?? []).filter((link) =>
-              ["APPLE_MUSIC", "SPOTIFY"].includes(link.provider),
+            externalLinks: (release.externalLinks ?? []).filter(
+              (link) => link.provider === "APPLE_MUSIC",
             ),
           },
         }),
@@ -112,22 +89,20 @@ export function Tracklist({ release, onApply }) {
           {tracks.length ? (
             <p>
               {tracks.length} 首曲目
-              {savedTracklist?.provider === "SPOTIFY"
-                ? " · Spotify"
-                : savedTracklist?.provider === "APPLE_MUSIC"
-                  ? " · Apple Music"
-                  : ""}
+              {savedTracklist?.sourceStorefront
+                ? ` · Apple Music ${savedTracklist.sourceStorefront.toUpperCase()}`
+                : " · Apple Music"}
             </p>
-          ) : hint ? (
-            <p>{hint}</p>
-          ) : null}
+          ) : (
+            <p>从已确认的 Apple Music 专辑读取，必要时改查其他国家</p>
+          )}
         </div>
         <button
           type="button"
           className="icon-button release-tracklist-refresh"
           aria-label={tracks.length ? "更新曲目列表" : "获取曲目列表"}
           title={tracks.length ? "更新曲目列表" : "获取曲目列表"}
-          disabled={state.running || !canRefresh}
+          disabled={state.running || !exactAlbum}
           onClick={refresh}
         >
           {state.running ? (

@@ -2571,6 +2571,109 @@ test("ordinary NeoDB sync batch-checks an older known mark outside fetched pages
   }
 });
 
+test("NeoDB sync applies an in-place edit after the catalog item redirects to a new id", async () => {
+  const legacyId = "legacy-follow-the-feeling";
+  const canonicalId = "canonical-follow-the-feeling";
+  const legacyUrl = `https://neodb.social/album/${legacyId}`;
+  const canonicalUrl = `https://neodb.social/album/${canonicalId}`;
+  const oldMark = {
+    ...neoDbMark,
+    rating_grade: 10,
+    comment_text: "旧评论",
+    created_time: "2025-07-26T10:00:00Z",
+    item: {
+      ...neoDbMark.item,
+      uuid: legacyId,
+      url: legacyUrl,
+      title: "跟着感觉走",
+      credits: [{ role: "Artist", name: "张震岳" }],
+    },
+  };
+  const currentMark = {
+    ...oldMark,
+    rating_grade: 7,
+    comment_text: "最新评论",
+    item: {
+      ...oldMark.item,
+      uuid: canonicalId,
+      url: canonicalUrl,
+    },
+  };
+  const existing = {
+    ...neoDbMarkToRelease(oldMark),
+    id: "stable-local-release",
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, options = {}) => {
+    const href = String(input);
+    if (href === "/api/neodb/canonicalize") {
+      const urls = JSON.parse(options.body).urls;
+      assert.deepEqual(urls, [legacyUrl]);
+      return Response.json({
+        canonicalUrls: { [legacyUrl]: canonicalUrl },
+      });
+    }
+    const parsed = new URL(href);
+    if (parsed.pathname.includes("/api/me/shelf/items/")) {
+      return Response.json([currentMark]);
+    }
+    if (
+      parsed.pathname.includes("/api/me/shelf/") &&
+      parsed.searchParams.has("page")
+    ) {
+      const shelf = parsed.pathname.split("/").at(-1);
+      const data = shelf === "complete" ? [currentMark] : [];
+      return Response.json({ data, pages: 1, count: data.length });
+    }
+    if (parsed.pathname.includes(`/api/me/review/item/${canonicalId}`)) {
+      return Response.json({ body: "补充的长评" });
+    }
+    if (neoDbCatalogNotFound(parsed)) return emptyCatalogResponse();
+    throw new Error(`Unexpected URL: ${href}`);
+  };
+
+  try {
+    const result = await pullNeoDbDelta(
+      [existing],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: { [legacyId]: neoDbMarkHash(oldMark) },
+        reviewSnapshot: { [legacyId]: "" },
+        auditCursor: 0,
+      },
+    );
+
+    assert.deepEqual(result.canonicalChangedReleaseIds, [existing.id]);
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(result.plan.updates[0].releaseId, existing.id);
+    assert.equal(result.nextState.snapshot[legacyId], undefined);
+    assert.ok(result.nextState.snapshot[canonicalId]);
+
+    const next = applyNeoDbSyncPlan(
+      result.reconciledReleases,
+      result.plan,
+    );
+    assert.equal(next.length, 1);
+    assert.equal(next[0].id, existing.id);
+    assert.equal(
+      next[0].externalLinks.find((link) => link.provider === "NEODB")?.url,
+      canonicalUrl,
+    );
+    assert.equal(next[0].listeningEntries.length, 2);
+    assert.equal(getCurrentRating(next[0].listeningEntries), 7);
+    assert.equal(
+      sortListeningEntriesNewestFirst(next[0].listeningEntries)[0].comment,
+      "最新评论\n\n补充的长评",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("duplicate manager groups only releases with the same normalized NeoDB URL", () => {
   const release = (id, url) => ({
     id,
