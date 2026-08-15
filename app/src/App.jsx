@@ -15,7 +15,6 @@ import {
   UploadSimple,
   UsersThree,
   VinylRecord,
-  X,
 } from "@phosphor-icons/react";
 import {
   BrowserRouter,
@@ -48,6 +47,7 @@ import {
   dedupeEquivalentListeningEntries,
 } from "./lib/neodbSync.js";
 import { ContextualSearchResults } from "./components/ContextualSearchResults.jsx";
+import { LibrarySearchField } from "./components/LibrarySearchField.jsx";
 import { DuplicateManager } from "./components/DuplicateManager.jsx";
 import { SettingsDialog } from "./components/SettingsDialog.jsx";
 import {
@@ -86,6 +86,7 @@ import {
   USER_STATE_KEY,
 } from "./lib/sharedStorageKeys.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
+import { persistReleaseOverlay } from "./lib/releaseMetadataPersist.js";
 import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
 import {
   getBaseRelease,
@@ -496,6 +497,33 @@ function LibraryApp() {
     navigate(`/artists?${params.toString()}`);
   }
 
+  const applyLibrarySearch = useCallback(
+    (nextSearch) => {
+      if (nextSearch === search) return;
+      setSearch(nextSearch);
+      if (isDuplicateRoute) {
+        navigate(`/?view=${view}`);
+      } else if (isArtistRoute && selectedArtistId) {
+        const params = new URLSearchParams(location.search);
+        params.delete("artist");
+        navigate(`/artists?${params.toString()}`);
+      }
+    },
+    [
+      isArtistRoute,
+      isDuplicateRoute,
+      location.search,
+      navigate,
+      search,
+      selectedArtistId,
+      view,
+    ],
+  );
+
+  const clearLibrarySearch = useCallback(() => {
+    setSearch("");
+  }, []);
+
   function openArtistFromDetail(artistId) {
     const from = new URLSearchParams(location.search).get("from");
     if (!from || from === "library") {
@@ -624,6 +652,9 @@ function LibraryApp() {
         return { ...release, albumIntroduction: text };
       }),
     );
+    persistReleaseOverlay(releaseId, {
+      albumIntroduction: text || null,
+    });
     setToast(
       text
         ? `已保存《${updatedTitle}》的专辑介绍`
@@ -696,6 +727,9 @@ function LibraryApp() {
           : release,
       ),
     );
+    for (const [releaseId, motionArtwork] of updatesById) {
+      persistReleaseOverlay(releaseId, { motionArtwork });
+    }
   }
 
   function applyExternalRatings(releaseId, externalRatings) {
@@ -709,14 +743,15 @@ function LibraryApp() {
     );
   }
 
-  function applyTracklist(releaseId, tracklist) {
+  const applyTracklist = useCallback((releaseId, tracklist) => {
     if (!releaseId || tracklist?.status !== "SUCCESS") return;
     setReleases((current) =>
       current.map((release) =>
         release.id === releaseId ? { ...release, tracklist } : release,
       ),
     );
-  }
+    persistReleaseOverlay(releaseId, { tracklist });
+  }, []);
 
   function findMergeCandidate(releaseId, inputUrl) {
     return findReleaseByReferenceUrl(
@@ -989,35 +1024,11 @@ function LibraryApp() {
             <p>{releases.length} releases</p>
           </div>
           <div className="header-actions">
-            <label className="search-field">
-              <MagnifyingGlass aria-hidden="true" />
-              <span className="sr-only">搜索发行、艺人、流派或评论</span>
-              <input
-                id="library-search"
-                type="search"
-                value={search}
-                placeholder="搜索唱片、艺人或评论"
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  if (isDuplicateRoute) {
-                    navigate(`/?view=${view}`);
-                  } else if (isArtistRoute && selectedArtistId) {
-                    const params = new URLSearchParams(location.search);
-                    params.delete("artist");
-                    navigate(`/artists?${params.toString()}`);
-                  }
-                }}
-              />
-              {search ? (
-                <button
-                  type="button"
-                  onClick={() => setSearch("")}
-                  aria-label="清除搜索"
-                >
-                  <X aria-hidden="true" />
-                </button>
-              ) : null}
-            </label>
+            <LibrarySearchField
+              appliedQuery={search}
+              onApply={applyLibrarySearch}
+              onClear={clearLibrarySearch}
+            />
             <button
               type="button"
               className={`icon-button filter-button${

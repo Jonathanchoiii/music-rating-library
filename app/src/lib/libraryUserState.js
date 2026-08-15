@@ -8,6 +8,7 @@ import {
   dedupeEquivalentListeningEntries,
   getReleaseMetadataFields,
 } from "./neodbSync.js";
+import { applyMetadataFieldsToUserState } from "./releaseMetadataOverlay.js";
 import {
   LEGACY_FULL_LIBRARY_KEYS,
   LEGACY_USER_STATE_KEY,
@@ -199,6 +200,34 @@ export function loadInitialLibraryState() {
   } catch {
     const userState = deriveUserState(seedReleases);
     return { releases: applyUserState(userState), userState };
+  }
+}
+
+function parseStoredUserState() {
+  try {
+    const savedUserState = window.localStorage.getItem(USER_STATE_KEY);
+    return savedUserState ? JSON.parse(savedUserState) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function patchPersistedReleaseMetadata(releaseId, fields) {
+  const nextState = applyMetadataFieldsToUserState(
+    parseStoredUserState(),
+    releaseId,
+    fields,
+  );
+  const serializedState = JSON.stringify(nextState);
+  if (window.localStorage.getItem(USER_STATE_KEY) === serializedState) {
+    return false;
+  }
+  try {
+    window.localStorage.setItem(USER_STATE_KEY, serializedState);
+    return true;
+  } catch (error) {
+    console.warn("用户发行增量暂时无法写入本地存储", error);
+    return false;
   }
 }
 

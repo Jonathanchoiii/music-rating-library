@@ -1,4 +1,9 @@
+import { persistReleaseMetadataFields } from "../shared-state/release-metadata.mjs";
 import { findConfirmedAppleMusicCatalogAlbum } from "../src/lib/appleMusicUrl.js";
+import { mergeFetchedTracklist } from "../src/lib/tracklist.js";
+import { readReleaseMetadataRecord } from "../src/lib/releaseMetadataOverlay.js";
+import { USER_STATE_KEY } from "../src/lib/sharedStorageKeys.js";
+import { readSharedState } from "../shared-state/index.mjs";
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_REQUEST_BYTES = 64_000;
@@ -202,7 +207,24 @@ export async function handleTracklistRequest(request, response, options = {}) {
     }
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     const tracklist = await fetchExactTracklist(payload.release, options);
-    json(response, 200, { tracklist });
+    const releaseId = String(payload.release?.id ?? "").trim();
+    let persisted = tracklist;
+    if (releaseId && tracklist?.status === "SUCCESS") {
+      const shared = await readSharedState();
+      let userState = {};
+      try {
+        userState = JSON.parse(shared.storage?.[USER_STATE_KEY] ?? "{}");
+      } catch {
+        userState = {};
+      }
+      const previous = readReleaseMetadataRecord(userState, releaseId);
+      persisted = mergeFetchedTracklist(tracklist, previous.tracklist);
+      const { nextRelease } = await persistReleaseMetadataFields(releaseId, {
+        tracklist: persisted,
+      });
+      persisted = nextRelease.tracklist ?? persisted;
+    }
+    json(response, 200, { tracklist: persisted });
   } catch (error) {
     const safeErrors = new Set([
       "EXACT_APPLE_MUSIC_LINK_REQUIRED",

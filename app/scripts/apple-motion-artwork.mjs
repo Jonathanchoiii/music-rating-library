@@ -4,11 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  applySharedStateChanges,
-  readSharedState,
-} from "../shared-state/index.mjs";
-import { USER_STATE_KEY } from "../src/lib/sharedStorageKeys.js";
+import { persistReleaseMetadataFields } from "../shared-state/release-metadata.mjs";
 import { readJsonBody, sendJson } from "./http-json.mjs";
 
 const DEFAULT_ARTWORK_API = "https://artwork.m8tec.top";
@@ -438,48 +434,15 @@ async function lookupMotionArtwork(release, fetchImpl = fetch) {
 }
 
 async function persistMotionArtwork(releaseId, motionArtwork) {
-  const shared = await readSharedState();
-  const previousText = shared.storage?.[USER_STATE_KEY] ?? null;
-  let userState = {};
-  try {
-    userState = previousText ? JSON.parse(previousText) : {};
-  } catch {
-    userState = {};
-  }
-  const previousOverrides = userState.releaseMetadataOverrides ?? {};
-  const userReleaseIndex = (userState.userReleases ?? []).findIndex(
-    (release) => release?.id === releaseId,
+  const { previousRelease, nextRelease } = await persistReleaseMetadataFields(
+    releaseId,
+    { motionArtwork },
   );
-  const previousRelease =
-    userReleaseIndex >= 0
-      ? userState.userReleases[userReleaseIndex]
-      : previousOverrides[releaseId] ?? {};
   const previousLocalUrl = previousRelease.motionArtwork?.localUrl;
-  const mergedMotionArtwork = {
+  const mergedMotionArtwork = nextRelease.motionArtwork ?? {
     ...(previousRelease.motionArtwork ?? {}),
     ...motionArtwork,
   };
-  const nextState = { ...userState };
-  if (userReleaseIndex >= 0) {
-    nextState.userReleases = [...userState.userReleases];
-    nextState.userReleases[userReleaseIndex] = {
-      ...previousRelease,
-      motionArtwork: mergedMotionArtwork,
-    };
-  } else {
-    nextState.releaseMetadataOverrides = {
-      ...previousOverrides,
-      [releaseId]: {
-        ...previousRelease,
-        motionArtwork: mergedMotionArtwork,
-      },
-    };
-  }
-  await applySharedStateChanges(
-    { [USER_STATE_KEY]: JSON.stringify(nextState) },
-    undefined,
-    { baseStorage: { [USER_STATE_KEY]: previousText } },
-  );
   if (
     motionArtwork.localUrl &&
     previousLocalUrl &&

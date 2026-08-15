@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
+import { persistReleaseMetadataFields } from "../shared-state/release-metadata.mjs";
+import { readSharedState } from "../shared-state/index.mjs";
 import {
   appleTracklistStorefrontsToTry,
   fetchExactTracklist,
+  handleTracklistRequest,
   normalizeAppleTracklistPayload,
 } from "../tracklists/index.mjs";
+import {
+  appendManualTrack,
+  mergeFetchedTracklist,
+  parseTrackDurationInput,
+} from "../src/lib/tracklist.js";
 import { getReleaseMetadataFields } from "../src/lib/neodbSync.js";
 
 const album = {
@@ -212,3 +224,146 @@ test("keeps the first storefront that returns exact songs", () => {
 test("tracklists are persisted as shared release metadata", () => {
   assert.equal(getReleaseMetadataFields().includes("tracklist"), true);
 });
+
+test("Apple tracklist fetch writes the shared release overlay", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "recordshelf-tracklist-persist-"),
+  );
+  const statePath = path.join(directory, "shared-state.json");
+  const previous = process.env.RECORDSHELF_SHARED_STATE_PATH;
+  process.env.RECORDSHELF_SHARED_STATE_PATH = statePath;
+  context.after(async () => {
+    if (previous === undefined) {
+      delete process.env.RECORDSHELF_SHARED_STATE_PATH;
+    } else {
+      process.env.RECORDSHELF_SHARED_STATE_PATH = previous;
+    }
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  await persistReleaseMetadataFields(release.id, {
+    tracklist: appendManualTrack(null, {
+      title: "Keep extra",
+      durationMs: 120_000,
+      id: "user:keep",
+    }).tracklist,
+  });
+
+  const request = new PassThrough();
+  request.method = "POST";
+  request.url = "/api/tracklists/refresh";
+  request.end(
+    JSON.stringify({
+      release: {
+        id: release.id,
+        externalLinks: release.externalLinks,
+      },
+    }),
+  );
+  let body = "";
+  const response = {
+    statusCode: 0,
+    setHeader() {},
+    end(value = "") {
+      body = String(value);
+    },
+  };
+  assert.equal(
+    await handleTracklistRequest(request, response, {
+      fetchImpl: async () =>
+        new Response(JSON.stringify(songPayload()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    }),
+    true,
+  );
+  assert.equal(response.statusCode, 200);
+  const payload = JSON.parse(body);
+  assert.equal(payload.tracklist.provider, "MIXED");
+  assert.equal(payload.tracklist.tracks.at(-1).id, "user:keep");
+
+  const userState = JSON.parse(
+    (await readSharedState(statePath)).storage["recordshelf-user-state-v2"],
+  );
+  assert.equal(
+    userState.releaseMetadataOverrides[release.id].tracklist.provider,
+    "MIXED",
+  );
+  assert.equal(
+    userState.releaseMetadataOverrides[release.id].tracklist.tracks[0].title,
+    "Exact song",
+  );
+});
+
+test("parses manual duration as m:ss, h:mm:ss, seconds, or fullwidth colon", () => {
+  assert.equal(parseTrackDurationInput("3:45").durationMs, 225_000);
+  assert.equal(parseTrackDurationInput("1:02:03").durationMs, 3723_000);
+  assert.equal(parseTrackDurationInput("45").durationMs, 45_000);
+  assert.equal(parseTrackDurationInput("3：05").durationMs, 185_000);
+  assert.equal(parseTrackDurationInput("").error, "DURATION_REQUIRED");
+  assert.equal(parseTrackDurationInput("3:99").error, "DURATION_INVALID");
+});
+
+test("appends manual title and duration after catalog tracks", () => {
+  const first = appendManualTrack(
+    {
+      version: 1,
+      provider: "APPLE_MUSIC",
+      status: "SUCCESS",
+      tracks: [
+        {
+          id: "apple:1",
+          discNumber: 1,
+          trackNumber: 1,
+          title: "Smooth Operator",
+          durationMs: 257_000,
+        },
+      ],
+    },
+    { title: " Hang On to Your Love ", durationMs: 264_000, id: "user:fixed" },
+  );
+  assert.equal(first.error, null);
+  assert.equal(first.tracklist.provider, "MIXED");
+  assert.equal(first.tracklist.tracks[1].title, "Hang On to Your Love");
+  assert.equal(first.tracklist.tracks[1].trackNumber, 2);
+  assert.equal(first.tracklist.tracks[1].id, "user:fixed");
+
+  const second = appendManualTrack(first.tracklist, {
+    title: "Cherry Pie",
+    durationMs: 262_000,
+    id: "user:two",
+  });
+  assert.equal(second.tracklist.trackCount, 3);
+  assert.equal(second.tracklist.tracks[2].trackNumber, 3);
+});
+
+test("keeps previously added user tracks after a later Apple fetch", () => {
+  const previous = appendManualTrack(null, {
+    title: "Manual extra",
+    durationMs: 120_000,
+    id: "user:keep",
+  }).tracklist;
+  const merged = mergeFetchedTracklist(
+    {
+      version: 1,
+      provider: "APPLE_MUSIC",
+      status: "SUCCESS",
+      sourceStorefront: "us",
+      tracks: [
+        {
+          id: "apple:9",
+          discNumber: 1,
+          trackNumber: 1,
+          title: "Smooth Operator",
+          durationMs: 257_000,
+        },
+      ],
+    },
+    previous,
+  );
+  assert.equal(merged.provider, "MIXED");
+  assert.equal(merged.tracks[1].id, "user:keep");
+  assert.equal(merged.tracks[1].trackNumber, 2);
+});
+
