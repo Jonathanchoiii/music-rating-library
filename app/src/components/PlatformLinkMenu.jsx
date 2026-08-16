@@ -46,7 +46,10 @@ export function PlatformLinkMenu({
       className="release-id-menu-backdrop"
       role="presentation"
       onMouseDown={(event) => event.stopPropagation()}
-      onPointerDown={onClose}
+      onPointerDown={(event) => {
+        if (event.button === 2) return;
+        onClose();
+      }}
     >
       <div
         className="release-id-menu platform-link-menu"
@@ -157,14 +160,26 @@ export function usePlatformLinkMenu() {
   }
 
   function bindSlot(slot, link) {
+    function openFromEvent(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearLongPress();
+      openMenu(slot, link, event.clientX, event.clientY);
+    }
+
     return {
       onContextMenu(event) {
-        event.preventDefault();
-        event.stopPropagation();
-        clearLongPress();
-        openMenu(slot, link, event.clientX, event.clientY);
+        openFromEvent(event);
+      },
+      onAuxClick(event) {
+        if (event.button !== 2) return;
+        openFromEvent(event);
       },
       onPointerDown(event) {
+        if (event.button === 2) {
+          openFromEvent(event);
+          return;
+        }
         if (event.pointerType !== "touch" || event.button !== 0) return;
         clearLongPress();
         pressRef.current = {

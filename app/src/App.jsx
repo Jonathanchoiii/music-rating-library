@@ -1432,6 +1432,8 @@ function LibraryApp() {
         onApplyMotionArtworkUpdates={applyMotionArtworkUpdates}
         onApplyExternalRatings={readOnly ? undefined : applyExternalRatings}
         onApplyTracklist={readOnly ? undefined : applyTracklist}
+        onApplyCoverUpdates={readOnly ? undefined : applyCoverUpdates}
+        onToast={setToast}
       />
       {isAddRoute && !readOnly ? (
         <AddReleaseDialog

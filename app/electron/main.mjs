@@ -1,12 +1,21 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, net, shell } from "electron";
 import { startRecordShelfServer } from "./server.mjs";
 
 let mainWindow = null;
 let localServer = null;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const BRAND_ICON_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "assets",
+  "RecordShelf.png",
+);
 
 function createWindow(origin) {
   mainWindow = new BrowserWindow({
     title: "RecordShelf",
+    icon: BRAND_ICON_PATH,
     width: 1360,
     height: 900,
     minWidth: 390,
@@ -28,6 +37,13 @@ function createWindow(origin) {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+}
+
+function focusMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 async function launch() {
@@ -56,16 +72,26 @@ async function launch() {
   }
 }
 
-app.whenReady().then(launch);
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", focusMainWindow);
 
-app.on("activate", () => {
-  if (!mainWindow && localServer) createWindow(localServer.origin);
-});
+  app.whenReady().then(launch);
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  app.on("activate", () => {
+    if (!mainWindow && localServer) {
+      createWindow(localServer.origin);
+      return;
+    }
+    focusMainWindow();
+  });
 
-app.on("before-quit", () => {
-  localServer?.close();
-});
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("before-quit", () => {
+    localServer?.close();
+  });
+}

@@ -13,24 +13,11 @@ import {
 } from "@phosphor-icons/react";
 import {
   clearCoverLoadFailures,
+  coverLookupRecord,
   getFailedCoverReleaseIds,
 } from "../lib/coverStatus.js";
 
-function coverLookupRecord(release, loadFailed = false) {
-  return {
-    id: release.id,
-    title: release.title,
-    artists: release.artists,
-    coverUrl: loadFailed ? "" : release.coverUrl ?? "",
-    coverRemoteUrl: release.coverRemoteUrl ?? "",
-    coverSource: release.coverSource ?? "",
-    coverMatchedFrom: release.coverMatchedFrom ?? "",
-    externalLinks: (release.externalLinks ?? []).filter((link) =>
-      ["CONFIRMED", "AUTO_CONFIRMED"].includes(link.status),
-    ),
-  };
-}
-
+const COVER_UPDATE_BATCH_SIZE = 40;
 
 export function SettingsHome({
   releases,
@@ -253,12 +240,22 @@ export function SettingsHome({
         clearCoverLoadFailures(updates.map((update) => update.id));
         processed += batch.length;
         const originals = new Map(
-          batch.map((release) => [release.id, release.coverUrl ?? ""]),
+          batch.map((release) => [
+            release.id,
+            {
+              coverUrl: release.coverUrl ?? "",
+              coverRemoteUrl: release.coverRemoteUrl ?? "",
+            },
+          ]),
         );
-        updated += updates.filter(
-          (update) =>
-            update.coverUrl && update.coverUrl !== originals.get(update.id),
-        ).length;
+        updated += updates.filter((update) => {
+          const original = originals.get(update.id);
+          return (
+            Boolean(update.coverUrl) &&
+            (update.coverUrl !== original?.coverUrl ||
+              (update.coverRemoteUrl ?? "") !== original?.coverRemoteUrl)
+          );
+        }).length;
         unresolved += result.unresolved ?? 0;
         setCoverUpdate({
           running: true,

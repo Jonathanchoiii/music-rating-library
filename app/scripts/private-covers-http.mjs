@@ -17,8 +17,121 @@ const CONTENT_TYPES = new Map([
   [".webp", "image/webp"],
 ]);
 
+const COVER_PALETTE_PROXY_PATH = "/api/cover-palette-image";
+const MAX_PALETTE_IMAGE_BYTES = 15 * 1024 * 1024;
+const TRUSTED_COVER_HOSTS = [
+  "archive.org",
+  "coverartarchive.org",
+  "doubanio.com",
+  "mzstatic.com",
+  "neodb.social",
+  "scdn.co",
+  "spotifycdn.com",
+];
+const PROXIED_IMAGE_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
 let enrichQueue = Promise.resolve();
 let enrichRunning = false;
+
+export function isTrustedCoverPaletteUrl(value) {
+  try {
+    const url = new URL(String(value ?? ""));
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== "443")
+    ) {
+      return false;
+    }
+    const hostname = url.hostname.toLocaleLowerCase().replace(/\.$/, "");
+    return TRUSTED_COVER_HOSTS.some(
+      (trustedHost) =>
+        hostname === trustedHost || hostname.endsWith(`.${trustedHost}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function proxiedImageType(response) {
+  return String(response.headers.get("content-type") ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLocaleLowerCase();
+}
+
+export async function handleCoverPaletteImageRequest(
+  request,
+  response,
+  options = {},
+) {
+  const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+  if (requestUrl.pathname !== COVER_PALETTE_PROXY_PATH) return false;
+
+  if (!['GET', 'HEAD'].includes(request.method ?? "GET")) {
+    sendJson(response, 405, { error: "METHOD_NOT_ALLOWED" });
+    return true;
+  }
+
+  const sourceUrl = requestUrl.searchParams.get("url") ?? "";
+  if (!isTrustedCoverPaletteUrl(sourceUrl)) {
+    sendJson(response, 403, { error: "UNTRUSTED_COVER_URL" });
+    return true;
+  }
+
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl !== "function") {
+    sendJson(response, 503, { error: "FETCH_UNAVAILABLE" });
+    return true;
+  }
+
+  let upstream;
+  try {
+    upstream = await fetchImpl(sourceUrl, {
+      headers: { accept: "image/avif,image/webp,image/png,image/jpeg,image/gif" },
+      redirect: "follow",
+    });
+  } catch {
+    sendJson(response, 502, { error: "COVER_FETCH_FAILED" });
+    return true;
+  }
+
+  if (!upstream.ok || !isTrustedCoverPaletteUrl(upstream.url || sourceUrl)) {
+    sendJson(response, 502, { error: "COVER_FETCH_REJECTED" });
+    return true;
+  }
+
+  const contentType = proxiedImageType(upstream);
+  const declaredLength = Number(upstream.headers.get("content-length") ?? 0);
+  if (
+    !PROXIED_IMAGE_TYPES.has(contentType) ||
+    (declaredLength > 0 && declaredLength > MAX_PALETTE_IMAGE_BYTES)
+  ) {
+    sendJson(response, 415, { error: "UNSUPPORTED_COVER_RESPONSE" });
+    return true;
+  }
+
+  const body = Buffer.from(await upstream.arrayBuffer());
+  if (body.length > MAX_PALETTE_IMAGE_BYTES) {
+    sendJson(response, 413, { error: "COVER_TOO_LARGE" });
+    return true;
+  }
+
+  response.statusCode = 200;
+  response.setHeader("content-type", contentType);
+  response.setHeader("content-length", String(body.length));
+  response.setHeader("cache-control", "private, max-age=86400");
+  response.setHeader("x-content-type-options", "nosniff");
+  response.end(request.method === "HEAD" ? undefined : body);
+  return true;
+}
 
 function safeCoverFileName(pathname) {
   const prefix = `${getPrivateCoverRoutePrefix()}/`;

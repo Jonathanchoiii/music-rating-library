@@ -6,6 +6,7 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
+import { coverDisplaySrc } from "../lib/coverStatus.js";
 import {
   displayDate,
   getCurrentRating,
@@ -44,7 +45,7 @@ function MergeChoice({
       <span className="release-merge-radio" aria-hidden="true" />
       {release.coverUrl ? (
         <img
-          src={release.coverUrl}
+          src={coverDisplaySrc(release)}
           alt={`${release.artists.join("、")}《${release.title}》封面`}
         />
       ) : (
@@ -82,7 +83,7 @@ function MergeSearchResult({ release, selected, onSelect }) {
     >
       {release.coverUrl ? (
         <img
-          src={release.coverUrl}
+          src={coverDisplaySrc(release)}
           alt={`${release.artists.join("、")}《${release.title}》封面`}
         />
       ) : (

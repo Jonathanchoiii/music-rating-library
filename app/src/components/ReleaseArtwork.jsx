@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { coverDisplaySrc } from "../lib/coverStatus.js";
 import { isMotionArtworkEnabled } from "../lib/motionArtwork.js";
 
 export function ReleaseArtwork({
@@ -6,6 +7,7 @@ export function ReleaseArtwork({
   active = false,
   userRequested = false,
   className = "",
+  onLoad,
   onStaticError,
 }) {
   const [motionFailed, setMotionFailed] = useState(false);
@@ -20,7 +22,7 @@ export function ReleaseArtwork({
   useEffect(() => {
     setMotionFailed(false);
     setCoverFailed(false);
-  }, [release.id, release.coverUrl, motionUrl]);
+  }, [release.id, release.coverUrl, release.coverMatchedAt, motionUrl]);
 
   const shouldShowMotion =
     motionUrl && active && (!reducedMotion || userRequested) && !motionFailed;
@@ -31,17 +33,20 @@ export function ReleaseArtwork({
         className={`release-cover release-motion-artwork ${className}`}
         src={motionUrl}
         alt={`${release.artists.join("、")}《${release.title}》动态封面`}
+        onLoad={onLoad}
         onError={() => setMotionFailed(true)}
       />
     );
   }
 
-  return release.coverUrl && !coverFailed ? (
+  const coverSrc = coverDisplaySrc(release);
+  return coverSrc && !coverFailed ? (
     <img
       className={`release-cover ${className}`}
-      src={release.coverUrl}
+      src={coverSrc}
       alt={`${release.artists.join("、")}《${release.title}》封面`}
       loading="lazy"
+      onLoad={onLoad}
       onError={() => {
         setCoverFailed(true);
         onStaticError?.();

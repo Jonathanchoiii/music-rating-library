@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  AppleLogo,
-  ArrowSquareOut,
   CaretDown,
   Plus,
   SpinnerGap,
@@ -45,7 +43,7 @@ function sectionSubtitle({ editing, showingUser, hasOfficialVersion }) {
   if (editing) return "保存在本机音乐库，不会覆盖 Apple Music 官方原文。";
   if (showingUser) return "";
   if (hasOfficialVersion) return "Apple Music 官方编辑介绍，不改写原文。";
-  return "可以自己写，也可以在配置令牌后读取 Apple Music 官方介绍。";
+  return "可手动添加或配置令牌自动拉取";
 }
 
 export function AppleMusicEditorialNotes({
@@ -242,8 +240,6 @@ export function AppleMusicEditorialNotes({
   const regionNames = selectedVersion
     ? editorialVersionRegionNames(selectedVersion, locale)
     : [];
-  const appleMusicUrl =
-    state.result?.album?.appleMusicUrl || album?.canonicalUrl || "";
   const scan = state.result?.scan;
   const canScanMore = Boolean(album) && scan?.mode === "quick";
   const canEdit = typeof onSaveIntroduction === "function";
@@ -440,8 +436,7 @@ export function AppleMusicEditorialNotes({
           </p>
         ) : null}
 
-        {!editing &&
-        ((canEdit && hasUserIntroduction) || canScanMore || appleMusicUrl) ? (
+        {!editing && ((canEdit && hasUserIntroduction) || canScanMore) ? (
           <div className="apple-editorial-footer">
             <div className="apple-editorial-footer-actions">
               {canEdit && hasUserIntroduction ? (
@@ -473,13 +468,6 @@ export function AppleMusicEditorialNotes({
                 >
                   {loadingMore ? "正在查找…" : "查找更多语言版本"}
                 </button>
-              ) : null}
-              {appleMusicUrl ? (
-                <a href={appleMusicUrl} target="_blank" rel="noopener noreferrer">
-                  <AppleLogo weight="fill" aria-hidden="true" />
-                  在 Apple Music 中打开
-                  <ArrowSquareOut aria-hidden="true" />
-                </a>
               ) : null}
             </div>
           </div>

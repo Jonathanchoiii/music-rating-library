@@ -2284,6 +2284,12 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .release-drawer {
+  --detail-palette-primary: var(--bg);
+  --detail-palette-primary-soft: transparent;
+  --detail-hero-ink: var(--text);
+  --detail-hero-muted: var(--muted-dark);
+  --detail-hero-line: var(--line);
+  --detail-control-surface: var(--surface);
   position: absolute;
   inset: 0 0 0 auto;
   width: min(100%, 690px);
@@ -2292,6 +2298,48 @@ html.is-desktop-shell .desktop-sidebar {
   overflow-y: auto;
   background: var(--bg);
   box-shadow: -18px 0 50px rgba(0, 0, 0, 0.11);
+  isolation: isolate;
+  transition: background-color 220ms ease;
+}
+
+.release-drawer::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0 0 auto;
+  height: 195px;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse 90% 68% at 50% -12%,
+      var(--detail-palette-primary-soft),
+      transparent 74%
+    ),
+    linear-gradient(
+      180deg,
+      var(--detail-palette-primary) 0%,
+      color-mix(in srgb, var(--detail-palette-primary) 48%, var(--bg)) 48%,
+      var(--bg) 100%
+    );
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+
+.release-drawer[data-detail-tone="light"]::before {
+  opacity: 0.5;
+}
+
+.release-drawer > * {
+  position: relative;
+  z-index: 1;
+}
+
+.cover-palette-proxy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .drawer-topbar,
@@ -2306,10 +2354,21 @@ html.is-desktop-shell .desktop-sidebar {
   justify-content: space-between;
 }
 
-.drawer-topbar > span {
-  color: var(--muted-dark);
-  font-size: 13px;
-  font-weight: 650;
+.drawer-topbar {
+  justify-content: flex-end;
+}
+
+.release-drawer .external-ratings h3,
+.release-drawer .timeline-header h3,
+.release-drawer .apple-editorial-header h3,
+.release-drawer .release-tracklist-header h3,
+.release-drawer .listening-guide-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
 }
 
 .detail-hero {
@@ -2320,7 +2379,7 @@ html.is-desktop-shell .desktop-sidebar {
   margin-bottom: 14px;
 }
 
-.detail-hero > img,
+.detail-hero > .detail-cover,
 .detail-hero > video,
 .detail-cover-placeholder {
   grid-column: 1;
@@ -2329,6 +2388,70 @@ html.is-desktop-shell .desktop-sidebar {
   aspect-ratio: 1;
   object-fit: cover;
   border-radius: var(--radius-cover);
+}
+
+.detail-cover {
+  position: relative;
+}
+
+.detail-cover > img,
+.detail-cover > .release-cover,
+.detail-cover > .detail-cover-placeholder {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-cover);
+}
+
+.detail-cover-refresh {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-cover);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  opacity: 0.3;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  appearance: none;
+}
+
+.detail-cover-refresh svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.detail-cover-refresh:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  color: var(--accent);
+}
+
+.detail-cover-refresh:disabled {
+  cursor: wait;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .detail-cover-refresh {
+    opacity: 0;
+  }
+
+  .detail-cover:hover .detail-cover-refresh,
+  .detail-cover:focus-within .detail-cover-refresh,
+  .detail-cover-refresh:focus-visible,
+  .detail-cover-refresh:disabled {
+    opacity: 0.3;
+  }
 }
 
 .detail-cover-placeholder {
@@ -2418,7 +2541,7 @@ html.is-desktop-shell .desktop-sidebar {
   gap: 7px;
 }
 
-.detail-type-editor > span {
+.detail-tool-caption {
   color: var(--muted);
   font-size: 11px;
   font-weight: 650;
@@ -2429,7 +2552,13 @@ html.is-desktop-shell .desktop-sidebar {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: 7px 14px;
+  container-type: inline-size;
+  container-name: detail-release-tools;
+}
+
+.detail-listen-links-label {
+  display: none;
 }
 
 .detail-type-buttons {
@@ -2460,6 +2589,17 @@ html.is-desktop-shell .desktop-sidebar {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+@container detail-release-tools (max-width: 28rem) {
+  .detail-listen-links-label {
+    display: block;
+    flex: 1 1 100%;
+  }
+
+  .detail-utility-icons {
+    margin-left: 0;
+  }
 }
 
 .detail-utility-icon {
@@ -2581,10 +2721,6 @@ html.is-desktop-shell .desktop-sidebar {
 
 .external-ratings h3 {
   margin: 0;
-  color: var(--text);
-  font-size: 20px;
-  line-height: 1.2;
-  letter-spacing: -0.025em;
 }
 
 .external-ratings header p,
@@ -2875,7 +3011,6 @@ html.is-desktop-shell .desktop-sidebar {
 
 .timeline-header h3 {
   margin: 0;
-  font-size: 21px;
 }
 
 .timeline-header p {
@@ -2970,8 +3105,6 @@ html.is-desktop-shell .desktop-sidebar {
 
 .apple-editorial-header h3 {
   margin: 0;
-  font-size: 20px;
-  letter-spacing: -0.025em;
 }
 
 .apple-editorial-header p {
@@ -3113,10 +3246,6 @@ html.is-desktop-shell .desktop-sidebar {
 
 .release-tracklist-header h3 {
   margin: 0;
-  color: var(--text);
-  font-size: 20px;
-  line-height: 1.2;
-  letter-spacing: -0.025em;
 }
 
 .release-tracklist-header p {
@@ -3320,24 +3449,6 @@ html.is-desktop-shell .desktop-sidebar {
   color: rgb(0 0 0 / 72%);
 }
 
-.apple-editorial-footer a {
-  color: var(--muted-dark);
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.apple-editorial-footer a:hover {
-  color: var(--accent);
-}
-
-.apple-editorial-footer a svg {
-  width: 15px;
-  height: 15px;
-}
-
 .listening-guide {
   margin-top: 12px;
   padding: 28px 0 26px;
@@ -3354,8 +3465,6 @@ html.is-desktop-shell .desktop-sidebar {
 
 .listening-guide-header h3 {
   margin: 0;
-  font-size: 21px;
-  letter-spacing: -0.025em;
 }
 
 .listening-guide-header p {
@@ -5861,104 +5970,50 @@ button.settings-entry:disabled {
 }
 
 @media (max-width: 750px) {
-  .release-shelf-view {
-    --mobile-shelf-size: min(42vw, 360px);
-    --mobile-shelf-step: 74px;
-  }
-
   .release-shelf-stream {
-    gap: 0;
+    gap: clamp(22px, 6vw, 36px);
   }
 
   .release-shelf {
-    min-height: 0;
-    padding: 0;
+    min-height: clamp(120px, 28vw, 205px);
+    padding: 0 clamp(12px, 3vw, 22px) 34px;
   }
 
-  .release-shelf:has(.release-shelf-record:hover),
-  .release-shelf:has(.release-shelf-cover-button:focus-visible) {
-    z-index: 30;
-  }
-
-  .release-shelf + .release-shelf {
-    margin-top: calc(
-      var(--mobile-shelf-step) - var(--mobile-shelf-size) - 10px
-    );
-  }
-
-  .release-shelf-index,
-  .release-shelf-board {
-    display: none;
+  .release-shelf-index {
+    top: 34%;
+    left: 0;
+    font-size: 7px;
   }
 
   .release-shelf-row {
-    display: flex;
-    height: auto;
-    padding-bottom: 10px;
-    flex-direction: column;
-    align-items: center;
+    gap: clamp(4px, 1.4vw, 9px);
   }
 
   .release-shelf-record {
-    position: relative;
-    z-index: calc(var(--shelf-slot) + 1);
-    width: var(--mobile-shelf-size);
-    min-width: 0;
-    max-width: none;
-    margin-top: calc(var(--mobile-shelf-step) - var(--mobile-shelf-size));
-    transform: scale(0.86);
-    transform-origin: center;
-    transition:
-      margin 360ms cubic-bezier(0.22, 1, 0.36, 1),
-      transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .release-shelf-record:first-child {
-    margin-top: 0;
+    max-width: 132px;
   }
 
   .release-shelf-record:hover,
   .release-shelf-record:has(.release-shelf-cover-button:focus-visible) {
-    z-index: 20;
-    transform: scale(1.045);
-  }
-
-  .release-shelf-record:hover::before,
-  .release-shelf-record:has(
-      .release-shelf-cover-button:focus-visible
-    )::before {
-    position: absolute;
-    z-index: -1;
-    inset: -20px;
-    border-radius: 14px;
-    background: var(--bg);
-    content: "";
+    z-index: 8;
+    transform: translateY(calc(var(--shelf-rise) - 12px)) rotate(0deg)
+      scale(calc(var(--shelf-scale) + 0.035));
   }
 
   .release-shelf-caption {
-    position: absolute;
-    inset: 0;
-    width: auto;
-    min-height: 100%;
-    padding: 45% 16px 14px;
-    align-items: end;
-    align-content: end;
-    border-radius: clamp(3px, 0.45vw, 7px);
-    background: linear-gradient(
-      180deg,
-      transparent 42%,
-      rgba(0, 0, 0, 0.78) 100%
-    );
-    pointer-events: none;
+    padding-top: 6px;
+    gap: 4px;
   }
 
   .release-shelf-caption strong,
-  .release-shelf-caption small {
-    color: white;
+  .release-shelf-caption small,
+  .release-shelf-caption em {
+    font-size: 8px;
   }
 
-  .release-shelf-caption em {
-    color: #ffd16b;
+  .release-shelf-board {
+    bottom: 27px;
+    height: 7px;
   }
 }
 
@@ -6194,8 +6249,6 @@ button.settings-entry:disabled {
   }
 
   .release-shelf-view {
-    --mobile-shelf-size: min(72vw, 282px);
-    --mobile-shelf-step: 58px;
     padding: 8px 16px 56px;
     border-radius: 0;
   }
@@ -6365,7 +6418,7 @@ button.settings-entry:disabled {
     margin-bottom: 10px;
   }
 
-  .detail-hero > img,
+  .detail-hero > .detail-cover,
   .detail-hero > video,
   .detail-cover-placeholder {
     grid-column: 1;
@@ -6458,10 +6511,6 @@ button.settings-entry:disabled {
     align-items: center;
   }
 
-  .apple-editorial-header h3 {
-    font-size: 19px;
-  }
-
   .apple-editorial-header-actions {
     gap: 8px;
   }
@@ -6514,10 +6563,6 @@ button.settings-entry:disabled {
 
   .listening-guide-header {
     gap: 12px;
-  }
-
-  .listening-guide-header h3 {
-    font-size: 20px;
   }
 
   .listening-guide-update {
@@ -6931,11 +6976,6 @@ button.settings-entry:disabled {
     margin-inline: -12px;
   }
 
-  .release-shelf-view {
-    --mobile-shelf-size: min(68vw, 264px);
-    --mobile-shelf-step: 54px;
-  }
-
   .library-content.is-shelf-view > .artist-profile > .artist-profile-back,
   .library-content.is-shelf-view > .artist-profile > header,
   .library-content.is-shelf-view > .primary-search-heading {
@@ -6944,10 +6984,6 @@ button.settings-entry:disabled {
 
   .view-switch button {
     width: 34px;
-  }
-
-  .release-shelf {
-    min-height: 0;
   }
 
   .mobile-nav {
@@ -7049,4 +7085,3 @@ html.is-readonly-preview .desktop-add,
 html.is-readonly-preview .import-link {
   display: none;
 }
-

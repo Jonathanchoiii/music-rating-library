@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import {
   AppleLogo,
+  ArrowClockwise,
   CalendarBlank,
   ClockCounterClockwise,
   LinkSimple,
@@ -17,7 +18,11 @@ import {
   getReleaseKindLabel,
   sortListeningEntriesNewestFirst,
 } from "../lib/music.js";
-import { markCoverLoadFailed } from "../lib/coverStatus.js";
+import {
+  clearCoverLoadFailures,
+  coverLookupRecord,
+  markCoverLoadFailed,
+} from "../lib/coverStatus.js";
 import { Rating } from "./Rating.jsx";
 import { ReleaseMergePanel } from "./ReleaseMergePanel.jsx";
 import { ListeningGuideSection } from "./ListeningGuideSection.jsx";
@@ -38,6 +43,10 @@ import {
   setMotionArtworkEnabled,
 } from "../lib/motionArtwork.js";
 import { isReadOnlyMode } from "../lib/readonlyMode.js";
+import {
+  getCoverPaletteProxyUrl,
+  readCoverPalette,
+} from "../lib/coverPalette.js";
 
 const PLATFORM_SLOTS = [
   {
@@ -75,25 +84,33 @@ export function ReleaseDetail({
   onApplyMotionArtworkUpdates,
   onApplyExternalRatings,
   onApplyTracklist,
+  onApplyCoverUpdates,
+  onToast,
 }) {
   const [editingProvider, setEditingProvider] = useState(null);
   const [draftUrl, setDraftUrl] = useState("");
   const [linkError, setLinkError] = useState("");
   const [coverLoadFailed, setCoverLoadFailed] = useState(false);
+  const [coverRefreshing, setCoverRefreshing] = useState(false);
+  const [coverPalette, setCoverPalette] = useState(null);
+  const [coverPaletteProxyUrl, setCoverPaletteProxyUrl] = useState("");
   const [motionLookup, setMotionLookup] = useState({
     running: false,
     message: "",
   });
   const platformLinkMenu = usePlatformLinkMenu();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setEditingProvider(null);
     setDraftUrl("");
     setLinkError("");
     setCoverLoadFailed(false);
+    setCoverRefreshing(false);
+    setCoverPalette(null);
+    setCoverPaletteProxyUrl("");
     setMotionLookup({ running: false, message: "" });
     platformLinkMenu.closeMenu();
-  }, [release?.id, release?.coverUrl]);
+  }, [release?.id]);
 
   if (!release) return null;
   const rating = getCurrentRating(release.listeningEntries);
@@ -301,36 +318,142 @@ export function ReleaseDetail({
     closeLinkEditor();
   }
 
+  async function refreshHeroCover(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (coverRefreshing || !onApplyCoverUpdates || isReadOnlyMode()) return;
+    const releaseId = release.id;
+    setCoverRefreshing(true);
+    try {
+      const response = await fetch("/api/local-enrich-covers", {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          releases: [coverLookupRecord(release, coverLoadFailed)],
+          cacheLocal: true,
+          wait: true,
+          force: true,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          result.error === "COVER_ENRICH_FAILED"
+            ? "封面更新服务暂时不可用"
+            : result.error || "封面更新失败",
+        );
+      }
+      const updates = result.coverUpdates ?? [];
+      onApplyCoverUpdates(updates);
+      clearCoverLoadFailures(updates.map((update) => update.id));
+      if (updates.some((update) => update.id === releaseId && update.coverUrl)) {
+        setCoverLoadFailed(false);
+        onToast?.("封面已更新");
+      } else if ((result.unresolved ?? 0) > 0) {
+        onToast?.("没有找到可靠封面");
+      }
+    } catch (error) {
+      onToast?.(error.message || "封面暂时无法更新");
+    } finally {
+      setCoverRefreshing(false);
+    }
+  }
+
+  const canRefreshCover = Boolean(onApplyCoverUpdates) && !isReadOnlyMode();
+
   return (
-    <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
+    <div
+      className="drawer-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.button !== 0) return;
+        onClose();
+      }}
+    >
       <aside
         className="release-drawer"
+        data-detail-tone={coverPalette?.tone ?? "neutral"}
+        style={coverPalette?.style}
         role="dialog"
         aria-modal="true"
         aria-label={`${release.title} 详情`}
         onMouseDown={(event) => event.stopPropagation()}
+        onContextMenu={(event) => event.stopPropagation()}
       >
         <div className="drawer-topbar">
-          <span>发行详情</span>
           <button type="button" className="icon-button" onClick={onClose}>
             <X aria-hidden="true" />
             <span className="sr-only">关闭详情</span>
           </button>
         </div>
         <div className="detail-hero">
-          {release.coverUrl && !coverLoadFailed ? (
-            <ReleaseArtwork
-              release={release}
-              active
-              userRequested
-              onStaticError={() => {
-                setCoverLoadFailed(true);
-                markCoverLoadFailed(release.id);
+          <div className="detail-cover">
+            {release.coverUrl && !coverLoadFailed ? (
+              <ReleaseArtwork
+                release={release}
+                active
+                userRequested
+                onLoad={(event) => {
+                  const palette = readCoverPalette(
+                    event.currentTarget,
+                    event.currentTarget.currentSrc || release.coverUrl,
+                  );
+                  if (palette) {
+                    setCoverPalette(palette);
+                    setCoverPaletteProxyUrl("");
+                    return;
+                  }
+                  setCoverPaletteProxyUrl(
+                    getCoverPaletteProxyUrl(
+                      event.currentTarget.currentSrc || release.coverUrl,
+                    ),
+                  );
+                }}
+                onStaticError={() => {
+                  setCoverLoadFailed(true);
+                  markCoverLoadFailed(release.id);
+                }}
+              />
+            ) : (
+              <div className="detail-cover-placeholder">{release.title[0]}</div>
+            )}
+            {canRefreshCover ? (
+              <button
+                type="button"
+                className="detail-cover-refresh"
+                aria-label={coverRefreshing ? "正在重新获取封面" : "重新获取封面"}
+                title="重新获取封面"
+                disabled={coverRefreshing}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={refreshHeroCover}
+              >
+                <ArrowClockwise
+                  className={coverRefreshing ? "is-spinning" : undefined}
+                  aria-hidden="true"
+                />
+              </button>
+            ) : null}
+          </div>
+          {coverPaletteProxyUrl && !coverPalette ? (
+            <img
+              src={coverPaletteProxyUrl}
+              alt=""
+              aria-hidden="true"
+              className="cover-palette-proxy"
+              onLoad={(event) => {
+                const palette = readCoverPalette(
+                  event.currentTarget,
+                  `palette-proxy:${release.coverUrl}`,
+                );
+                if (palette) setCoverPalette(palette);
+                setCoverPaletteProxyUrl("");
               }}
+              onError={() => setCoverPaletteProxyUrl("")}
             />
-          ) : (
-            <div className="detail-cover-placeholder">{release.title[0]}</div>
-          )}
+          ) : null}
           <div className="detail-summary">
             <span className="detail-kicker">
               {getReleaseKindLabel(release)} ·{" "}
@@ -376,7 +499,7 @@ export function ReleaseDetail({
             </div>
           </div>
           <div className="detail-type-editor">
-            <span>发行类型</span>
+            <span className="detail-tool-caption">发行类型</span>
             <div className="detail-release-tools">
               <div className="detail-type-buttons" role="group" aria-label="发行类型">
                 {[
@@ -404,6 +527,9 @@ export function ReleaseDetail({
                   )
                 ))}
               </div>
+              <span className="detail-tool-caption detail-listen-links-label">
+                收听链接
+              </span>
               <div className="detail-utility-icons" aria-label="发行工具">
                 {PLATFORM_SLOTS.map((slot) => {
                   const link = confirmedLinks.get(slot.provider);

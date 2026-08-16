@@ -112,7 +112,9 @@ npm run test:sites
 npm run preview
 ```
 
-产品规则、数据模型和迁移约束见 [PRD.md](PRD.md)。
+产品规则、数据模型和迁移约束见 [PRD.md](PRD.md)。文档分工与提交前检查见
+[文档维护约定](docs/MAINTENANCE.md)，各版本已经交付的变化见
+[版本变更记录](docs/CHANGELOG.md)。
 
 ## 项目状态
 

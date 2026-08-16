@@ -8,6 +8,7 @@ import { handleSharedStateRequest } from "../shared-state/index.mjs";
 import { handleListeningGuideRequest } from "../listening-guides/index.mjs";
 import { handleAppleMusicEditorialRequest } from "../apple-music-notes/index.mjs";
 import {
+  handleCoverPaletteImageRequest,
   handleLocalCoverEnrichRequest,
   handlePrivateCoverStatic,
 } from "../scripts/private-covers-http.mjs";
@@ -172,6 +173,9 @@ export async function startRecordShelfServer(port = 4173, options = {}) {
       if (await handlePrivateCoverStatic(request, response)) {
         return;
       }
+      if (await handleCoverPaletteImageRequest(request, response, options)) {
+        return;
+      }
       if (await handleLocalCoverEnrichRequest(request, response)) {
         return;
       }
@@ -233,11 +237,11 @@ export async function startRecordShelfServer(port = 4173, options = {}) {
     };
   } catch (error) {
     if (error?.code === "EADDRINUSE" && (await existingRecordShelf(origin))) {
-      return {
-        origin,
-        reusedExistingServer: true,
-        close: async () => {},
-      };
+      const occupiedError = new Error(
+        `检测到另一个 RecordShelf 正在占用 ${origin}。请先完全退出旧客户端（包括废纸篓里仍在运行的副本），再重新打开当前版本。`,
+      );
+      occupiedError.code = "RECORDSHELF_ALREADY_RUNNING";
+      throw occupiedError;
     }
     throw error;
   }

@@ -16,7 +16,7 @@ import {
 } from "../lib/music.js";
 import { Rating } from "./Rating.jsx";
 import { useReleaseIdMenu } from "./ReleaseIdMenu.jsx";
-import { markCoverLoadFailed } from "../lib/coverStatus.js";
+import { coverDisplaySrc, markCoverLoadFailed } from "../lib/coverStatus.js";
 import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
 
 const QUICK_RELEASE_TYPES = ["OTHER", "LP", "EP", "SINGLE"];
@@ -34,12 +34,13 @@ function coverHue(release) {
 export function Cover({ release, className = "" }) {
   const [loadFailed, setLoadFailed] = useState(false);
 
-  useEffect(() => setLoadFailed(false), [release.coverUrl]);
+  const coverSrc = coverDisplaySrc(release);
+  useEffect(() => setLoadFailed(false), [coverSrc]);
 
-  return release.coverUrl && !loadFailed ? (
+  return coverSrc && !loadFailed ? (
     <img
       className={`release-cover ${className}`}
-      src={release.coverUrl}
+      src={coverSrc}
       alt={`${release.artists.join("、")}《${release.title}》封面`}
       loading="lazy"
       decoding="async"

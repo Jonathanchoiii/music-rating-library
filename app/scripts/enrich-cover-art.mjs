@@ -155,22 +155,48 @@ async function coverFromMusicBrainz(release) {
   };
 }
 
-async function findCover(release) {
-  const resolvers = [
-    coverFromAppleMusic,
-    coverFromSpotify,
-    coverFromNeoDb,
-    coverFromMusicBrainz,
-  ];
-  for (const resolver of resolvers) {
-    try {
-      const result = await resolver(release);
-      if (result?.url) return result;
-    } catch {
-      // A failed provider should not stop the remaining exact-link fallbacks.
-    }
+export function chooseExactCover({
+  apple = null,
+  spotify = null,
+  neodb = null,
+  coverArtArchive = null,
+} = {}) {
+  if (apple?.url && spotify?.url) {
+    return {
+      url: apple.url,
+      source: "EXACT_PLATFORM_CONSENSUS",
+      matchedFrom: apple.matchedFrom,
+    };
   }
-  return null;
+  return apple?.url
+    ? apple
+    : spotify?.url
+      ? spotify
+      : neodb?.url
+        ? neodb
+        : coverArtArchive?.url
+          ? coverArtArchive
+          : null;
+}
+
+async function resolveCover(resolver, release) {
+  try {
+    const result = await resolver(release);
+    return result?.url ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+async function findCover(release) {
+  const apple = await resolveCover(coverFromAppleMusic, release);
+  const spotify = await resolveCover(coverFromSpotify, release);
+  if (apple || spotify) {
+    return chooseExactCover({ apple, spotify });
+  }
+  const neodb = await resolveCover(coverFromNeoDb, release);
+  if (neodb) return neodb;
+  return resolveCover(coverFromMusicBrainz, release);
 }
 
 async function cacheCoverLocally(
@@ -268,30 +294,29 @@ export async function runCoverEnrichment({
     const batch = targets.slice(offset, offset + concurrency);
     await Promise.all(
       batch.map(async (release) => {
-        let remoteUrl = isRemoteCoverUrl(release.coverUrl)
+        const existingRemoteUrl = isRemoteCoverUrl(release.coverUrl)
           ? release.coverUrl
           : null;
+        let remoteUrl = null;
         let source = release.coverSource ?? null;
         let matchedFrom = release.coverMatchedFrom ?? null;
-
-        if (!remoteUrl || force) {
-          const cover = await findCover(release);
-          if (!cover) {
-            if (!remoteUrl) {
-              failed += 1;
-              return;
-            }
-          } else {
-            remoteUrl = cover.url;
-            source = cover.source;
-            matchedFrom = cover.matchedFrom;
-            matched += 1;
-            sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
-          }
-        } else {
+        const cover = await findCover(release);
+        if (cover) {
+          remoteUrl = cover.url;
+          source = cover.source;
+          matchedFrom = cover.matchedFrom;
           matched += 1;
-          sourceCounts[source ?? "EXISTING_REMOTE"] =
-            (sourceCounts[source ?? "EXISTING_REMOTE"] ?? 0) + 1;
+          sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
+        } else if (existingRemoteUrl) {
+          // Exact providers failed. Keep a still-present remote URL only when
+          // the client did not blank it as an empty or load-failed cover.
+          remoteUrl = existingRemoteUrl;
+          source = source ?? "EXISTING_REMOTE";
+          matched += 1;
+          sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
+        } else {
+          failed += 1;
+          return;
         }
 
         if (cacheLocal && remoteUrl) {
