@@ -16,6 +16,7 @@ export const NEODB_SYNC_STATE_KEY = "recordshelf-neodb-sync-v1";
 export const NEODB_OAUTH_CLIENT_KEY = "recordshelf-neodb-oauth-client-v1";
 export const DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY =
   "recordshelf-dismissed-artist-duplicates-v1";
+export const ARTIST_PROFILE_STORAGE_KEY = "recordshelf-artist-profiles-v1";
 
 export const SHARED_LOCAL_STORAGE_KEYS = Object.freeze([
   USER_STATE_KEY,
@@ -27,6 +28,7 @@ export const SHARED_LOCAL_STORAGE_KEYS = Object.freeze([
   NEODB_SYNC_STATE_KEY,
   NEODB_OAUTH_CLIENT_KEY,
   DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
+  ARTIST_PROFILE_STORAGE_KEY,
 ]);
 
 export const SHARED_LOCAL_STORAGE_KEY_SET = new Set(

@@ -22,6 +22,7 @@ import { handleExternalRatingsRequest } from "./external-ratings/index.mjs";
 import { handleTracklistRequest } from "./tracklists/index.mjs";
 import { handleReleaseMetadataPersistRequest } from "./shared-state/release-metadata.mjs";
 import { handleRemotePreviewSyncRequest } from "./remote-preview/local-http.mjs";
+import { handleArtistResearchRequest } from "./artist-research/index.mjs";
 
 const VIRTUAL_LIBRARY_ID = "virtual:recordshelf-library";
 const RESOLVED_VIRTUAL_LIBRARY_ID = `\0${VIRTUAL_LIBRARY_ID}`;
@@ -103,6 +104,7 @@ function localMetadataApi() {
         }
         if (await handleListeningGuideRequest(request, response)) return;
         if (await handleAppleMusicEditorialRequest(request, response)) return;
+        if (await handleArtistResearchRequest(request, response)) return;
         if (await handleSharedStateRequest(request, response)) return;
         next();
       });

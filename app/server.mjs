@@ -19,6 +19,7 @@ import { handleExternalRatingsRequest } from "../external-ratings/index.mjs";
 import { handleTracklistRequest } from "../tracklists/index.mjs";
 import { handleReleaseMetadataPersistRequest } from "../shared-state/release-metadata.mjs";
 import { handleRemotePreviewSyncRequest } from "./remote-preview/local-http.mjs";
+import { handleArtistResearchRequest } from "./artist-research/index.mjs";
 
 const CLIENT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -197,6 +198,9 @@ export async function startRecordShelfServer(port = 4173, options = {}) {
         return;
       }
       if (await handleAppleMusicEditorialRequest(request, response)) {
+        return;
+      }
+      if (await handleArtistResearchRequest(request, response, options)) {
         return;
       }
       if (await handleSharedStateRequest(request, response)) {

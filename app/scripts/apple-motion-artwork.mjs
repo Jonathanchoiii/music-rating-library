@@ -9,6 +9,17 @@ import { readJsonBody, sendJson } from "./http-json.mjs";
 
 const DEFAULT_ARTWORK_API = "https://artwork.m8tec.top";
 const MOTION_ARTWORK_ROUTE = "/private-motion-artwork";
+const ARTIST_STATIC_SIZES = Object.freeze([1400, 1000, 600]);
+const ARTIST_FALLBACK_STATIC_SIZE = 600;
+const ARTIST_MOTION_KEYS = Object.freeze([
+  "motionArtistSquare1x1",
+  "motionDetailSquare",
+  "motionSquareVideo1x1",
+  "motionArtistFullscreen16x9",
+  "motionArtistWide16x9",
+  "motionDetailTall",
+  "motionTallVideo3x4",
+]);
 const APPLE_HOST_RE = /(^|\.)music\.apple\.com$/i;
 const APPLE_MOTION_HOST_RE = /(^|\.)itunes\.apple\.com$/i;
 const APPLE_STOREFRONT_RE = /^[a-z]{2}$/i;
@@ -19,6 +30,46 @@ const APPLE_WEB_USER_AGENT =
   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 const ALLOWED_RELEASE_STATUSES = new Set(["CONFIRMED", "AUTO_CONFIRMED"]);
 const MOTION_ARTWORK_PROFILE_VERSION = 2;
+const ARTIST_MOTION_MP4_PROFILE_VERSION = 2;
+const ARTIST_MOTION_CROP_Y_BIAS = 0.5;
+const ARTIST_MOTION_MAX_BYTES = 8 * 1024 * 1024;
+const ARTIST_MOTION_MAX_DURATION_SECONDS = 8;
+const ARTIST_MOTION_MIN_DURATION_SECONDS = 1;
+const ARTIST_MOTION_DURATION_STEPS = Object.freeze([8, 6, 5, 4, 3, 2, 1]);
+const ARTIST_MOTION_MP4_PROFILES = Object.freeze([
+  {
+    id: "ARTIST_CLEAR_1080_30",
+    width: 1080,
+    fps: 30,
+    durationSeconds: ARTIST_MOTION_MAX_DURATION_SECONDS,
+    crf: 18,
+    maxBytes: ARTIST_MOTION_MAX_BYTES,
+  },
+  {
+    id: "ARTIST_CLEAR_1080_24",
+    width: 1080,
+    fps: 24,
+    durationSeconds: ARTIST_MOTION_MAX_DURATION_SECONDS,
+    crf: 20,
+    maxBytes: ARTIST_MOTION_MAX_BYTES,
+  },
+  {
+    id: "ARTIST_CLEAR_960_24",
+    width: 960,
+    fps: 24,
+    durationSeconds: ARTIST_MOTION_MAX_DURATION_SECONDS,
+    crf: 21,
+    maxBytes: ARTIST_MOTION_MAX_BYTES,
+  },
+  {
+    id: "ARTIST_BALANCED_800_24",
+    width: 800,
+    fps: 24,
+    durationSeconds: ARTIST_MOTION_MAX_DURATION_SECONDS,
+    crf: 23,
+    maxBytes: ARTIST_MOTION_MAX_BYTES,
+  },
+]);
 const MOTION_ARTWORK_PROFILES = Object.freeze([
   {
     id: "CLEAR_960",
@@ -48,6 +99,11 @@ const MOTION_ARTWORK_PROFILES = Object.freeze([
     maxBytes: 8 * 1024 * 1024,
   },
 ]);
+
+function motionCoverCropFilter(profile, yBias = 0.28) {
+  const width = profile.width;
+  return `fps=${profile.fps},scale=${width}:${width}:force_original_aspect_ratio=increase,crop=${width}:${width}:(iw-${width})/2:(ih-${width})*${yBias},setsar=1`;
+}
 
 function normalizeAppleAlbumUrl(value) {
   try {
@@ -91,6 +147,31 @@ function appleAlbumIdentity(value) {
   return { albumId, storefront: storefront.toLocaleLowerCase(), normalizedUrl };
 }
 
+function appleArtistIdentity(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    if (url.protocol !== "https:" || !APPLE_HOST_RE.test(url.hostname)) return null;
+    const parts = url.pathname.split("/").filter(Boolean);
+    const artistIndex = parts.findIndex(
+      (part) => part.toLocaleLowerCase() === "artist",
+    );
+    if (artistIndex < 0) return null;
+    const artistId = parts.slice(artistIndex + 1).find((part) => /^\d+$/.test(part));
+    if (!artistId) return null;
+    const possibleStorefront = artistIndex > 0 ? parts[artistIndex - 1] : "";
+    const storefront = APPLE_STOREFRONT_RE.test(possibleStorefront)
+      ? possibleStorefront.toLocaleLowerCase()
+      : "us";
+    return {
+      storefront,
+      artistId,
+      normalizedUrl: `https://music.apple.com/${storefront}/artist/${artistId}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function exactAppleLink(release) {
   const link = (release.externalLinks ?? []).find(
     (item) =>
@@ -100,7 +181,29 @@ function exactAppleLink(release) {
   return normalizeAppleAlbumUrl(link?.canonicalUrl || link?.url);
 }
 
+function looksLikeAppleMotionStill(value) {
+  const href = String(value ?? "");
+  return (
+    /nonvideo|previewimage|preview[_-]?image|\/image\/thumb\//i.test(href) ||
+    /\.(webp|png|jpe?g|gif)(?:$|[/?#])/i.test(href)
+  );
+}
+
+function motionCandidateStrings(value) {
+  if (typeof value === "string") return [value];
+  if (!value || typeof value !== "object") return [];
+  const out = [];
+  for (const key of ["video", "url", "hlsUrl", "hls", "motionVideo"]) {
+    if (typeof value[key] === "string") out.push(value[key]);
+    else if (value[key] && typeof value[key] === "object") {
+      out.push(...motionCandidateStrings(value[key]));
+    }
+  }
+  return out;
+}
+
 function safeMotionUrl(value) {
+  if (looksLikeAppleMotionStill(value)) return null;
   try {
     const url = new URL(String(value ?? ""));
     if (
@@ -114,6 +217,10 @@ function safeMotionUrl(value) {
   } catch {
     return null;
   }
+}
+
+export function playableAppleHlsUrl(value) {
+  return safeMotionUrl(value) ?? "";
 }
 
 function decodeJwtPayload(token) {
@@ -218,6 +325,173 @@ async function lookupAppleCatalogMotionArtwork(appleMusicUrl, fetchImpl = fetch)
       editorialVideo.motionTallVideo3x4?.video,
   );
   return { squareUrl, tallUrl };
+}
+
+function appleArtworkUrl(artwork, width = 1400, height = width) {
+  const template = String(artwork?.url ?? "");
+  if (!template.startsWith("https://")) return "";
+  const resolvedWidth = String(Math.max(1, Math.round(Number(width) || 1400)));
+  const resolvedHeight = String(
+    Math.max(1, Math.round(Number(height) || Number(width) || 1400)),
+  );
+  return template
+    .replace(/\{w\}/g, resolvedWidth)
+    .replace(/\{h\}/g, resolvedHeight)
+    .replace(/\{c\}/g, "bb")
+    .replace(/\{f\}/g, "jpg");
+}
+
+function artworkLongEdgeSize(artwork, longEdge) {
+  const sourceWidth = Number(artwork?.width) || longEdge;
+  const sourceHeight = Number(artwork?.height) || longEdge;
+  const sourceLongEdge = Math.max(sourceWidth, sourceHeight, 1);
+  const scale = longEdge / sourceLongEdge;
+  return {
+    width: Math.max(1, Math.round(sourceWidth * scale)),
+    height: Math.max(1, Math.round(sourceHeight * scale)),
+  };
+}
+
+function resolvedArtistArtworkUrl(artwork, sizes = ARTIST_STATIC_SIZES) {
+  if (!artwork?.url) return "";
+  for (const size of sizes) {
+    const { width, height } = artworkLongEdgeSize(artwork, size);
+    const url = appleArtworkUrl(artwork, width, height);
+    if (url) return url;
+  }
+  return "";
+}
+
+function itunesScaledArtworkUrl(value, size = ARTIST_FALLBACK_STATIC_SIZE) {
+  const url = String(value ?? "").trim();
+  if (!url.startsWith("https://")) return "";
+  return url.replace(
+    /\/\d+x\d+([a-z]*)(\.[a-z0-9]+)?$/i,
+    `/${size}x${size}$1$2`,
+  );
+}
+
+function firstArtistArtworkUrl(attributes) {
+  const editorial = attributes?.editorialArtwork ?? {};
+  const candidates = [
+    editorial.subscriptionHero,
+    editorial.bannerUber,
+    editorial.staticDetailTall,
+    editorial.subscriptionFullScreen,
+    editorial.centeredFullscreenBackground,
+    editorial.storeFlowcase,
+    attributes?.artwork,
+    editorial.staticDetailSquare,
+  ];
+  for (const artwork of candidates) {
+    const url = resolvedArtistArtworkUrl(artwork);
+    if (url) return url;
+  }
+  return "";
+}
+
+function findMotionVideo(value) {
+  if (typeof value === "string") return safeMotionUrl(value);
+  if (!value || typeof value !== "object") return null;
+  for (const nested of Object.values(value)) {
+    const found = findMotionVideo(nested);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findArtistMotionVideo(editorialVideo) {
+  const root =
+    editorialVideo && typeof editorialVideo === "object" ? editorialVideo : {};
+  for (const key of ARTIST_MOTION_KEYS) {
+    for (const candidate of motionCandidateStrings(root[key])) {
+      const url = safeMotionUrl(candidate);
+      if (url) return url;
+    }
+  }
+  return findMotionVideo(root);
+}
+
+async function lookupItunesArtistArtwork(identity, fetchImpl = fetch) {
+  const lookupUrl = new URL("https://itunes.apple.com/lookup");
+  lookupUrl.searchParams.set("id", identity.artistId);
+  lookupUrl.searchParams.set("country", identity.storefront);
+  try {
+    const response = await fetchImpl(lookupUrl, {
+      headers: {
+        accept: "application/json",
+        "user-agent": APPLE_WEB_USER_AGENT,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return "";
+    const results = (await response.json())?.results;
+    const artist = Array.isArray(results)
+      ? results.find(
+          (item) =>
+            String(item?.wrapperType ?? "") === "artist" ||
+            String(item?.artistId ?? "") === identity.artistId,
+        )
+      : null;
+    return itunesScaledArtworkUrl(
+      artist?.artworkUrl600 || artist?.artworkUrl100,
+      ARTIST_FALLBACK_STATIC_SIZE,
+    );
+  } catch {
+    return "";
+  }
+}
+
+export async function lookupAppleArtistMedia(appleMusicUrl, fetchImpl = fetch) {
+  const identity = appleArtistIdentity(appleMusicUrl);
+  if (!identity) throw new Error("INVALID_APPLE_MUSIC_ARTIST_URL");
+  const commonHeaders = {
+    accept: "text/html,application/xhtml+xml,application/javascript,*/*;q=0.8",
+    "user-agent": APPLE_WEB_USER_AGENT,
+  };
+  const pageResponse = await fetchImpl(identity.normalizedUrl, {
+    headers: commonHeaders,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!pageResponse.ok) throw new Error(`APPLE_PAGE_HTTP_${pageResponse.status}`);
+  const assetUrls = appleAssetUrls(await pageResponse.text()).slice(0, 8);
+  let token = null;
+  for (const assetUrl of assetUrls) {
+    const response = await fetchImpl(assetUrl, {
+      headers: commonHeaders,
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) continue;
+    token = appleGuestToken(await response.text());
+    if (token) break;
+  }
+  if (!token) throw new Error("APPLE_WEB_TOKEN_NOT_FOUND");
+  const catalogUrl = new URL(
+    `/v1/catalog/${identity.storefront}/artists/${identity.artistId}`,
+    APPLE_CATALOG_ORIGIN,
+  );
+  catalogUrl.searchParams.set("extend", "editorialArtwork,editorialVideo");
+  catalogUrl.searchParams.set("platform", "web");
+  const catalogResponse = await fetchImpl(catalogUrl, {
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+      origin: APPLE_WEB_ORIGIN,
+      referer: `${APPLE_WEB_ORIGIN}/`,
+      "user-agent": APPLE_WEB_USER_AGENT,
+    },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!catalogResponse.ok) throw new Error(`APPLE_CATALOG_HTTP_${catalogResponse.status}`);
+  const attributes = (await catalogResponse.json())?.data?.[0]?.attributes ?? {};
+  const imageUrl =
+    firstArtistArtworkUrl(attributes) ||
+    (await lookupItunesArtistArtwork(identity, fetchImpl));
+  return {
+    imageUrl,
+    sourceVideoUrl: findArtistMotionVideo(attributes.editorialVideo) ?? "",
+    normalizedUrl: identity.normalizedUrl,
+  };
 }
 
 async function preferredMotionStreamUrl(sourceUrl, fetchImpl = fetch) {
@@ -566,6 +840,19 @@ function safeReleaseId(value) {
   return /^[a-zA-Z0-9._-]{1,180}$/.test(id) ? id : null;
 }
 
+function safeArtistMotionId(artistId) {
+  const raw = String(artistId ?? "").trim();
+  if (!raw) return null;
+  const slug = raw
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 120);
+  const digest = createHash("sha1").update(raw).digest("hex").slice(0, 10);
+  const cacheId = slug === raw ? slug : `${slug || "id"}-${digest}`;
+  return safeReleaseId(`artist-${cacheId}`.slice(0, 180));
+}
+
 function motionArtworkDirectory() {
   if (process.env.RECORDSHELF_MOTION_ARTWORK_DIR) {
     return path.resolve(process.env.RECORDSHELF_MOTION_ARTWORK_DIR);
@@ -760,10 +1047,10 @@ function createAnimatedWebpFromIvf(ivf, width, height, frameDurationMs) {
   return Buffer.concat([riff, payload]);
 }
 
-async function convertMotionArtwork(releaseId, sourceUrl, fetchImpl = fetch) {
+async function cacheMotionArtworkFile(cacheId, sourceUrl, fetchImpl = fetch) {
   const ffmpeg = await ensureFfmpegBinary();
   await fs.mkdir(motionArtworkDirectory(), { recursive: true });
-  const fileName = `${releaseId}-${Date.now()}.webp`;
+  const fileName = `${cacheId}-${Date.now()}.webp`;
   const filePath = path.join(motionArtworkDirectory(), fileName);
   const ivfPath = `${filePath}.${process.pid}.tmp.ivf`;
   const temporaryPath = `${filePath}.${process.pid}.tmp.webp`;
@@ -827,7 +1114,7 @@ async function convertMotionArtwork(releaseId, sourceUrl, fetchImpl = fetch) {
       );
     }
     await fs.rename(temporaryPath, filePath);
-    const motionArtwork = await persistMotionArtwork(releaseId, {
+    const motionArtwork = {
       status: "AVAILABLE",
       sourceUrl,
       localUrl: `${MOTION_ARTWORK_ROUTE}/${fileName}`,
@@ -841,7 +1128,7 @@ async function convertMotionArtwork(releaseId, sourceUrl, fetchImpl = fetch) {
       profileVersion: MOTION_ARTWORK_PROFILE_VERSION,
       cachedAt: new Date().toISOString(),
       storage: "LOCAL_WEBP",
-    });
+    };
     return { localUrl: `${MOTION_ARTWORK_ROUTE}/${fileName}`, motionArtwork };
   } catch (error) {
     await fs.rm(temporaryPath, { force: true });
@@ -850,6 +1137,227 @@ async function convertMotionArtwork(releaseId, sourceUrl, fetchImpl = fetch) {
     await fs.rm(ivfPath, { force: true });
     await fs.rm(sourcePath, { force: true });
   }
+}
+
+async function convertMotionArtwork(releaseId, sourceUrl, fetchImpl = fetch) {
+  const converted = await cacheMotionArtworkFile(releaseId, sourceUrl, fetchImpl);
+  converted.motionArtwork = await persistMotionArtwork(releaseId, converted.motionArtwork);
+  return converted;
+}
+
+function nextArtistMotionDuration(
+  currentSeconds,
+  encodedBytes,
+  maxBytes = ARTIST_MOTION_MAX_BYTES,
+) {
+  const current = Number(currentSeconds);
+  const bytes = Number(encodedBytes);
+  if (
+    !Number.isFinite(current) ||
+    current <= ARTIST_MOTION_MIN_DURATION_SECONDS
+  ) {
+    return null;
+  }
+  if (!Number.isFinite(bytes) || bytes <= maxBytes) return null;
+  const estimated = ((current * maxBytes) / bytes) * 0.92;
+  const shorter = ARTIST_MOTION_DURATION_STEPS.filter((step) => step < current);
+  if (!shorter.length) return null;
+  return shorter.find((step) => step <= estimated) ?? shorter.at(-1);
+}
+
+function artistMotionFfmpegArgs(
+  sourcePath,
+  outputPath,
+  profile,
+  durationSeconds,
+  { forceByteCap = false } = {},
+) {
+  const args = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-rw_timeout",
+    "15000000",
+    "-t",
+    String(durationSeconds),
+    "-i",
+    sourcePath,
+    "-an",
+    "-vf",
+    motionCoverCropFilter(profile, ARTIST_MOTION_CROP_Y_BIAS),
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-preset",
+    "fast",
+  ];
+  if (forceByteCap) {
+    const maxrate = Math.max(
+      250_000,
+      Math.floor((ARTIST_MOTION_MAX_BYTES * 8 * 0.72) / durationSeconds),
+    );
+    args.push("-maxrate", String(maxrate), "-bufsize", String(maxrate * 2));
+  }
+  args.push(
+    "-crf",
+    String(forceByteCap ? Math.max(profile.crf, 28) : profile.crf),
+    "-movflags",
+    "+faststart",
+    "-y",
+    outputPath,
+  );
+  return args;
+}
+
+async function encodeArtistMotionMp4({
+  ffmpeg,
+  sourcePath,
+  temporaryPath,
+  profile,
+  durationSeconds,
+  forceByteCap = false,
+  encodeImpl,
+}) {
+  if (encodeImpl) {
+    await encodeImpl({
+      profile,
+      durationSeconds,
+      outputPath: temporaryPath,
+      forceByteCap,
+    });
+    return;
+  }
+  await runCommand(
+    ffmpeg,
+    artistMotionFfmpegArgs(sourcePath, temporaryPath, profile, durationSeconds, {
+      forceByteCap,
+    }),
+    180_000,
+  );
+}
+
+async function cacheArtistMotionMp4File(
+  cacheId,
+  sourceUrl,
+  fetchImpl = fetch,
+  options = {},
+) {
+  await fs.mkdir(motionArtworkDirectory(), { recursive: true });
+  const fileName = `${cacheId}-${Date.now()}.mp4`;
+  const filePath = path.join(motionArtworkDirectory(), fileName);
+  const temporaryPath = `${filePath}.${process.pid}.tmp.mp4`;
+  const sourcePath = options.sourcePath ?? `${filePath}.${process.pid}.tmp.src`;
+  const ownsSourcePath = !options.sourcePath;
+  try {
+    if (ownsSourcePath) {
+      await downloadMotionSource(sourceUrl, sourcePath, fetchImpl);
+    }
+    const ffmpeg = options.encodeImpl ? "" : await ensureFfmpegBinary();
+    let selected = null;
+    let lastError = null;
+    for (const profile of ARTIST_MOTION_MP4_PROFILES) {
+      let durationSeconds = ARTIST_MOTION_MAX_DURATION_SECONDS;
+      while (durationSeconds != null) {
+        await fs.rm(temporaryPath, { force: true });
+        try {
+          await encodeArtistMotionMp4({
+            ffmpeg,
+            sourcePath,
+            temporaryPath,
+            profile,
+            durationSeconds,
+            encodeImpl: options.encodeImpl,
+          });
+          const details = await fs.stat(temporaryPath);
+          if (!details.size) throw new Error("EMPTY_MOTION_ARTWORK_FILE");
+          if (details.size <= ARTIST_MOTION_MAX_BYTES) {
+            selected = {
+              profile,
+              size: details.size,
+              durationSeconds,
+              truncated: durationSeconds < ARTIST_MOTION_MAX_DURATION_SECONDS,
+            };
+            break;
+          }
+          durationSeconds = nextArtistMotionDuration(
+            durationSeconds,
+            details.size,
+          );
+        } catch (error) {
+          lastError = error;
+          durationSeconds =
+            ARTIST_MOTION_DURATION_STEPS.find((step) => step < durationSeconds) ??
+            null;
+        }
+      }
+      if (selected) break;
+    }
+    if (!selected) {
+      const profile = ARTIST_MOTION_MP4_PROFILES.at(-1);
+      await fs.rm(temporaryPath, { force: true });
+      try {
+        await encodeArtistMotionMp4({
+          ffmpeg,
+          sourcePath,
+          temporaryPath,
+          profile,
+          durationSeconds: ARTIST_MOTION_MIN_DURATION_SECONDS,
+          forceByteCap: true,
+          encodeImpl: options.encodeImpl,
+        });
+        const details = await fs.stat(temporaryPath);
+        if (!details.size) throw new Error("EMPTY_MOTION_ARTWORK_FILE");
+        if (details.size > ARTIST_MOTION_MAX_BYTES) {
+          throw new Error("MOTION_ARTWORK_TOO_LARGE");
+        }
+        selected = {
+          profile,
+          size: details.size,
+          durationSeconds: ARTIST_MOTION_MIN_DURATION_SECONDS,
+          truncated: true,
+        };
+      } catch (error) {
+        throw lastError ?? error;
+      }
+    }
+    await fs.rename(temporaryPath, filePath);
+    const motionArtwork = {
+      status: "AVAILABLE",
+      sourceUrl,
+      localUrl: `${MOTION_ARTWORK_ROUTE}/${fileName}`,
+      format: "MP4",
+      byteLength: selected.size,
+      width: selected.profile.width,
+      fps: selected.profile.fps,
+      quality: selected.profile.crf,
+      durationSeconds: selected.durationSeconds,
+      truncated: selected.truncated === true,
+      compressionProfile: selected.profile.id,
+      profileVersion: ARTIST_MOTION_MP4_PROFILE_VERSION,
+      cachedAt: new Date().toISOString(),
+      storage: "LOCAL_MP4",
+    };
+    return { localUrl: `${MOTION_ARTWORK_ROUTE}/${fileName}`, motionArtwork };
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true });
+    throw error;
+  } finally {
+    if (ownsSourcePath) await fs.rm(sourcePath, { force: true });
+  }
+}
+
+export async function cacheArtistMotionArtwork(
+  artistId,
+  sourceUrl,
+  fetchImpl = fetch,
+  options = {},
+) {
+  const safeId = safeArtistMotionId(artistId);
+  const safeSource = safeMotionUrl(sourceUrl);
+  if (!safeSource) throw new Error("INVALID_ARTIST_MOTION_SOURCE");
+  if (!safeId) throw new Error("INVALID_ARTIST_MOTION_ID");
+  return cacheArtistMotionMp4File(safeId, safeSource, fetchImpl, options);
 }
 
 export async function handleMotionArtworkFileRequest(
@@ -898,7 +1406,7 @@ export async function handleMotionArtworkFileRequest(
     const fileName = decodeURIComponent(
       url.pathname.slice(MOTION_ARTWORK_ROUTE.length + 1),
     );
-    if (!/^[a-zA-Z0-9._-]+\.webp$/.test(fileName)) {
+    if (!/^[a-zA-Z0-9._-]+\.(webp|mp4)$/.test(fileName)) {
       response.statusCode = 403;
       response.end();
       return true;
@@ -907,7 +1415,10 @@ export async function handleMotionArtworkFileRequest(
     try {
       const details = await fs.stat(filePath);
       response.statusCode = 200;
-      response.setHeader("content-type", "image/webp");
+      response.setHeader(
+        "content-type",
+        fileName.toLowerCase().endsWith(".mp4") ? "video/mp4" : "image/webp",
+      );
       response.setHeader("content-length", String(details.size));
       response.setHeader("cache-control", "private, max-age=31536000, immutable");
       if (request.method === "HEAD") response.end();
@@ -982,17 +1493,36 @@ export const __test = {
   FFMPEG_RUNTIME_PACKAGES,
   MOTION_ARTWORK_PROFILES,
   MOTION_ARTWORK_PROFILE_VERSION,
+  ARTIST_MOTION_MP4_PROFILES,
+  ARTIST_MOTION_MP4_PROFILE_VERSION,
+  ARTIST_MOTION_CROP_Y_BIAS,
+  ARTIST_MOTION_MAX_BYTES,
+  ARTIST_MOTION_DURATION_STEPS,
+  ARTIST_MOTION_MAX_DURATION_SECONDS,
+  artistMotionFfmpegArgs,
+  cacheArtistMotionMp4File,
+  nextArtistMotionDuration,
   createAnimatedWebpFromIvf,
   downloadMotionSource,
   playlistMediaUrl,
   preferredMotionStreamUrl,
   exactAppleLink,
   appleAlbumIdentity,
+  appleArtistIdentity,
+  appleArtworkUrl,
   appleAssetUrls,
   appleGuestToken,
+  findArtistMotionVideo,
+  motionCoverCropFilter,
+  itunesScaledArtworkUrl,
+  lookupAppleArtistMedia,
+  looksLikeAppleMotionStill,
   lookupAppleCatalogMotionArtwork,
   lookupMotionArtwork,
   normalizeAppleAlbumUrl,
   persistMotionArtwork,
+  playableAppleHlsUrl,
+  safeArtistMotionId,
   safeMotionUrl,
+  cacheArtistMotionArtwork,
 };

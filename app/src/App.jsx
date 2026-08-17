@@ -37,6 +37,7 @@ import {
   ReleaseShelf,
 } from "./components/ReleaseViews.jsx";
 import { ReleaseDetail } from "./components/ReleaseDetail.jsx";
+import { ArtistDetail } from "./components/ArtistDetail.jsx";
 import { AddReleaseDialog } from "./components/AddReleaseDialog.jsx";
 import { ImportDialog } from "./components/ImportDialog.jsx";
 import { NeoDbSyncDialog } from "./components/NeoDbSyncDialog.jsx";
@@ -81,11 +82,21 @@ import {
   validateRecordshelfBackup,
 } from "./lib/backupMerge.js";
 import {
+  ARTIST_PROFILE_STORAGE_KEY,
   DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
   LEGACY_FULL_LIBRARY_KEYS,
   LEGACY_USER_STATE_KEY,
   USER_STATE_KEY,
 } from "./lib/sharedStorageKeys.js";
+import {
+  EMPTY_ARTIST_PROFILE_STATE,
+  artistResearchJobPatch,
+  decodeArtistProfileId,
+  getArtistProfile,
+  loadArtistProfileState,
+  saveArtistProfileState,
+  updateArtistProfile,
+} from "./lib/artistProfiles.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
 import { persistReleaseOverlay } from "./lib/releaseMetadataPersist.js";
 import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
@@ -120,6 +131,9 @@ function LibraryApp() {
   const [artistIdentityState, setArtistIdentityState] = useState(
     loadArtistIdentityState,
   );
+  const [artistProfileState, setArtistProfileState] = useState(
+    loadArtistProfileState,
+  );
   const [releaseTypeOverrides, setReleaseTypeOverrides] = useState(
     initialLibraryState.userState.releaseTypeOverrides ?? {},
   );
@@ -142,6 +156,7 @@ function LibraryApp() {
   const loadMoreSentinelRef = useRef(null);
   const libraryWorkspaceReturnRef = useRef(null);
   const skipInitialUserStatePersistRef = useRef(true);
+  const skipInitialArtistProfilePersistRef = useRef(true);
 
   const refreshListeningGuideStatuses = useCallback(async () => {
     try {
@@ -168,6 +183,7 @@ function LibraryApp() {
     isArtistIndex,
     detailId: routeDetailId,
     detailReturnTarget,
+    detailReturnArtistId,
   } = getLibraryRouteState(location);
   const detailId = optimisticDetailId ?? routeDetailId;
   const selectedRelease = releases.find((release) => release.id === detailId);
@@ -199,6 +215,16 @@ function LibraryApp() {
   useEffect(() => {
     saveArtistIdentityState(artistIdentityState);
   }, [artistIdentityState]);
+
+  useEffect(() => {
+    if (skipInitialArtistProfilePersistRef.current) {
+      skipInitialArtistProfilePersistRef.current = false;
+      return;
+    }
+    saveArtistProfileState(artistProfileState, window.localStorage, {
+      notify: !readOnly,
+    });
+  }, [artistProfileState, readOnly]);
 
   useEffect(() => {
     saveLibraryFilters(filters);
@@ -349,6 +375,10 @@ function LibraryApp() {
     0,
     visibleLimit,
   );
+  const allArtistGroups = useMemo(
+    () => groupReleasesByArtistIdentity(releases, artistIdentityState, ""),
+    [artistIdentityState, releases],
+  );
   const artistGroups = useMemo(
     () =>
       isArtistRoute
@@ -369,9 +399,56 @@ function LibraryApp() {
     () => sortArtistGroups(artistGroups, artistSort),
     [artistGroups, artistSort],
   );
-  const displayedArtistGroups = selectedArtistId
-    ? artistGroups
-    : sortedArtistGroups.slice(0, visibleLimit);
+  const displayedArtistGroups = sortedArtistGroups.slice(0, visibleLimit);
+  const selectedArtistGroup = useMemo(() => {
+    if (!selectedArtistId) return null;
+    const wanted = decodeArtistProfileId(selectedArtistId) || selectedArtistId;
+    return (
+      allArtistGroups.find((group) => group.id === selectedArtistId) ??
+      allArtistGroups.find(
+        (group) =>
+          (decodeArtistProfileId(group.id) || group.id) === wanted,
+      ) ??
+      null
+    );
+  }, [allArtistGroups, selectedArtistId]);
+  const selectedArtistProfile = selectedArtistGroup
+    ? getArtistProfile(artistProfileState, selectedArtistGroup.id, [
+        selectedArtistGroup.artist,
+        ...(selectedArtistGroup.aliases ?? []),
+      ])
+    : null;
+  const selectedArtistProfileNameHints = selectedArtistGroup
+    ? [selectedArtistGroup.artist, ...(selectedArtistGroup.aliases ?? [])]
+    : [];
+  const selectedArtistCollaborators = useMemo(() => {
+    if (!selectedArtistGroup) return [];
+    const collaborators = new Map();
+    selectedArtistGroup.releases.forEach((release) => {
+      getReleaseArtistTargets(release, artistIdentityState).forEach((target) => {
+        if (target.id === selectedArtistGroup.id) return;
+        const current = collaborators.get(target.id) ?? {
+          id: target.id,
+          name: target.canonicalName,
+          count: 0,
+          releaseIds: new Set(),
+          releases: [],
+        };
+        if (!current.releaseIds.has(release.id)) {
+          current.releaseIds.add(release.id);
+          current.count += 1;
+          current.releases.push(release);
+        }
+        collaborators.set(target.id, current);
+      });
+    });
+    return [...collaborators.values()]
+      .map(({ releaseIds, ...collaborator }) => collaborator)
+      .sort(
+        (a, b) =>
+          b.count - a.count || a.name.localeCompare(b.name, "zh-CN"),
+      );
+  }, [artistIdentityState, selectedArtistGroup]);
   const duplicateGroups = useMemo(
     () =>
       isSettingsRoute || isDuplicateRoute
@@ -505,10 +582,13 @@ function LibraryApp() {
         ? "artists"
         : "library";
     setOptimisticDetailId(id);
-    navigate(
-      `/releases/${encodeURIComponent(id)}?view=${view}&from=${from}`,
-      { preventScrollReset: true },
-    );
+    const params = new URLSearchParams({ view, from });
+    if (from === "artists" && selectedArtistId) {
+      params.set("artist", selectedArtistId);
+    }
+    navigate(`/releases/${encodeURIComponent(id)}?${params.toString()}`, {
+      preventScrollReset: true,
+    });
   }
 
   function selectArtist(artistId) {
@@ -523,6 +603,176 @@ function LibraryApp() {
     params.delete("artist");
     params.set("view", view);
     navigate(`/artists?${params.toString()}`);
+  }
+
+  function closeArtistDetail() {
+    const workspace = libraryWorkspaceReturnRef.current;
+    if (workspace) {
+      navigate(workspace.url, { preventScrollReset: true });
+      return;
+    }
+    clearSelectedArtist();
+  }
+
+  async function requestArtistIntroduction() {
+    if (!selectedArtistGroup) return;
+    const artistId = selectedArtistGroup.id;
+    const delay = (milliseconds) =>
+      new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    const applyResearchProfile = (profilePatch) => {
+      setArtistProfileState((current) =>
+        updateArtistProfile(
+          current,
+          artistId,
+          profilePatch,
+          selectedArtistProfileNameHints,
+        ),
+      );
+    };
+    const applyResearchJob = (job) => {
+      const { kind, patch, toast } = artistResearchJobPatch(job);
+      applyResearchProfile(patch);
+      return { kind, toast };
+    };
+    applyResearchProfile({
+      introductionStatus: "PREPARING",
+      researchMessage: "正在准备艺人身份锚点…",
+      researchError: "",
+    });
+    try {
+      const response = await fetch("/api/artists/research", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          artistId,
+          name: selectedArtistGroup.artist,
+          aliases: selectedArtistGroup.aliases,
+          musicBrainzId: selectedArtistGroup.musicBrainzMbid,
+          platformLinks: selectedArtistProfile?.platformLinks,
+          releaseHints: selectedArtistGroup.releases.slice(0, 8).map((release) => ({
+            title: release.title,
+            artists: release.artists,
+            releaseType: release.releaseType,
+            releaseDate: release.releaseDate,
+          })),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message || "艺人公开资料暂时无法更新。");
+      }
+      if (body.profile) {
+        applyResearchProfile(body.profile);
+        setToast("艺人介绍与公开档案已更新");
+        return;
+      }
+      let job = body.job;
+      if (!job?.jobId) throw new Error("未能建立艺人研究任务，请稍后重试。");
+      const deadline = Date.now() + 12 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const { kind, toast } = applyResearchJob(job);
+        if (kind !== "progress") {
+          if (toast) setToast(toast);
+          return;
+        }
+        await delay(850);
+        const pollResponse = await fetch(
+          `/api/artists/research?jobId=${encodeURIComponent(job.jobId)}`,
+        );
+        const pollBody = await pollResponse.json().catch(() => ({}));
+        if (!pollResponse.ok || !pollBody.job) {
+          throw new Error("无法读取艺人研究进度，请稍后重试。");
+        }
+        job = pollBody.job;
+      }
+      throw new Error("联网研究等待超时，原有资料已保留。");
+    } catch (error) {
+      applyResearchProfile({
+        introductionStatus: "FAILED",
+        researchMessage: "",
+        researchError:
+          error instanceof Error
+            ? error.message
+            : "艺人公开资料暂时无法更新。",
+      });
+      setToast("艺人资料更新失败");
+    }
+  }
+
+  function persistArtistProfilePatch(artistId, patch) {
+    if (!artistId) return;
+    setArtistProfileState((current) => {
+      const next = updateArtistProfile(
+        current,
+        artistId,
+        patch,
+        selectedArtistProfileNameHints,
+      );
+      if (!readOnly) {
+        saveArtistProfileState(next, window.localStorage, { notify: true });
+      }
+      return next;
+    });
+  }
+
+  function saveSelectedArtistPlatformLinks(platformLinks) {
+    if (!selectedArtistGroup || readOnly) return;
+    persistArtistProfilePatch(selectedArtistGroup.id, { platformLinks });
+    setToast("艺人主页链接已保存");
+  }
+
+  async function requestSelectedArtistMedia() {
+    if (!selectedArtistGroup || readOnly) return;
+    const artistId = selectedArtistGroup.id;
+    const appleMusicUrl = selectedArtistProfile?.platformLinks?.appleMusic;
+    if (!appleMusicUrl) {
+      setToast("请先添加 Apple Music 艺人主页链接");
+      return;
+    }
+    persistArtistProfilePatch(artistId, {
+      media: {
+        ...(selectedArtistProfile?.media ?? {}),
+        status: "CHECKING",
+        error: "",
+        notice: "",
+        truncated: false,
+      },
+    });
+    try {
+      const response = await fetch("/api/artists/media", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ artistId, appleMusicUrl }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message || "艺人素材暂时无法更新。");
+      persistArtistProfilePatch(artistId, {
+        media: body.media,
+        platformLinks: {
+          appleMusic: body.appleMusicUrl || appleMusicUrl,
+        },
+      });
+      setToast(
+        body.media?.error
+          ? body.media.error
+          : body.media?.notice
+            ? body.media.notice
+            : body.media?.localMotionUrl
+              ? "艺人动态素材已写入本机"
+              : body.media?.imageUrl
+                ? "艺人图片已写入本机"
+                : "Apple Music 暂无可用艺人素材",
+      );
+    } catch (error) {
+      persistArtistProfilePatch(artistId, {
+        media: {
+          status: "FAILED",
+          error:
+            error instanceof Error ? error.message : "艺人素材暂时无法更新。",
+        },
+      });
+      setToast("艺人素材更新失败");
+    }
   }
 
   const applyLibrarySearch = useCallback(
@@ -981,6 +1231,7 @@ function LibraryApp() {
       NEODB_SYNC_STATE_KEY,
       NEODB_OAUTH_CLIENT_KEY,
       DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
+      ARTIST_PROFILE_STORAGE_KEY,
     ].forEach((key) => window.localStorage.removeItem(key));
     notifySharedLocalStateChanged();
     [NEODB_ACCESS_TOKEN_KEY, NEODB_OAUTH_PENDING_KEY].forEach((key) =>
@@ -994,6 +1245,7 @@ function LibraryApp() {
     setArtistIdentityState(
       sanitizeArtistIdentityState(DEFAULT_ARTIST_IDENTITY_STATE),
     );
+    setArtistProfileState(EMPTY_ARTIST_PROFILE_STATE);
     setReleaseTypeOverrides({});
     setFilters(sanitizeLibraryFilters(EMPTY_LIBRARY_FILTERS));
     setSearch("");
@@ -1273,7 +1525,7 @@ function LibraryApp() {
             isArtistRoute ? (
               <ArtistGroups
                 groups={displayedArtistGroups}
-                selectedArtistId={selectedArtistId}
+                selectedArtistId=""
                 view={view}
                 onSelectArtist={selectArtist}
                 onClearArtist={clearSelectedArtist}
@@ -1415,9 +1667,19 @@ function LibraryApp() {
         artistTargets={selectedReleaseArtistTargets}
         onClose={() => {
           setOptimisticDetailId(null);
-          navigate(`${activeBasePath}?view=${view}`, {
-            preventScrollReset: true,
-          });
+          if (detailReturnTarget === "artists" && detailReturnArtistId) {
+            const params = new URLSearchParams({
+              view,
+              artist: detailReturnArtistId,
+            });
+            navigate(`/artists?${params.toString()}`, {
+              preventScrollReset: true,
+            });
+          } else {
+            navigate(`${activeBasePath}?view=${view}`, {
+              preventScrollReset: true,
+            });
+          }
         }}
         onAddListening={
           readOnly ? undefined : (releaseId) => setListeningReleaseId(releaseId)
@@ -1435,6 +1697,47 @@ function LibraryApp() {
         onApplyCoverUpdates={readOnly ? undefined : applyCoverUpdates}
         onToast={setToast}
       />
+      {isArtistRoute ? (
+        <ArtistDetail
+          artist={selectedArtistGroup}
+          profile={selectedArtistProfile}
+          collaborators={selectedArtistCollaborators}
+          onClose={closeArtistDetail}
+          onOpenRelease={openRelease}
+          onOpenArtist={selectArtist}
+          onToggleExploration={(explorationEnabled) => {
+            if (!selectedArtistGroup || readOnly) return;
+            setArtistProfileState((current) =>
+              updateArtistProfile(
+                current,
+                selectedArtistGroup.id,
+                { explorationEnabled },
+                selectedArtistProfileNameHints,
+              ),
+            );
+          }}
+          onChangeReleaseView={(releaseView) => {
+            if (!selectedArtistGroup || readOnly) return;
+            setArtistProfileState((current) =>
+              updateArtistProfile(
+                current,
+                selectedArtistGroup.id,
+                { releaseView },
+                selectedArtistProfileNameHints,
+              ),
+            );
+          }}
+          onRequestIntroduction={requestArtistIntroduction}
+          onSavePlatformLinks={readOnly ? undefined : saveSelectedArtistPlatformLinks}
+          onRequestMedia={readOnly ? undefined : requestSelectedArtistMedia}
+          onToggleMotion={(nextEnabled) => {
+            if (!selectedArtistGroup || readOnly) return;
+            persistArtistProfilePatch(selectedArtistGroup.id, {
+              media: { motionEnabled: nextEnabled },
+            });
+          }}
+        />
+      ) : null}
       {isAddRoute && !readOnly ? (
         <AddReleaseDialog
           onClose={() => navigate(`${activeBasePath}?view=${view}`)}

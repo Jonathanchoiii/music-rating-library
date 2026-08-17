@@ -7,6 +7,7 @@ import {
   releaseMatchesPrimarySearch,
 } from "./music.js";
 import { releaseMatchesMappedArtistQuery } from "./artists.js";
+import { decodeArtistProfileId } from "./artistProfiles.js";
 import { releaseMatchesLibraryFilters } from "./filters.js";
 
 export function compareLibraryReleases(releaseA, releaseB, sort) {
@@ -91,8 +92,9 @@ export function countReleaseTypes(releases) {
 
 export function getLibraryRouteState(location) {
   const pathname = location.pathname;
-  const selectedArtistId =
-    new URLSearchParams(location.search).get("artist") ?? "";
+  const params = new URLSearchParams(location.search);
+  const rawArtistId = params.get("artist") ?? "";
+  const selectedArtistId = decodeArtistProfileId(rawArtistId) || rawArtistId;
   const isArtistRoute = pathname === "/artists";
   const isDuplicateRoute =
     pathname === "/settings/duplicates" || pathname === "/duplicates";
@@ -111,6 +113,7 @@ export function getLibraryRouteState(location) {
     detailId: pathname.startsWith("/releases/")
       ? decodeURIComponent(pathname.split("/").pop())
       : null,
-    detailReturnTarget: new URLSearchParams(location.search).get("from"),
+    detailReturnTarget: params.get("from"),
+    detailReturnArtistId: selectedArtistId,
   };
 }
