@@ -257,7 +257,9 @@ test("加载失败的空封面不能靠旧 coverRemoteUrl 计为成功", async (
 });
 
 test("本地封面展示 URL 会带上 coverMatchedAt 以刷新缓存", async () => {
-  const { coverDisplaySrc } = await import("../src/lib/coverStatus.js");
+  const { coverDisplaySrc, coverDisplayCandidates } = await import(
+    "../src/lib/coverStatus.js"
+  );
   assert.equal(
     coverDisplaySrc({
       coverUrl: "/private-covers/rel-stale.jpg",
@@ -268,6 +270,17 @@ test("本地封面展示 URL 会带上 coverMatchedAt 以刷新缓存", async ()
   assert.equal(
     coverDisplaySrc({ coverUrl: "https://neodb.social/m/album/stale.jpg" }),
     "https://neodb.social/m/album/stale.jpg",
+  );
+  assert.deepEqual(
+    coverDisplayCandidates({
+      coverUrl: "/private-covers/rel-stale.jpg",
+      coverMatchedAt: "2026-08-16T01:10:00.000Z",
+      coverRemoteUrl: "https://neodb.social/m/album/stale.jpg",
+    }),
+    [
+      "/private-covers/rel-stale.jpg?v=2026-08-16T01%3A10%3A00.000Z",
+      "https://neodb.social/m/album/stale.jpg",
+    ],
   );
 });
 

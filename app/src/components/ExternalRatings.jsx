@@ -1,6 +1,6 @@
 import {
+  ArrowClockwise,
   ArrowSquareOut,
-  ArrowsClockwise,
   Plus,
   SpinnerGap,
 } from "@phosphor-icons/react";
@@ -197,7 +197,7 @@ export function ExternalRatings({ release, onApply }) {
             {refreshing ? (
               <SpinnerGap className="spin" aria-hidden="true" />
             ) : (
-              <ArrowsClockwise aria-hidden="true" />
+              <ArrowClockwise aria-hidden="true" />
             )}
           </button>
             </>

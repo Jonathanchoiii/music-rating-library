@@ -13,6 +13,7 @@
 | `docs/MAC_APP.md` | Mac 构建、安装、签名、包名、资料位置与升级方式 | Web 端完整产品规格 |
 | `docs/PHONE_PREVIEW.md` | 手机只读预览的部署、同步和隐私边界 | 本机可写流程 |
 | `docs/LISTENING_GUIDE_SPEC.md` | 聆听指南的研究、状态、存储与生成细则 | 其他模块的通用规则 |
+| `docs/ARTIST_DETAIL_PROMPT_PRD.md` | 艺人详情、探索目录、合作关系、公开档案、艺人介绍 Prompt 与动态视觉细则 | 已交付能力的版本流水账 |
 | `docs/APPLE_MUSIC_EDITORIAL_NOTES.md` | Apple Music 官方介绍的令牌、读取与缓存规则 | 用户手写介绍的通用数据模型 |
 | `README.md` | 项目入口、能力概览、隐私提示和文档索引 | 重复的详细规范 |
 
@@ -44,3 +45,12 @@
 - 同一个规则只设一个主要真相源，其他文档使用链接或摘要，避免多处出现互相冲突的长文。
 - 私人数据库路径可以写入文档，但私人内容、密钥、OAuth token、快照与生成的动态封面不得进入 Git。
 - 版本发布后补写遗漏时，要在 Changelog 明确这是文档补录；不得悄悄把未实现能力写成已交付。
+
+## 艺人主页与素材维护
+
+- 艺人详情的 Apple Music、Spotify 与 YouTube Music 主页链接按稳定 `artist_id` 立即写入共享 `artistProfiles` 增量（`~/Library/Application Support/RecordShelf/shared-local-state.json`）；Web 与 Mac 必须读取同一份状态，不能另建浏览器端副本。含空格的未映射 ID（如 `raw-doja cat`）、`+`/`%20` 编码变体和已映射身份都应对准同一份 `platformLinks` 与本机 `media`。重新打开必须还原因用户保存而已经存在的链接和素材；不得因为空增量合并把它们清掉，也不得因此在每次打开时重新请求封面。
+- 平台工具的可交互状态只取已确认并通过平台 URL 校验的 `artistProfiles.platformLinks`：有链接时使用高亮外链并以新标签页打开，无链接时渲染禁用的低强调按钮；不得让缺失平台图标承担“编辑链接”的隐式操作，编辑统一由独立铅笔入口完成。
+- 链接只接受对应平台的精确 HTTPS 艺人主页，不能以搜索结果、专辑页或模糊名称代替。修改链接后，只有用户主动点击素材按钮才允许调用 `/api/artists/media`。
+- `/api/artists/media` 只处理当前艺人：读取其 Apple Music Artist URL，按 Apple 公开目录同时请求 `editorialArtwork` 与 `editorialVideo`；静态图优先方形身份静图（`artwork` / `staticDetailSquare`），再横版 editorial hero 的 1400/1000，以及 Artwork Finder 同款 600px 兜底（必要时把 iTunes `artworkUrl100` 放大到 600×600），动态视觉优先方形 1:1 再回退 16:9，压缩为本机 H.264 MP4。本机文件名会把含空格的未映射艺人 ID 清理成安全 slug，不得把合法 HLS 误报为「地址无效」。超过 8 MB 时先自动截短时长，再降 fps/分辨率/crf，直到文件 ≤ 8 MB 后保留该 MP4；只有完全没有可播放视频时才回退静图。禁止抓取第三方 artwork-finder 页面，也禁止在打开艺人详情、同步 NeoDB 或启动客户端时批量扫描全库。
+- 头部素材优先级固定为：本机动态 MP4（或尚未刷新的遗留 WebP）→ 已缓存艺人图 → RecordShelf 已收录专辑封面拼贴。请求失败时保留上一次可用素材与专辑拼贴，不显示破图，也不把错误缓存为成功结果。
+- Git 只保留实现与空状态模型；艺人链接、缓存图片、动态视觉和请求结果都属于本机私人增量，不得提交到仓库。

@@ -1,10 +1,5 @@
-import {
-  ArrowLeft,
-  ArrowRight,
-  ImageBroken,
-  LockSimple,
-} from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { ArrowLeft, ArrowRight, LockSimple } from "@phosphor-icons/react";
+import { useState } from "react";
 import {
   displayDate,
   getCurrentRating,
@@ -16,48 +11,19 @@ import {
 } from "../lib/music.js";
 import { Rating } from "./Rating.jsx";
 import { useReleaseIdMenu } from "./ReleaseIdMenu.jsx";
-import { coverDisplaySrc, markCoverLoadFailed } from "../lib/coverStatus.js";
+import { markCoverLoadFailed } from "../lib/coverStatus.js";
 import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
 
 const QUICK_RELEASE_TYPES = ["OTHER", "LP", "EP", "SINGLE"];
 const RELEASES_PER_SHELF = 5;
 
-function coverHue(release) {
-  const key = `${release.title}${release.artists.join("")}`;
-  const total = [...key].reduce(
-    (sum, character) => sum + character.codePointAt(0),
-    0,
-  );
-  return total % 360;
-}
-
 export function Cover({ release, className = "" }) {
-  const [loadFailed, setLoadFailed] = useState(false);
-
-  const coverSrc = coverDisplaySrc(release);
-  useEffect(() => setLoadFailed(false), [coverSrc]);
-
-  return coverSrc && !loadFailed ? (
-    <img
-      className={`release-cover ${className}`}
-      src={coverSrc}
-      alt={`${release.artists.join("、")}《${release.title}》封面`}
-      loading="lazy"
-      decoding="async"
-      onError={() => {
-        markCoverLoadFailed(release.id);
-        setLoadFailed(true);
-      }}
+  return (
+    <ReleaseArtwork
+      release={release}
+      className={className}
+      onStaticError={() => markCoverLoadFailed(release.id)}
     />
-  ) : (
-    <div
-      className={`release-cover cover-placeholder ${className}`}
-      aria-label={`${release.title} 暂无封面`}
-      style={{ "--cover-hue": coverHue(release) }}
-    >
-      <ImageBroken aria-hidden="true" />
-      <span>{release.title.slice(0, 1).toUpperCase()}</span>
-    </div>
   );
 }
 

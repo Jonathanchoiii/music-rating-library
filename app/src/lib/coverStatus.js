@@ -16,12 +16,30 @@ export function coverLookupRecord(release, loadFailed = false) {
   };
 }
 
+function cacheBustedPrivateCover(url, matchedAt) {
+  const value = String(url ?? "");
+  if (!value.startsWith(PRIVATE_COVER_PREFIX) || !matchedAt) return value;
+  return `${value}?v=${encodeURIComponent(matchedAt)}`;
+}
+
 export function coverDisplaySrc(release) {
-  const url = String(release?.coverUrl ?? "");
-  if (!url.startsWith(PRIVATE_COVER_PREFIX) || !release?.coverMatchedAt) {
-    return url;
-  }
-  return `${url}?v=${encodeURIComponent(release.coverMatchedAt)}`;
+  return cacheBustedPrivateCover(release?.coverUrl, release?.coverMatchedAt);
+}
+
+export function coverDisplayCandidates(release) {
+  const seen = new Set();
+  const candidates = [];
+  const add = (url) => {
+    const value = String(url ?? "").trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    candidates.push(value);
+  };
+
+  add(coverDisplaySrc(release));
+  add(cacheBustedPrivateCover(release?.coverRemoteUrl, release?.coverMatchedAt));
+  add(release?.coverRemoteUrl);
+  return candidates;
 }
 
 export function markCoverLoadFailed(releaseId) {

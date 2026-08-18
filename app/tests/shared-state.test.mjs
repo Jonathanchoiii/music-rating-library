@@ -468,3 +468,46 @@ test("conflicting MusicBrainz identities never coalesce", async (context) => {
     2,
   );
 });
+
+test("empty artist-profile writes do not wipe saved platform links or media", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const key = "recordshelf-artist-profiles-v1";
+  const saved = {
+    version: 3,
+    profiles: {
+      "raw-doja cat": {
+        platformLinks: {
+          appleMusic: "https://music.apple.com/us/artist/doja-cat/1477172905",
+          spotify: "https://open.spotify.com/artist/5cj0lLjcoR7YOSnhnX0Po5",
+          youtubeMusic: "https://music.youtube.com/channel/UCartist",
+        },
+        media: {
+          status: "READY",
+          imageUrl: "https://is1-ssl.mzstatic.com/image/thumb/doja.jpg",
+          localMotionUrl: "/private-motion-artwork/artist-raw-doja-cat.mp4",
+        },
+      },
+    },
+  };
+
+  await applySharedStateChanges({ [key]: JSON.stringify(saved) }, statePath);
+  const state = await applySharedStateChanges(
+    { [key]: JSON.stringify({ version: 3, profiles: {} }) },
+    statePath,
+    { baseStorage: { [key]: JSON.stringify(saved) } },
+  );
+  const merged = JSON.parse(state.storage[key]);
+  assert.equal(
+    merged.profiles["raw-doja cat"].platformLinks.appleMusic,
+    "https://music.apple.com/us/artist/doja-cat/1477172905",
+  );
+  assert.equal(
+    merged.profiles["raw-doja cat"].platformLinks.spotify,
+    "https://open.spotify.com/artist/5cj0lLjcoR7YOSnhnX0Po5",
+  );
+  assert.equal(
+    merged.profiles["raw-doja cat"].media.localMotionUrl,
+    "/private-motion-artwork/artist-raw-doja-cat.mp4",
+  );
+});

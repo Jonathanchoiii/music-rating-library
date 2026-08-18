@@ -429,6 +429,60 @@ test("confirmed duplicate merge blocks conflicting MusicBrainz identities", () =
   );
 });
 
+test("legacy Shift-JIS MusicBrainz search hints become readable aliases or are dropped", () => {
+  const state = sanitizeArtistIdentityState({
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "artist-utada",
+        canonicalName: "宇多田光",
+        aliases: [
+          { name: "宇多田ヒカル", source: "USER" },
+          { name: "‰F‘½“cƒqƒJƒ‹", type: "SEARCH_ALIAS", source: "MUSICBRAINZ" },
+          { name: "Cubic U", type: "SEARCH_ALIAS", source: "MUSICBRAINZ" },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    state.identities[0].aliases.map((alias) => alias.name),
+    ["宇多田光", "宇多田ヒカル", "Cubic U"],
+  );
+
+  const imported = applyMusicBrainzArtistAuditResults(
+    {
+      schemaVersion: 2,
+      identities: [
+        {
+          id: "artist-utada",
+          canonicalName: "宇多田光",
+          aliases: [{ name: "宇多田光", source: "USER" }],
+        },
+      ],
+    },
+    [
+      {
+        id: "artist-utada",
+        status: "VALID",
+        musicBrainzMbid: "b539e453-c4fe-47e3-8a07-8517eac74429",
+        checkedAt: "2026-08-17T00:00:00.000Z",
+        fingerprint: "utada",
+        aliases: [{ name: "‰F‘1⁄2“cƒqƒJƒ‹" }, { name: "Cubic U" }],
+      },
+    ],
+  );
+  assert.deepEqual(
+    imported.identities[0].aliases.map((alias) => alias.name),
+    ["宇多田光", "宇多田ヒカル", "Cubic U"],
+  );
+
+  const groups = groupReleasesByArtistIdentity(
+    [{ ...release("one-last-kiss", "宇多田光") }],
+    state,
+  );
+  assert.deepEqual(groups[0].aliases, ["宇多田ヒカル", "Cubic U"]);
+});
+
 test("MusicBrainz results write only exact work-evidenced matches", () => {
   const initial = {
     schemaVersion: 2,

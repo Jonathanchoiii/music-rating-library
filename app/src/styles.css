@@ -1062,8 +1062,11 @@ html.is-desktop-shell .desktop-sidebar {
 .cover-placeholder {
   color: hsl(var(--cover-hue) 28% 34%);
   background: hsl(var(--cover-hue) 24% 88%);
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .cover-placeholder svg {
@@ -2411,6 +2414,7 @@ html.is-desktop-shell .desktop-sidebar {
 
 .detail-cover {
   position: relative;
+  overflow: visible;
 }
 
 .detail-cover > img,
@@ -2424,8 +2428,8 @@ html.is-desktop-shell .desktop-sidebar {
 
 .detail-cover-refresh {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
+  right: -4px;
+  bottom: -4px;
   z-index: 2;
   width: 44px;
   height: 44px;
@@ -2727,11 +2731,17 @@ html.is-desktop-shell .desktop-sidebar {
   margin-top: 4px;
   padding: 24px 0 22px;
   border-top: 1px solid var(--line);
-  display: grid;
-  gap: 14px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: stretch;
+  column-gap: 10px;
+  row-gap: 14px;
 }
 
 .external-ratings > header {
+  flex: 1 0 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2786,6 +2796,7 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .external-rating-link-editor {
+  flex: 1 0 100%;
   padding: 13px;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
@@ -2829,27 +2840,38 @@ html.is-desktop-shell .desktop-sidebar {
   white-space: nowrap;
 }
 
-.external-rating-list {
+.external-rating-list,
+.external-rating-link-list {
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
-  gap: 9px;
+  justify-content: flex-start;
+  align-items: stretch;
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: 100%;
+  gap: 10px;
 }
 
 .external-rating-card {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: min-content;
+  max-width: 100%;
   min-height: 38px;
   padding: 7px 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--text);
-  display: grid;
-  grid-template-columns: auto auto auto 14px;
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
   align-items: center;
   gap: 7px;
-}
-
-.external-rating-card.is-split {
-  grid-template-columns: auto minmax(0, 1fr) auto 14px;
+  white-space: nowrap;
 }
 
 .external-rating-card:hover {
@@ -2857,7 +2879,8 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .external-rating-brand {
-  min-width: 0;
+  flex: none;
+  min-width: min-content;
   height: 20px;
   padding: 0 5px;
   border-radius: 4px;
@@ -2880,6 +2903,7 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .external-rating-card strong {
+  flex: none;
   color: var(--text);
   font-size: 15px;
   line-height: 1;
@@ -2888,9 +2912,9 @@ html.is-desktop-shell .desktop-sidebar {
 
 .external-rating-split {
   display: inline-flex;
+  flex: none;
   align-items: baseline;
   gap: 8px;
-  min-width: 0;
 }
 
 .external-rating-split > span {
@@ -2907,32 +2931,34 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .external-rating-card small {
+  flex: none;
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
 }
 
 .external-rating-card > svg {
+  flex: none;
   width: 14px;
   height: 14px;
   color: var(--muted);
 }
 
-.external-rating-link-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
 .external-rating-link-list a {
+  flex: 0 0 auto;
+  width: max-content;
   min-height: 38px;
   padding: 7px 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-control);
   color: var(--text);
   display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
 
 .external-rating-link-list a:hover {
@@ -2966,6 +2992,7 @@ html.is-desktop-shell .desktop-sidebar {
 }
 
 .external-ratings-message {
+  flex: 1 0 100%;
   margin: 0;
 }
 

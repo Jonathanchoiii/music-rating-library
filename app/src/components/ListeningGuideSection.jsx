@@ -361,7 +361,7 @@ export function ListeningGuideSection({ release }) {
               <span>建议先听</span>
               <div>
                 {guide.highlightTracks.map((track) => (
-                  <span key={track.title}>{track.title}</span>
+                  <span className="listening-guide-chip" key={track.title}>{track.title}</span>
                 ))}
               </div>
             </div>

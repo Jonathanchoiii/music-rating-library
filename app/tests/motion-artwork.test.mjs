@@ -63,6 +63,256 @@ test("normalizes exact Apple Music album links without retaining tracking data",
   );
 });
 
+test("normalizes exact Apple Music artist links including storefront-only numeric paths", () => {
+  assert.equal(
+    __test.appleArtistIdentity(
+      "https://music.apple.com/cn/artist/arlo-parks/1291875084?l=zh-Hans-CN",
+    )?.normalizedUrl,
+    "https://music.apple.com/cn/artist/1291875084",
+  );
+  assert.equal(
+    __test.appleArtistIdentity(
+      "https://music.apple.com/cn/artist/1291875084",
+    )?.storefront,
+    "cn",
+  );
+  assert.equal(
+    __test.itunesScaledArtworkUrl(
+      "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/aa/source/100x100bb.jpg",
+    ),
+    "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/aa/source/600x600bb.jpg",
+  );
+  assert.equal(
+    __test.findArtistMotionVideo({
+      motionArtistSquare1x1: {
+        video: "https://mvod.itunes.apple.com/itunes-assets/square/default.m3u8",
+      },
+      motionArtistFullscreen16x9: {
+        video:
+          "https://mvod.itunes.apple.com/itunes-assets/fullscreen/default.m3u8",
+      },
+    }),
+    "https://mvod.itunes.apple.com/itunes-assets/square/default.m3u8",
+  );
+  assert.equal(
+    __test.findArtistMotionVideo({
+      motionArtistFullscreen16x9: {
+        video:
+          "https://is1-ssl.mzstatic.com/image/thumb/Video211/v4/ab/7c/dc/ab7cdc86-a059-45b2-89e3-eb4a2b561cdd/Job47a94e31-7ad0-478e-a8ad-d74fc7f24978-200819453-PreviewImage_Preview_Image_Intermediate_nonvideo_393019442_2303427635-Time1755799427448.png/2400x1350mv.webp",
+      },
+      motionArtistSquare1x1: {
+        video:
+          "https://mvod.itunes.apple.com/itunes-assets/square/artist.m3u8",
+      },
+    }),
+    "https://mvod.itunes.apple.com/itunes-assets/square/artist.m3u8",
+  );
+  assert.equal(
+    __test.findArtistMotionVideo({
+      motionArtistFullscreen16x9: {
+        video:
+          "https://is1-ssl.mzstatic.com/image/thumb/Video211/preview/2400x1350mv.webp",
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    __test.safeMotionUrl(
+      "https://is1-ssl.mzstatic.com/image/thumb/Video211/preview/2400x1350mv.webp",
+    ),
+    null,
+  );
+  assert.match(
+    __test.motionCoverCropFilter({ width: 960, fps: 10 }),
+    /crop=960:960:/,
+  );
+  assert.equal(
+    __test.motionCoverCropFilter({ width: 960, fps: 10 }).includes("pad="),
+    false,
+  );
+  assert.equal(__test.ARTIST_MOTION_MP4_PROFILES[0].id, "ARTIST_CLEAR_1080_30");
+  assert.equal(__test.ARTIST_MOTION_MP4_PROFILES[0].width, 1080);
+  assert.equal(__test.ARTIST_MOTION_MP4_PROFILES[0].fps, 30);
+  assert.equal(__test.ARTIST_MOTION_MP4_PROFILES[0].crf, 18);
+  assert.equal(__test.ARTIST_MOTION_MAX_BYTES, 8 * 1024 * 1024);
+  assert.equal(__test.ARTIST_MOTION_MP4_PROFILE_VERSION, 2);
+  assert.deepEqual([...__test.ARTIST_MOTION_DURATION_STEPS], [8, 6, 5, 4, 3, 2, 1]);
+  assert.equal(
+    __test.ARTIST_MOTION_MP4_PROFILES.every(
+      (profile) => profile.maxBytes === __test.ARTIST_MOTION_MAX_BYTES,
+    ),
+    true,
+  );
+  assert.match(
+    __test.motionCoverCropFilter(
+      { width: 1080, fps: 30 },
+      __test.ARTIST_MOTION_CROP_Y_BIAS,
+    ),
+    /crop=1080:1080:\(iw-1080\)\/2:\(ih-1080\)\*0\.5/,
+  );
+});
+
+test("artist stills prefer square Apple identity artwork over a wide editorial hero", () => {
+  assert.equal(
+    __test.firstArtistArtworkUrl({
+      artwork: {
+        width: 1012,
+        height: 1012,
+        url: "https://is1-ssl.mzstatic.com/image/thumb/identity/{w}x{h}bb.{f}",
+      },
+      editorialArtwork: {
+        subscriptionHero: {
+          width: 4320,
+          height: 1080,
+          url: "https://is1-ssl.mzstatic.com/image/thumb/hero/{w}x{h}sr.{f}",
+        },
+      },
+    }),
+    "https://is1-ssl.mzstatic.com/image/thumb/identity/1400x1400bb.jpg",
+  );
+  assert.equal(
+    __test.firstArtistArtworkUrl({
+      editorialArtwork: {
+        subscriptionHero: {
+          width: 4320,
+          height: 1080,
+          url: "https://is1-ssl.mzstatic.com/image/thumb/hero/{w}x{h}sr.{f}",
+        },
+      },
+    }),
+    "https://is1-ssl.mzstatic.com/image/thumb/hero/1400x350sr.jpg",
+  );
+});
+
+test("artist media uses editorial stills plus highest-quality Apple animated artwork", async () => {
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const guestToken = `${encode({ alg: "none" })}.${encode({
+    iss: "AMPWebPlay",
+  })}.signature`;
+  const requested = [];
+  const fetchImpl = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url === "https://music.apple.com/cn/artist/1291875084") {
+      return new Response('<script src="/assets/index~artist.js"></script>');
+    }
+    if (url === "https://music.apple.com/assets/index~artist.js") {
+      return new Response(guestToken);
+    }
+    if (
+      url.startsWith(
+        "https://amp-api.music.apple.com/v1/catalog/cn/artists/1291875084",
+      )
+    ) {
+      return Response.json({
+        data: [
+          {
+            attributes: {
+              artwork: {
+                width: 3000,
+                height: 3000,
+                url: "https://is1-ssl.mzstatic.com/image/thumb/Features/{w}x{h}bb.{f}",
+              },
+              editorialArtwork: {
+                subscriptionHero: {
+                  width: 4320,
+                  height: 1080,
+                  url: "https://is1-ssl.mzstatic.com/image/thumb/Features/hero/{w}x{h}sr.{f}",
+                },
+              },
+              editorialVideo: {
+                motionArtistSquare1x1: {
+                  video:
+                    "https://mvod.itunes.apple.com/itunes-assets/square/artist.m3u8",
+                },
+                motionArtistFullscreen16x9: {
+                  video:
+                    "https://mvod.itunes.apple.com/itunes-assets/fullscreen/artist.m3u8",
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const result = await __test.lookupAppleArtistMedia(
+    "https://music.apple.com/cn/artist/arlo-parks/1291875084",
+    fetchImpl,
+  );
+  assert.equal(
+    result.normalizedUrl,
+    "https://music.apple.com/cn/artist/1291875084",
+  );
+  assert.equal(
+    result.imageUrl,
+    "https://is1-ssl.mzstatic.com/image/thumb/Features/1400x1400bb.jpg",
+  );
+  assert.equal(
+    result.sourceVideoUrl,
+    "https://mvod.itunes.apple.com/itunes-assets/square/artist.m3u8",
+  );
+  assert.ok(
+    requested.some((url) =>
+      url.includes(
+        "/v1/catalog/cn/artists/1291875084?extend=editorialArtwork%2CeditorialVideo",
+      ),
+    ),
+  );
+});
+
+test("artist media falls back to a 600px iTunes still when catalog artwork is empty", async () => {
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const guestToken = `${encode({ alg: "none" })}.${encode({
+    iss: "AMPWebPlay",
+  })}.signature`;
+  const fetchImpl = async (input) => {
+    const url = String(input);
+    if (url === "https://music.apple.com/cn/artist/1291875084") {
+      return new Response('<script src="/assets/index~artist.js"></script>');
+    }
+    if (url === "https://music.apple.com/assets/index~artist.js") {
+      return new Response(guestToken);
+    }
+    if (
+      url.startsWith(
+        "https://amp-api.music.apple.com/v1/catalog/cn/artists/1291875084",
+      )
+    ) {
+      return Response.json({
+        data: [{ attributes: { editorialArtwork: {}, editorialVideo: {} } }],
+      });
+    }
+    if (url.startsWith("https://itunes.apple.com/lookup?")) {
+      return Response.json({
+        results: [
+          {
+            wrapperType: "artist",
+            artistId: 1291875084,
+            artworkUrl100:
+              "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/aa/source/100x100bb.jpg",
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const result = await __test.lookupAppleArtistMedia(
+    "https://music.apple.com/cn/artist/arlo-parks/1291875084",
+    fetchImpl,
+  );
+  assert.equal(
+    result.imageUrl,
+    "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/aa/source/600x600bb.jpg",
+  );
+  assert.equal(result.sourceVideoUrl, "");
+});
+
 test("reads Apple motion artwork from the confirmed storefront catalog", async () => {
   const encode = (value) =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -198,6 +448,19 @@ test("accepts only Apple HLS motion URLs", () => {
   assert.equal(
     __test.safeMotionUrl("https://mvod.itunes.apple.com/example/video.mp4"),
     null,
+  );
+  assert.equal(__test.safeArtistMotionId("raw-kiiikiii"), "artist-raw-kiiikiii");
+  assert.match(
+    __test.safeArtistMotionId("raw-doja cat"),
+    /^artist-raw-doja-cat-[a-f0-9]{10}$/,
+  );
+  assert.equal(
+    __test.safeArtistMotionId("raw-doja cat"),
+    __test.safeArtistMotionId("raw-doja cat"),
+  );
+  assert.notEqual(
+    __test.safeArtistMotionId("raw-doja cat"),
+    __test.safeArtistMotionId("raw-doja-cat"),
   );
 });
 
@@ -459,4 +722,146 @@ test("a verified WebP is cached privately and its local URL is persisted", async
       .storage,
     "LOCAL_WEBP",
   );
+});
+
+test("next artist motion duration shortens until the file is predicted to fit 8 MB", () => {
+  const max = __test.ARTIST_MOTION_MAX_BYTES;
+  assert.equal(__test.nextArtistMotionDuration(8, Math.floor(max * 1.15)), 6);
+  assert.equal(__test.nextArtistMotionDuration(6, Math.floor(max * 1.05)), 5);
+  assert.equal(__test.nextArtistMotionDuration(8, max), null);
+  assert.equal(__test.nextArtistMotionDuration(1, max + 1), null);
+  assert.match(
+    __test.artistMotionFfmpegArgs("/in", "/out", { width: 1080, fps: 30, crf: 18 }, 5).join(" "),
+    /-t 5 -i \/in /,
+  );
+});
+
+test("artist motion truncates duration until an oversize 1080p encode fits 8 MB", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "recordshelf-artist-mp4-trim-"),
+  );
+  const previousArtworkDirectory = process.env.RECORDSHELF_MOTION_ARTWORK_DIR;
+  process.env.RECORDSHELF_MOTION_ARTWORK_DIR = directory;
+  context.after(async () => {
+    if (previousArtworkDirectory === undefined) {
+      delete process.env.RECORDSHELF_MOTION_ARTWORK_DIR;
+    } else {
+      process.env.RECORDSHELF_MOTION_ARTWORK_DIR = previousArtworkDirectory;
+    }
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const attempts = [];
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("master.m3u8")) {
+      return new Response(
+        [
+          "#EXTM3U",
+          '#EXT-X-STREAM-INF:CLOSED-CAPTIONS=NONE,CODECS="avc1.64001f",RESOLUTION=1080x1080',
+          "video.m3u8",
+        ].join("\n"),
+      );
+    }
+    if (String(url).endsWith("video.m3u8")) {
+      return new Response(
+        [
+          "#EXTM3U",
+          '#EXT-X-MAP:URI="video-.mp4",BYTERANGE="10@0"',
+          "video-.mp4",
+        ].join("\n"),
+      );
+    }
+    return new Response(Buffer.from("motion-video"), {
+      headers: { "content-type": "video/mp4" },
+    });
+  };
+  const max = __test.ARTIST_MOTION_MAX_BYTES;
+  const result = await __test.cacheArtistMotionMp4File(
+    "artist-raw-kiiikiii",
+    "https://mvod.itunes.apple.com/example/master.m3u8",
+    fetchImpl,
+    {
+      encodeImpl: async ({ profile, durationSeconds, outputPath }) => {
+        attempts.push({ id: profile.id, durationSeconds });
+        let byteLength = max + 1;
+        if (profile.id === "ARTIST_CLEAR_1080_30" && durationSeconds === 8) {
+          byteLength = Math.floor(max * 1.15);
+        } else if (profile.id === "ARTIST_CLEAR_1080_30" && durationSeconds === 6) {
+          byteLength = Math.floor(max * 1.05);
+        } else if (profile.id === "ARTIST_CLEAR_1080_30" && durationSeconds === 5) {
+          byteLength = Math.floor(max * 0.84);
+        }
+        await fs.writeFile(outputPath, Buffer.from("x"));
+        await fs.truncate(outputPath, byteLength);
+      },
+    },
+  );
+
+  assert.equal(result.motionArtwork.truncated, true);
+  assert.equal(result.motionArtwork.durationSeconds, 5);
+  assert.equal(result.motionArtwork.format, "MP4");
+  assert.ok(result.motionArtwork.byteLength <= max);
+  assert.equal(path.extname(result.localUrl), ".mp4");
+  assert.deepEqual(attempts, [
+    { id: "ARTIST_CLEAR_1080_30", durationSeconds: 8 },
+    { id: "ARTIST_CLEAR_1080_30", durationSeconds: 6 },
+    { id: "ARTIST_CLEAR_1080_30", durationSeconds: 5 },
+  ]);
+});
+
+test("artist motion cache slugs spaced raw artist ids instead of rejecting the HLS URL", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "recordshelf-artist-mp4-slug-"),
+  );
+  const previousArtworkDirectory = process.env.RECORDSHELF_MOTION_ARTWORK_DIR;
+  process.env.RECORDSHELF_MOTION_ARTWORK_DIR = directory;
+  context.after(async () => {
+    if (previousArtworkDirectory === undefined) {
+      delete process.env.RECORDSHELF_MOTION_ARTWORK_DIR;
+    } else {
+      process.env.RECORDSHELF_MOTION_ARTWORK_DIR = previousArtworkDirectory;
+    }
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("master.m3u8")) {
+      return new Response(
+        [
+          "#EXTM3U",
+          '#EXT-X-STREAM-INF:CLOSED-CAPTIONS=NONE,CODECS="avc1.64001f",RESOLUTION=1080x1080',
+          "video.m3u8",
+        ].join("\n"),
+      );
+    }
+    if (String(url).endsWith("video.m3u8")) {
+      return new Response(
+        [
+          "#EXTM3U",
+          '#EXT-X-MAP:URI="video-.mp4",BYTERANGE="10@0"',
+          "video-.mp4",
+        ].join("\n"),
+      );
+    }
+    return new Response(Buffer.from("motion-video"), {
+      headers: { "content-type": "video/mp4" },
+    });
+  };
+
+  const result = await __test.cacheArtistMotionArtwork(
+    "raw-doja cat",
+    "https://mvod.itunes.apple.com/example/master.m3u8",
+    fetchImpl,
+    {
+      encodeImpl: async ({ outputPath }) => {
+        await fs.writeFile(outputPath, Buffer.from("mp4"));
+      },
+    },
+  );
+
+  assert.match(
+    result.localUrl,
+    /^\/private-motion-artwork\/artist-raw-doja-cat-[a-f0-9]{10}-\d+\.mp4$/,
+  );
+  assert.equal(result.motionArtwork.format, "MP4");
 });

@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  getBundledPrivateCoverDirectory,
+  getCoverFileLookupDirectories,
   getPrivateCoverDirectory,
   getPrivateCoverRoutePrefix,
   runCoverEnrichment,
@@ -147,12 +147,9 @@ function safeCoverFileName(pathname) {
 async function resolveCoverFilePath(pathname) {
   const fileName = safeCoverFileName(pathname);
   if (!fileName) return { fileName: null, filePath: null };
-  const candidates = [
-    path.join(getPrivateCoverDirectory(), fileName),
-    getBundledPrivateCoverDirectory()
-      ? path.join(getBundledPrivateCoverDirectory(), fileName)
-      : null,
-  ].filter(Boolean);
+  const candidates = getCoverFileLookupDirectories().map((directory) =>
+    path.join(directory, fileName),
+  );
   for (const candidate of candidates) {
     try {
       await fs.access(candidate);

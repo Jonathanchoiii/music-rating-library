@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  ARTIST_PROFILE_STORAGE_KEY,
   SHARED_LOCAL_STORAGE_KEYS,
   SHARED_LOCAL_STORAGE_KEY_SET,
 } from "../src/lib/sharedStorageKeys.js";
+import { sanitizeArtistProfileState } from "../src/lib/artistProfiles.js";
 import { readJsonBody, sendJson } from "../scripts/http-json.mjs";
 
 const SCHEMA_VERSION = 1;
@@ -469,10 +471,16 @@ function coalesceEquivalentArtistIdentities(value) {
   };
 }
 
+function artistProfilesMap(value) {
+  return value !== MISSING && isPlainObject(value?.profiles)
+    ? value.profiles
+    : null;
+}
+
 function mergedStorageValue(key, base, current, incoming) {
-  const parsedBase = parseJsonValue(base);
-  const parsedCurrent = parseJsonValue(current);
-  const parsedIncoming = parseJsonValue(incoming);
+  let parsedBase = parseJsonValue(base);
+  let parsedCurrent = parseJsonValue(current);
+  let parsedIncoming = parseJsonValue(incoming);
   if (
     parsedCurrent === MISSING &&
     parsedIncoming === MISSING
@@ -491,13 +499,49 @@ function mergedStorageValue(key, base, current, incoming) {
   ) {
     return current ?? incoming;
   }
-  const merged = mergeThreeWay(
+  if (key === ARTIST_PROFILE_STORAGE_KEY) {
+    parsedBase =
+      parsedBase === MISSING ? MISSING : sanitizeArtistProfileState(parsedBase);
+    parsedCurrent =
+      parsedCurrent === MISSING
+        ? MISSING
+        : sanitizeArtistProfileState(parsedCurrent);
+    parsedIncoming =
+      parsedIncoming === MISSING
+        ? MISSING
+        : sanitizeArtistProfileState(parsedIncoming);
+    const incomingProfiles = artistProfilesMap(parsedIncoming);
+    const currentProfiles = artistProfilesMap(parsedCurrent);
+    if (
+      incomingProfiles &&
+      currentProfiles &&
+      Object.keys(incomingProfiles).length === 0 &&
+      Object.keys(currentProfiles).length > 0
+    ) {
+      parsedIncoming = {
+        ...parsedIncoming,
+        profiles: currentProfiles,
+      };
+    }
+  }
+  let merged = mergeThreeWay(
     parsedBase,
     parsedCurrent,
     parsedIncoming,
     [key],
   );
   if (merged === MISSING) return null;
+  if (key === ARTIST_PROFILE_STORAGE_KEY) {
+    merged = sanitizeArtistProfileState(merged);
+    const currentProfiles = artistProfilesMap(parsedCurrent);
+    if (currentProfiles) {
+      const mergedProfiles = { ...(merged.profiles ?? {}) };
+      for (const [artistId, profile] of Object.entries(currentProfiles)) {
+        if (!mergedProfiles[artistId]) mergedProfiles[artistId] = profile;
+      }
+      merged = { ...merged, profiles: mergedProfiles };
+    }
+  }
   const normalized =
     key === "recordshelf-artist-identities-v1"
       ? coalesceEquivalentArtistIdentities(merged)

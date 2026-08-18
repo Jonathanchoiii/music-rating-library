@@ -374,14 +374,14 @@ function itunesScaledArtworkUrl(value, size = ARTIST_FALLBACK_STATIC_SIZE) {
 function firstArtistArtworkUrl(attributes) {
   const editorial = attributes?.editorialArtwork ?? {};
   const candidates = [
+    editorial.staticDetailSquare,
+    attributes?.artwork,
+    editorial.staticDetailTall,
+    editorial.centeredFullscreenBackground,
     editorial.subscriptionHero,
     editorial.bannerUber,
-    editorial.staticDetailTall,
     editorial.subscriptionFullScreen,
-    editorial.centeredFullscreenBackground,
     editorial.storeFlowcase,
-    attributes?.artwork,
-    editorial.staticDetailSquare,
   ];
   for (const artwork of candidates) {
     const url = resolvedArtistArtworkUrl(artwork);
@@ -1072,7 +1072,7 @@ async function cacheMotionArtworkFile(cacheId, sourceUrl, fetchImpl = fetch) {
         sourcePath,
         "-an",
         "-vf",
-        `fps=${profile.fps},scale=${profile.width}:${profile.width}:force_original_aspect_ratio=decrease,pad=${profile.width}:${profile.width}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`,
+        motionCoverCropFilter(profile),
         "-c:v",
         "libvpx",
         "-pix_fmt",
@@ -1510,6 +1510,7 @@ export const __test = {
   appleAlbumIdentity,
   appleArtistIdentity,
   appleArtworkUrl,
+  firstArtistArtworkUrl,
   appleAssetUrls,
   appleGuestToken,
   findArtistMotionVideo,

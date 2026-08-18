@@ -43,6 +43,11 @@ export function collectPrivateMediaNames(values) {
       if (cover) covers.add(cover);
       const local = safePrivateFileName(record.localUrl, MOTION_ROUTE);
       if (local) motion.add(local);
+      const artistMotion = safePrivateFileName(
+        record.localMotionUrl,
+        MOTION_ROUTE,
+      );
+      if (artistMotion) motion.add(artistMotion);
     });
   }
   return { covers, motion };

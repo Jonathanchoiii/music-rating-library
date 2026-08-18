@@ -7,6 +7,7 @@ const CONTENT_TYPES = new Map([
   [".jpg", "image/jpeg"],
   [".json", "application/json; charset=utf-8"],
   [".png", "image/png"],
+  [".mp4", "video/mp4"],
   [".webp", "image/webp"],
 ]);
 

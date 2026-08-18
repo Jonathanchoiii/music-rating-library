@@ -76,6 +76,12 @@ function isAuthoritativeWebOrigin() {
 }
 
 export function canWriteSharedState() {
+  if (
+    import.meta.env.DEV &&
+    ["127.0.0.1", "localhost"].includes(window.location.hostname)
+  ) {
+    return true;
+  }
   return isAuthoritativeSharedStateWriter({
     hostname: window.location.hostname,
     port: window.location.port,

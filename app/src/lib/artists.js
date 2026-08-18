@@ -56,12 +56,106 @@ function createLocalId(prefix = "artist") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+const WINDOWS_1252_UNICODE_TO_BYTE = new Map([
+  [0x20ac, 0x80],
+  [0x201a, 0x82],
+  [0x0192, 0x83],
+  [0x201e, 0x84],
+  [0x2026, 0x85],
+  [0x2020, 0x86],
+  [0x2021, 0x87],
+  [0x02c6, 0x88],
+  [0x2030, 0x89],
+  [0x0160, 0x8a],
+  [0x2039, 0x8b],
+  [0x0152, 0x8c],
+  [0x017d, 0x8e],
+  [0x2018, 0x91],
+  [0x2019, 0x92],
+  [0x201c, 0x93],
+  [0x201d, 0x94],
+  [0x2022, 0x95],
+  [0x2013, 0x96],
+  [0x2014, 0x97],
+  [0x02dc, 0x98],
+  [0x2122, 0x99],
+  [0x0161, 0x9a],
+  [0x203a, 0x9b],
+  [0x0153, 0x9c],
+  [0x017e, 0x9e],
+  [0x0178, 0x9f],
+]);
+
 export function cleanName(value = "") {
   return String(value).normalize("NFKC").replace(/\s+/g, " ").trim();
 }
 
+function looksLikeLegacyEncodingGarbage(name) {
+  if (
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+      name,
+    )
+  ) {
+    return false;
+  }
+  return /[‰ƒ‹›ŒœŠšŽžŸ†‡•ˆ˜‚„]|1⁄[24]/.test(name);
+}
+
+function encodeWindows1252Bytes(value) {
+  const bytes = [];
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint <= 0x7f || (codePoint >= 0xa0 && codePoint <= 0xff)) {
+      bytes.push(codePoint);
+      continue;
+    }
+    const mapped = WINDOWS_1252_UNICODE_TO_BYTE.get(codePoint);
+    if (mapped == null) return null;
+    bytes.push(mapped);
+  }
+  return Uint8Array.from(bytes);
+}
+
+function repairShiftJisWindows1252Mojibake(name) {
+  if (!looksLikeLegacyEncodingGarbage(name)) return "";
+  const restored = name
+    .replaceAll("1⁄4", "¼")
+    .replaceAll("1⁄2", "½")
+    .replaceAll("3⁄4", "¾");
+  const bytes = encodeWindows1252Bytes(restored);
+  if (!bytes?.length) return "";
+  try {
+    const decoded = cleanName(
+      new TextDecoder("shift_jis", { fatal: true }).decode(bytes),
+    );
+    if (
+      !decoded ||
+      decoded === name ||
+      !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+        decoded,
+      )
+    ) {
+      return "";
+    }
+    return decoded;
+  } catch {
+    return "";
+  }
+}
+
+function usableArtistAliasName(value) {
+  const name = cleanName(value);
+  if (!name) return "";
+  return (
+    repairShiftJisWindows1252Mojibake(name) ||
+    (looksLikeLegacyEncodingGarbage(name) ? "" : name)
+  );
+}
+
 function sanitizeAlias(alias) {
-  const name = cleanName(typeof alias === "string" ? alias : alias?.name);
+  const name = usableArtistAliasName(
+    typeof alias === "string" ? alias : alias?.name,
+  );
   if (!name) return null;
   return {
     name,
@@ -478,7 +572,7 @@ export function getRawArtistCreditCounts(releases = []) {
 }
 
 function addAliasIfAvailable(identity, aliasName, source, aliasOwners) {
-  const name = cleanName(aliasName);
+  const name = usableArtistAliasName(aliasName);
   const normalized = normalizeText(name);
   if (!normalized) return { identity, added: false };
   const priorOwner = aliasOwners.get(normalized);

@@ -38,10 +38,15 @@ test("snapshot collection walks catalog overlays and user releases", () => {
         },
       },
       userReleases: [{ coverUrl: "/private-covers/two.png" }],
+      profiles: {
+        "raw-kiiikiii": {
+          media: { localMotionUrl: "/private-motion-artwork/artist.mp4" },
+        },
+      },
     },
   ]);
   assert.deepEqual([...media.covers].sort(), ["one.jpg", "two.png"]);
-  assert.deepEqual([...media.motion], ["a.webp"]);
+  assert.deepEqual([...media.motion].sort(), ["a.webp", "artist.mp4"]);
 });
 
 test("preview storage never includes NeoDB OAuth client records", () => {

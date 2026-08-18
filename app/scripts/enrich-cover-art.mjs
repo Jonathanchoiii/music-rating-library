@@ -406,6 +406,18 @@ export function getBundledPrivateCoverDirectory() {
   return null;
 }
 
+export function getCoverFileLookupDirectories() {
+  return [
+    ...new Set(
+      [
+        getPrivateCoverDirectory(),
+        getBundledPrivateCoverDirectory(),
+        DEFAULT_COVER_DIRECTORY,
+      ].filter(Boolean),
+    ),
+  ];
+}
+
 export function getPrivateCoverRoutePrefix() {
   return PRIVATE_COVER_ROUTE;
 }
