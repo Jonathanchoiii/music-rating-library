@@ -5,7 +5,6 @@ export function SettingsDialog({
   mode = "home",
   releases,
   identityState,
-  artistProfileState,
   onChangeIdentityState,
   onOpenArtistManager,
   duplicateGroupCount,
@@ -20,7 +19,6 @@ export function SettingsDialog({
   onRestore,
   onToast,
   onApplyCoverUpdates,
-  onApplyArtistAppleLinks,
   readOnly = false,
 }) {
   return (
@@ -51,7 +49,6 @@ export function SettingsDialog({
           <SettingsHome
             releases={releases}
             identityState={identityState}
-            artistProfileState={artistProfileState}
             onOpenArtistManager={onOpenArtistManager}
             duplicateGroupCount={duplicateGroupCount}
             duplicateReleaseCount={duplicateReleaseCount}
@@ -64,7 +61,6 @@ export function SettingsDialog({
             onRestore={onRestore}
             onToast={onToast}
             onApplyCoverUpdates={onApplyCoverUpdates}
-            onApplyArtistAppleLinks={onApplyArtistAppleLinks}
             readOnly={readOnly}
           />
         )}

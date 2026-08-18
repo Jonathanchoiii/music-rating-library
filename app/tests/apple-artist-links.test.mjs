@@ -317,12 +317,13 @@ test("existing Apple artist links are not overwritten and ambiguous names stay e
   }
 });
 
-test("settings exposes user-triggered Apple artist homepage matching without media fetch", async () => {
+test("settings does not expose Apple artist homepage matching", async () => {
   const source = await fs.readFile(
     new URL("../src/components/SettingsHome.jsx", import.meta.url),
     "utf8",
   );
-  assert.match(source, /匹配 Apple Music 艺人主页/);
-  assert.match(source, /\/api\/artists\/apple-links/);
+  assert.equal(source.includes("匹配 Apple Music 艺人主页"), false);
+  assert.equal(source.includes("/api/artists/apple-links"), false);
+  assert.equal(source.includes("matchAppleArtistHomepages"), false);
   assert.equal(source.includes("/api/artists/media"), false);
 });

@@ -97,6 +97,7 @@ async function runCodexOnce(prompt, schemaPath, outputPath) {
     "--sandbox",
     "read-only",
     "--skip-git-repo-check",
+    "--ignore-user-config",
     "--output-schema",
     schemaPath,
     "--output-last-message",

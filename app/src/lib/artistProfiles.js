@@ -358,6 +358,8 @@ export const ARTIST_RESEARCH_ERROR_MESSAGES = Object.freeze({
   CODEX_RESEARCH_TIMEOUT: "Codex 联网研究超时，也没有足够的可核验公开档案。",
   ARTIST_RESEARCH_TIMEOUT: "Codex 联网研究超时，也没有足够的可核验公开档案。",
   CODEX_RESEARCH_FAILED: "Codex 联网研究没有完成，也没有足够的可核验公开档案。",
+  CODEX_MODEL_UNSUPPORTED:
+    "本机 Codex 当前模型不被 ChatGPT 登录支持，也没有足够的可核验公开档案。",
   ARTIST_IDENTITY_AMBIGUOUS:
     "无法排除同名艺人，原有资料已保留。请先在艺人管理中绑定 MusicBrainz ID。",
   ARTIST_RESEARCH_UPSTREAM_UNAVAILABLE:
@@ -379,6 +381,8 @@ export const ARTIST_RESEARCH_PARTIAL_NOTICE = Object.freeze({
     "Codex 联网研究超时，已改用可核验公开档案（MusicBrainz / Wikipedia），不是编造。",
   CODEX_RESEARCH_FAILED:
     "Codex 长文未完成，已用可核验公开档案（MusicBrainz / Wikipedia），不是编造。",
+  CODEX_MODEL_UNSUPPORTED:
+    "本机 Codex 当前模型不被 ChatGPT 登录支持，已改用可核验公开档案（MusicBrainz / Wikipedia），不是编造。",
   INSUFFICIENT_SOURCES:
     "没有足够来源撰写 Codex 长文，已展示可核验公开档案（MusicBrainz / Wikipedia），不是编造。",
 });

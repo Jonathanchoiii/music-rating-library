@@ -46,6 +46,8 @@ const GENERATION_ERROR_MESSAGES = Object.freeze({
     "本次 Codex 联网研究超时；旧指南仍然保留，可以稍后重试",
   CODEX_RESEARCH_FAILED:
     "Codex 联网研究未成功；旧指南仍然保留，可以稍后重试",
+  CODEX_MODEL_UNSUPPORTED:
+    "本机 Codex 当前模型不被 ChatGPT 登录支持；旧指南仍然保留，可以稍后重试",
   CODEX_JOB_INTERRUPTED:
     "本地服务在研究期间发生重启；请再次点击更新",
 });

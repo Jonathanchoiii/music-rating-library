@@ -50,7 +50,7 @@
 
 - 艺人详情的 Apple Music、Spotify 与 YouTube Music 主页链接按稳定 `artist_id` 立即写入共享 `artistProfiles` 增量（`~/Library/Application Support/RecordShelf/shared-local-state.json`）；Web 与 Mac 必须读取同一份状态，不能另建浏览器端副本。含空格的未映射 ID（如 `raw-doja cat`）、`+`/`%20` 编码变体和已映射身份都应对准同一份 `platformLinks` 与本机 `media`。重新打开必须还原因用户保存而已经存在的链接和素材；不得因为空增量合并把它们清掉，也不得因此在每次打开时重新请求封面。
 - 平台工具的可交互状态只取已确认并通过平台 URL 校验的 `artistProfiles.platformLinks`：有链接时使用高亮外链并以新标签页打开，无链接时渲染禁用的低强调按钮；不得让缺失平台图标承担“编辑链接”的隐式操作，编辑统一由独立铅笔入口完成。
-- 链接只接受对应平台的精确 HTTPS 艺人主页，不能以搜索结果、专辑页或模糊名称代替。用户可主动触发一次「匹配 Apple Music 艺人主页」：只用该艺人已确认的 Apple Music 专辑链接调用目录 `include=artists`，在姓名/别名精确命中且 Apple 艺人 ID 唯一时填入缺失的艺人主页；合辑、同名冲突和已有链接跳过。匹配成功后不得自动拉取封面或动态视觉；修改链接后，只有用户主动点击素材按钮才允许调用 `/api/artists/media`。
+- 链接只接受对应平台的精确 HTTPS 艺人主页，不能以搜索结果、专辑页或模糊名称代替。不提供设置页「匹配 Apple Music 艺人主页」或艺人详情编辑器内的专辑反查匹配；艺人主页只能由用户粘贴精确 Artist URL。不得按艺人姓名搜索 Apple 目录，也不得在保存链接后自动拉取封面或动态视觉；修改链接后，只有用户主动点击素材按钮才允许调用 `/api/artists/media`。
 - `/api/artists/media` 只处理当前艺人：读取其 Apple Music Artist URL，按 Apple 公开目录同时请求 `editorialArtwork` 与 `editorialVideo`；静态图优先方形身份静图（`artwork` / `staticDetailSquare`），再横版 editorial hero 的 1400/1000，以及 Artwork Finder 同款 600px 兜底（必要时把 iTunes `artworkUrl100` 放大到 600×600），动态视觉优先方形 1:1 再回退 16:9，压缩为本机 H.264 MP4。本机文件名会把含空格的未映射艺人 ID 清理成安全 slug，不得把合法 HLS 误报为「地址无效」。超过 8 MB 时先自动截短时长，再降 fps/分辨率/crf，直到文件 ≤ 8 MB 后保留该 MP4；只有完全没有可播放视频时才回退静图。禁止抓取第三方 artwork-finder 页面，也禁止在打开艺人详情、同步 NeoDB 或启动客户端时批量扫描全库。
 - 头部素材优先级固定为：本机动态 MP4（或尚未刷新的遗留 WebP）→ 已缓存艺人图 → RecordShelf 已收录专辑封面拼贴。请求失败时保留上一次可用素材与专辑拼贴，不显示破图，也不把错误缓存为成功结果。
 - Git 只保留实现与空状态模型；艺人链接、缓存图片、动态视觉和请求结果都属于本机私人增量，不得提交到仓库。

@@ -1096,6 +1096,7 @@ export async function requestCodexResearch({
     "--sandbox",
     "read-only",
     "--skip-git-repo-check",
+    "--ignore-user-config",
     "--output-schema",
     schemaPath,
     "--output-last-message",
@@ -1121,6 +1122,7 @@ export async function requestCodexResearch({
       });
       let stderr = "";
       let stdout = "";
+      let stdoutRaw = "";
       let settled = false;
       let latestStage = "";
       const reportStage = (stage) => {
@@ -1140,6 +1142,7 @@ export async function requestCodexResearch({
         callback();
       };
       child.stdout.on("data", (chunk) => {
+        stdoutRaw = `${stdoutRaw}${chunk}`.slice(-32_000);
         stdout = `${stdout}${chunk}`;
         const lines = stdout.split("\n");
         stdout = lines.pop() ?? "";
@@ -1176,9 +1179,12 @@ export async function requestCodexResearch({
           finish(resolve);
           return;
         }
-        const errorCode = /login|auth|sign.?in|unauthorized/i.test(stderr)
-          ? "CODEX_AUTH_REQUIRED"
-          : "CODEX_RESEARCH_FAILED";
+        const diagnostic = `${stderr}\n${stdoutRaw}`;
+        const errorCode = /not supported when using Codex with a ChatGPT account/i.test(diagnostic)
+          ? "CODEX_MODEL_UNSUPPORTED"
+          : /login|auth|sign.?in|unauthorized/i.test(diagnostic)
+            ? "CODEX_AUTH_REQUIRED"
+            : "CODEX_RESEARCH_FAILED";
         finish(() => reject(providerRequestError(errorCode, 502)));
       });
       child.stdin.end(codexPrompt(identity, promptTemplate));
@@ -1284,6 +1290,7 @@ export function startCodexListeningGuideJob(
         "CODEX_CLI_UNAVAILABLE",
         "CODEX_AUTH_REQUIRED",
         "CODEX_RESEARCH_TIMEOUT",
+        "CODEX_MODEL_UNSUPPORTED",
         "INVALID_RELEASE_IDENTITY",
       ]);
       job.status = "FAILED";

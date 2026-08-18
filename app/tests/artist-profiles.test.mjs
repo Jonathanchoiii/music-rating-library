@@ -247,6 +247,19 @@ test("codex job failures keep MusicBrainz facts as a non-blocking partial result
   assert.equal(failedWithFacts.patch.introductionStatus, "READY");
   assert.match(failedWithFacts.patch.researchError, /未找到 Codex CLI/);
 
+  const unsupportedModel = artistResearchJobPatch({
+    status: "COMPLETED",
+    resultStatus: "PARTIAL",
+    error: "CODEX_MODEL_UNSUPPORTED",
+    profile: {
+      publicFacts: { country: "美国" },
+      researchError:
+        "本机 Codex 当前模型不被 ChatGPT 登录支持，已改用可核验公开档案（MusicBrainz / Wikipedia），不是编造。",
+    },
+  });
+  assert.equal(unsupportedModel.kind, "partial");
+  assert.match(unsupportedModel.patch.researchError, /ChatGPT 登录支持/);
+
   const identityConflict = artistResearchJobPatch({
     status: "FAILED",
     error: "ARTIST_IDENTITY_AMBIGUOUS",

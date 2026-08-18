@@ -63,7 +63,6 @@ export function ArtistDetail({
   onChangeReleaseView,
   onRequestIntroduction,
   onSavePlatformLinks,
-  onMatchAppleLink,
   onRequestMedia,
   onToggleMotion,
 }) {
@@ -77,7 +76,6 @@ export function ArtistDetail({
     profile?.platformLinks ?? {},
   );
   const [linkError, setLinkError] = useState("");
-  const [matchingAppleLink, setMatchingAppleLink] = useState(false);
   const [heroPhotoFailed, setHeroPhotoFailed] = useState(false);
   const [closeOnPhoto, setCloseOnPhoto] = useState(false);
   const [heroInk, setHeroInk] = useState("dark");
@@ -206,24 +204,6 @@ export function ArtistDetail({
     onSavePlatformLinks?.(next);
     setEditingLinks(false);
     setLinkError("");
-  }
-
-  async function matchAppleLinkFromAlbums() {
-    if (!onMatchAppleLink || matchingAppleLink) return;
-    setMatchingAppleLink(true);
-    setLinkError("");
-    try {
-      const result = await onMatchAppleLink();
-      if (result?.matchedCount) setEditingLinks(false);
-    } catch (error) {
-      setLinkError(
-        error instanceof Error
-          ? error.message
-          : "Apple Music 艺人主页暂时无法匹配。",
-      );
-    } finally {
-      setMatchingAppleLink(false);
-    }
   }
 
   function changeReleaseView(nextView) {
@@ -486,16 +466,6 @@ export function ArtistDetail({
             ))}
             {linkError ? <p className="artist-platform-error" role="alert">{linkError}</p> : null}
             <div className="artist-platform-editor-actions">
-              {onMatchAppleLink ? (
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={matchingAppleLink}
-                  onClick={matchAppleLinkFromAlbums}
-                >
-                  {matchingAppleLink ? "正在匹配…" : "从已确认专辑匹配 Apple Music"}
-                </button>
-              ) : null}
               <button type="button" className="secondary-button" onClick={() => setEditingLinks(false)}>取消</button>
               <button type="button" className="primary-button" onClick={saveLinks}>保存链接</button>
             </div>
@@ -610,7 +580,7 @@ export function ArtistDetail({
           <header>
             <div>
               <h3>探索模式</h3>
-              <p>发现尚未收录、尚未听过的精确作品目录</p>
+              <p>开关只记住偏好；未听过的外部目录目前不能拉取</p>
             </div>
             <button
               type="button"
@@ -631,9 +601,9 @@ export function ArtistDetail({
             <div className="artist-exploration-empty">
               <LockSimple aria-hidden="true" />
               <div>
-                <strong>等待精确目录</strong>
+                <strong>未听目录尚未开放</strong>
                 <p>
-                  只有主动刷新并核验艺人身份后，未听作品才会以灰色待解锁状态出现。
+                  当前只展示上方「我的收录」里已经在 RecordShelf 中的作品。开启探索模式不会联网、不会核验身份，也不会出现灰色待解锁卡片。
                 </p>
               </div>
             </div>
@@ -817,7 +787,7 @@ function ArtistPublicFacts({ facts }) {
 const AWARD_RESULT_LABELS = {
   won: "获奖",
   nominated: "提名",
-  shortlisted: "入围 / 短名单",
+  shortlisted: "入围",
   longlisted: "长名单",
 };
 

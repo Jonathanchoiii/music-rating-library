@@ -97,7 +97,6 @@ import {
   saveArtistProfileState,
   updateArtistProfile,
 } from "./lib/artistProfiles.js";
-import { appleArtistLinkJobFromGroup } from "./lib/appleArtistLinkMatch.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
 import { persistReleaseOverlay } from "./lib/releaseMetadataPersist.js";
 import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
@@ -720,56 +719,6 @@ function LibraryApp() {
     if (!selectedArtistGroup || readOnly) return;
     persistArtistProfilePatch(selectedArtistGroup.id, { platformLinks });
     setToast("艺人主页链接已保存");
-  }
-
-  function applyMatchedAppleArtistLinks(matched) {
-    if (!matched?.length) return;
-    setArtistProfileState((current) => {
-      let next = current;
-      for (const item of matched) {
-        next = updateArtistProfile(next, item.artistId, {
-          platformLinks: { appleMusic: item.appleMusicUrl },
-        });
-      }
-      if (!readOnly) {
-        saveArtistProfileState(next, window.localStorage, { notify: true });
-      }
-      return next;
-    });
-  }
-
-  async function matchSelectedArtistAppleLink() {
-    if (!selectedArtistGroup || readOnly) return null;
-    const job = appleArtistLinkJobFromGroup(
-      selectedArtistGroup,
-      selectedArtistProfile,
-    );
-    if (!job) {
-      setToast("没有已确认的 Apple Music 专辑链接，无法精确匹配");
-      return { matchedCount: 0 };
-    }
-    const response = await fetch("/api/artists/apple-links", {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ artists: [job], persist: true }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(body.message || "Apple Music 艺人主页暂时无法匹配");
-    }
-    applyMatchedAppleArtistLinks(body.matched);
-    const reason = body.skipped?.[0]?.reason;
-    setToast(
-      body.matchedCount
-        ? "已填入精确 Apple Music 艺人主页"
-        : reason === "AMBIGUOUS"
-          ? "多张专辑指向不同 Apple 艺人，已跳过"
-          : "现有专辑链接无法精确对应一位 Apple 艺人",
-    );
-    return body;
   }
 
   async function requestSelectedArtistMedia() {
@@ -1780,7 +1729,6 @@ function LibraryApp() {
           }}
           onRequestIntroduction={requestArtistIntroduction}
           onSavePlatformLinks={readOnly ? undefined : saveSelectedArtistPlatformLinks}
-          onMatchAppleLink={readOnly ? undefined : matchSelectedArtistAppleLink}
           onRequestMedia={readOnly ? undefined : requestSelectedArtistMedia}
           onToggleMotion={(nextEnabled) => {
             if (!selectedArtistGroup || readOnly) return;
@@ -1846,10 +1794,6 @@ function LibraryApp() {
           onRestore={readOnly ? undefined : restoreFactorySettings}
           onToast={setToast}
           onApplyCoverUpdates={readOnly ? undefined : applyCoverUpdates}
-          onApplyArtistAppleLinks={
-            readOnly ? undefined : applyMatchedAppleArtistLinks
-          }
-          artistProfileState={artistProfileState}
           readOnly={readOnly}
         />
       ) : null}

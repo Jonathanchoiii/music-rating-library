@@ -6,15 +6,11 @@ import {
   DownloadSimple,
   ImageSquare,
   Key,
-  LinkSimple,
   SpinnerGap,
   UploadSimple,
   UsersThree,
   X,
 } from "@phosphor-icons/react";
-import { appleArtistLinkJobFromGroup } from "../lib/appleArtistLinkMatch.js";
-import { getArtistProfile } from "../lib/artistProfiles.js";
-import { groupReleasesByArtistIdentity } from "../lib/artists.js";
 import {
   clearCoverLoadFailures,
   coverLookupRecord,
@@ -22,12 +18,10 @@ import {
 } from "../lib/coverStatus.js";
 
 const COVER_UPDATE_BATCH_SIZE = 40;
-const APPLE_ARTIST_LINK_BATCH_SIZE = 20;
 
 export function SettingsHome({
   releases,
   identityState,
-  artistProfileState,
   onOpenArtistManager,
   duplicateGroupCount,
   duplicateReleaseCount,
@@ -40,7 +34,6 @@ export function SettingsHome({
   onRestore,
   onToast,
   onApplyCoverUpdates,
-  onApplyArtistAppleLinks,
   readOnly = false,
 }) {
   const mergeBackupInputRef = useRef(null);
@@ -50,14 +43,6 @@ export function SettingsHome({
     total: 0,
     updated: 0,
     unresolved: 0,
-    message: "",
-  });
-  const [appleLinkMatch, setAppleLinkMatch] = useState({
-    running: false,
-    processed: 0,
-    total: 0,
-    matched: 0,
-    skipped: 0,
     message: "",
   });
   const [guideProvider, setGuideProvider] = useState({
@@ -301,89 +286,6 @@ export function SettingsHome({
     }
   }
 
-  async function matchAppleArtistHomepages() {
-    if (appleLinkMatch.running || readOnly) return;
-    const jobs = groupReleasesByArtistIdentity(releases, identityState)
-      .map((group) =>
-        appleArtistLinkJobFromGroup(
-          group,
-          getArtistProfile(artistProfileState, group.id, [
-            group.artist,
-            ...(group.aliases ?? []),
-            ...(group.credits ?? []),
-          ]),
-        ),
-      )
-      .filter(Boolean);
-    if (!jobs.length) {
-      const message = "没有可精确匹配的艺人：需要已确认 Apple Music 专辑链接，且尚未填写艺人主页";
-      setAppleLinkMatch((current) => ({ ...current, message }));
-      onToast?.(message);
-      return;
-    }
-
-    setAppleLinkMatch({
-      running: true,
-      processed: 0,
-      total: jobs.length,
-      matched: 0,
-      skipped: 0,
-      message: `将用已确认专辑反查 ${jobs.length} 位艺人`,
-    });
-
-    let processed = 0;
-    let matched = 0;
-    let skipped = 0;
-    try {
-      for (
-        let offset = 0;
-        offset < jobs.length;
-        offset += APPLE_ARTIST_LINK_BATCH_SIZE
-      ) {
-        const batch = jobs.slice(offset, offset + APPLE_ARTIST_LINK_BATCH_SIZE);
-        const response = await fetch("/api/artists/apple-links", {
-          method: "POST",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ artists: batch, persist: true }),
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(result.message || "Apple Music 艺人主页匹配失败");
-        }
-        onApplyArtistAppleLinks?.(result.matched);
-        processed += batch.length;
-        matched += result.matchedCount ?? 0;
-        skipped += result.skippedCount ?? 0;
-        setAppleLinkMatch({
-          running: true,
-          processed,
-          total: jobs.length,
-          matched,
-          skipped,
-          message: `已检查 ${processed} / ${jobs.length} 位艺人`,
-        });
-      }
-      const message = `Apple Music 艺人主页匹配完成：填入 ${matched} 位，跳过 ${skipped} 位`;
-      setAppleLinkMatch((current) => ({
-        ...current,
-        running: false,
-        message,
-      }));
-      onToast?.(message);
-    } catch (error) {
-      const message = error.message || "Apple Music 艺人主页匹配失败，请稍后再试";
-      setAppleLinkMatch((current) => ({
-        ...current,
-        running: false,
-        message,
-      }));
-      onToast?.(message);
-    }
-  }
-
   async function syncPhonePreview() {
     if (previewSync.running) return;
     setPreviewSync({ running: true, message: "正在打包本机快照…" });
@@ -551,34 +453,6 @@ export function SettingsHome({
             </span>
           ) : null}
         </button>
-        {readOnly ? null : (
-          <button
-            type="button"
-            className="settings-entry"
-            onClick={matchAppleArtistHomepages}
-            disabled={appleLinkMatch.running}
-          >
-            <span className="settings-entry-icon">
-              {appleLinkMatch.running ? (
-                <SpinnerGap className="spin" aria-hidden="true" />
-              ) : (
-                <LinkSimple weight="fill" aria-hidden="true" />
-              )}
-            </span>
-            <span>
-              <strong>匹配 Apple Music 艺人主页</strong>
-              <small>
-                {appleLinkMatch.message ||
-                  "用已确认专辑链接反查精确艺人；有歧义的跳过，不抓封面"}
-              </small>
-            </span>
-            {!appleLinkMatch.running ? (
-              <span className="settings-entry-arrow" aria-hidden="true">
-                →
-              </span>
-            ) : null}
-          </button>
-        )}
       </div>
 
       <div className="settings-section">

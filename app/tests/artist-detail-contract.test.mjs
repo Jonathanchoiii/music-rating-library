@@ -107,6 +107,22 @@ test("photo hero has no tuner and samples overlay title contrast", async () => {
   assert.match(source, /motion-artwork-icon/);
 });
 
+test("artist exploration only toggles a preference and does not tease a catalog refresh", async () => {
+  const source = await fs.readFile(componentPath, "utf8");
+  assert.match(source, /onToggleExploration\(!profile\.explorationEnabled\)/);
+  assert.match(source, /artist-exploration-empty/);
+  assert.match(source, /未听目录尚未开放/);
+  assert.match(source, /当前只展示上方「我的收录」/);
+  assert.match(source, /开关只记住偏好；未听过的外部目录目前不能拉取/);
+  assert.equal(source.includes("等待精确目录"), false);
+  assert.equal(source.includes("主动刷新并核验艺人身份"), false);
+  assert.equal(source.includes("灰色待解锁状态出现"), false);
+  assert.equal(source.includes("发现尚未收录、尚未听过的精确作品目录"), false);
+  assert.equal(source.includes("onRequestExplorationCatalog"), false);
+  assert.equal(source.includes("discoveredWorks"), false);
+  assert.match(source, /我的收录/);
+});
+
 test("artist detail exposes one manual public-research action", async () => {
   const source = await fs.readFile(componentPath, "utf8");
   assert.match(source, /onClick=\{onRequestIntroduction\}/);
@@ -125,6 +141,12 @@ test("artist detail exposes one manual public-research action", async () => {
   assert.match(source, /ArtistFactSection title="获奖"/);
   assert.match(source, /ArtistFactSection title="提名与入围"/);
   assert.match(source, /ArtistFactSection title="影视作品关系"/);
+  assert.match(source, /shortlisted:\s*"入围"/);
+  assert.equal(source.includes("入围 / 短名单"), false);
+  assert.equal(source.includes("短名单"), false);
+  assert.match(source, /won:\s*"获奖"/);
+  assert.match(source, /nominated:\s*"提名"/);
+  assert.match(source, /longlisted:\s*"长名单"/);
   assert.match(source, /artist-research-notice/);
   assert.match(source, /<ArtistPublicFacts facts=\{profile\?\.publicFacts\} \/>/);
 });
@@ -180,6 +202,66 @@ test("artist public genres reuse listening-guide suggested-listen chips", async 
   assert.match(genreChipBlock, /white-space:\s*nowrap/);
 });
 
+test("artist recommended listening cards share the intro left edge", async () => {
+  const source = await fs.readFile(componentPath, "utf8");
+  const css = await fs.readFile(
+    path.join(directory, "..", "src", "styles.css"),
+    "utf8",
+  );
+  assert.match(source, /ArtistFactSection title="推荐聆听"/);
+  assert.match(source, /className="artist-recommended-listening"/);
+  const gridBlock =
+    css.match(/\.artist-recommended-listening \{[^}]+\}/)?.[0] ?? "";
+  const articleBlock =
+    css.match(/\.artist-recommended-listening article \{[^}]+\}/)?.[0] ?? "";
+  const kindBlock =
+    css.match(/\.artist-recommended-listening article > span \{[^}]+\}/)?.[0] ??
+    "";
+  assert.match(gridBlock, /margin:\s*0/);
+  assert.match(gridBlock, /padding:\s*0/);
+  assert.match(gridBlock, /padding-left:\s*0/);
+  assert.match(gridBlock, /padding-inline-start:\s*0/);
+  assert.match(gridBlock, /margin-left:\s*0/);
+  assert.match(gridBlock, /grid-template-columns:\s*repeat\(2,/);
+  assert.match(articleBlock, /padding:\s*12px 12px 12px 0/);
+  assert.match(articleBlock, /padding-left:\s*0/);
+  assert.match(articleBlock, /padding-inline-start:\s*0/);
+  assert.match(articleBlock, /margin-left:\s*0/);
+  assert.match(kindBlock, /padding:\s*0/);
+  assert.match(kindBlock, /padding-left:\s*0/);
+  assert.match(kindBlock, /padding-inline-start:\s*0/);
+});
+
+test("artist recognition lists share the section heading left edge", async () => {
+  const source = await fs.readFile(componentPath, "utf8");
+  const css = await fs.readFile(
+    path.join(directory, "..", "src", "styles.css"),
+    "utf8",
+  );
+  assert.match(source, /className="artist-recognition-list"/);
+  assert.match(source, /className="artist-research-result"/);
+  const listBlock =
+    Array.from(
+      css.matchAll(/\.artist-recognition-list \{[^}]+\}/g),
+      (match) => match[0],
+    ).find((block) => block.includes("padding-inline-start")) ?? "";
+  const itemBlock =
+    css.match(/\.artist-recognition-list li \{[^}]+\}/)?.[0] ?? "";
+  const resultBlock =
+    css.match(/\.artist-research-result \{[^}]+\}/)?.[0] ?? "";
+  const headingBlock =
+    css.match(/\.artist-research-block h4 \{[^}]+\}/)?.[0] ?? "";
+  assert.match(listBlock, /padding:\s*0/);
+  assert.match(listBlock, /padding-left:\s*0/);
+  assert.match(listBlock, /padding-inline-start:\s*0/);
+  assert.match(listBlock, /list-style:\s*none/);
+  assert.match(itemBlock, /padding-left:\s*0/);
+  assert.match(itemBlock, /padding-inline-start:\s*0/);
+  assert.match(resultBlock, /padding-left:\s*0/);
+  assert.match(resultBlock, /padding-inline-start:\s*0/);
+  assert.match(headingBlock, /padding-left:\s*0/);
+});
+
 test("artist detail exposes compact artist platform links and one manual media request", async () => {
   const source = await fs.readFile(componentPath, "utf8");
   const css = await fs.readFile(
@@ -187,8 +269,8 @@ test("artist detail exposes compact artist platform links and one manual media r
     "utf8",
   );
   assert.match(source, /onSavePlatformLinks/);
-  assert.match(source, /onMatchAppleLink/);
-  assert.match(source, /从已确认专辑匹配 Apple Music/);
+  assert.equal(source.includes("onMatchAppleLink"), false);
+  assert.equal(source.includes("从已确认专辑匹配 Apple Music"), false);
   assert.match(source, /onRequestMedia/);
   assert.match(source, /visibleArtistMediaMessage/);
   assert.equal(

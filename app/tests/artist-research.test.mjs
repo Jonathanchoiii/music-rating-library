@@ -6,9 +6,12 @@ import test from "node:test";
 import {
   artistMotionFailureMessage,
   artistResearchCodexNotice,
+  buildCodexArtistExecArgs,
+  classifyCodexCliFailure,
   musicBrainzDetailsToProfile,
   persistResearchedArtistProfile,
   requestArtistMedia,
+  requestCodexArtistResearch,
   researchArtist,
   runArtistResearchJob,
   selectExactMusicBrainzCandidate,
@@ -706,3 +709,108 @@ test("artist media encodes HLS for spaced raw artist ids", async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Codex JSONL model errors are classified instead of a generic failure", () => {
+  const stdout = [
+    `{"type":"error","message":"{\\"type\\":\\"error\\",\\"status\\":400,\\"error\\":{\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"The 'gpt-5.2' model is not supported when using Codex with a ChatGPT account.\\"}}"}`,
+    `{"type":"turn.failed","error":{"message":"{\\"type\\":\\"error\\",\\"status\\":400,\\"error\\":{\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"The 'gpt-5.2' model is not supported when using Codex with a ChatGPT account.\\"}}"}}`,
+  ].join("\n");
+  assert.equal(
+    classifyCodexCliFailure({ stdout, stderr: "" }),
+    "CODEX_MODEL_UNSUPPORTED",
+  );
+  assert.equal(
+    artistResearchCodexNotice("CODEX_MODEL_UNSUPPORTED"),
+    "本机 Codex 当前模型不被 ChatGPT 登录支持，已改用可核验公开档案（MusicBrainz / Wikipedia），不是编造。",
+  );
+  const args = buildCodexArtistExecArgs({
+    schemaPath: "/tmp/schema.json",
+    outputPath: "/tmp/result.json",
+    workingDirectory: "/tmp",
+  });
+  assert.equal(args[0], "--search");
+  assert.equal(args[1], "exec");
+  assert.equal(args.includes("--ignore-user-config"), true);
+  assert.equal(args.includes("--model"), false);
+});
+
+test("Codex artist research retries without an unsupported ChatGPT model", async () => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "recordshelf-codex-model-retry-"),
+  );
+  const fakeCli = path.join(directory, "fake-codex.mjs");
+  await fs.writeFile(
+    fakeCli,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+import { stdin, argv, exit } from "node:process";
+stdin.resume();
+const args = argv.slice(2);
+const modelIndex = args.indexOf("--model");
+const model = modelIndex >= 0 ? args[modelIndex + 1] : "";
+const outputPath = args[args.indexOf("--output-last-message") + 1];
+const ignoreUserConfig = args.includes("--ignore-user-config");
+const fail = model === "gpt-5.2" || !ignoreUserConfig;
+const finish = (code) => {
+  stdin.on("end", () => exit(code));
+  setTimeout(() => exit(code), 20);
+};
+if (fail) {
+  console.log(JSON.stringify({
+    type: "error",
+    message: JSON.stringify({
+      type: "error",
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        message: "The 'gpt-5.2' model is not supported when using Codex with a ChatGPT account.",
+      },
+    }),
+  }));
+  finish(1);
+} else {
+  writeFileSync(outputPath, JSON.stringify({
+    status: "OK",
+    artist_id: "dry-run",
+    artist_name: "Dry Run",
+    identity_note: "",
+    public_facts: {
+      resolved_name: "Dry Run",
+      artist_type: "个人",
+      birth_date: "",
+      active_from: "",
+      ended_at: "",
+      birth_place: "",
+      country: "",
+      origin: "",
+      genres: [],
+    },
+    introduction: "测试长文",
+    group_members: [],
+    awards: [],
+    nominations: [],
+    film_relationships: [],
+    recommended_listening: [],
+    claim_sources: [],
+    sources: [],
+    warnings: [],
+  }));
+  finish(0);
+}
+`,
+    { mode: 0o755 },
+  );
+  try {
+    const result = await requestCodexArtistResearch({
+      identity: { artist_id: "dry-run", artist_name: "Dry Run" },
+      executable: fakeCli,
+      model: "gpt-5.2",
+      timeoutMs: 5_000,
+    });
+    assert.equal(result.status, "OK");
+    assert.equal(result.introduction, "测试长文");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+

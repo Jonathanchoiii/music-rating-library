@@ -449,6 +449,8 @@ export function artistResearchCodexNotice(errorCode) {
       return "Codex 联网研究超时，已改用可核验公开档案（MusicBrainz / Wikipedia），不是编造。";
     case "INSUFFICIENT_SOURCES":
       return "没有足够来源撰写 Codex 长文，已展示可核验公开档案（MusicBrainz / Wikipedia），不是编造。";
+    case "CODEX_MODEL_UNSUPPORTED":
+      return "本机 Codex 当前模型不被 ChatGPT 登录支持，已改用可核验公开档案（MusicBrainz / Wikipedia），不是编造。";
     default:
       return "Codex 长文未完成，已用可核验公开档案（MusicBrainz / Wikipedia），不是编造。";
   }
@@ -471,6 +473,9 @@ function artistResearchHardFailureMessage(errorCode, baselineError) {
   }
   if (code === "CODEX_RESEARCH_TIMEOUT") {
     return "Codex 联网研究超时，也没有足够的可核验公开档案。";
+  }
+  if (code === "CODEX_MODEL_UNSUPPORTED") {
+    return "本机 Codex 当前模型不被 ChatGPT 登录支持，也没有足够的可核验公开档案。";
   }
   if (baselineCode === "ARTIST_RESEARCH_UPSTREAM_UNAVAILABLE") {
     return "MusicBrainz 暂时无法读取，且 Codex 联网研究没有完成。原有资料已保留。";
@@ -897,10 +902,161 @@ function codexArtistPrompt(identity, template) {
   )}\n\n额外执行要求：必须使用本次 Codex 任务提供的实时网页搜索，打开原始页面核验。不要读取或修改 RecordShelf 文件，也不要使用用户评分、评论、听过日期或私人艺人映射。最终只返回符合指定 JSON Schema 的 JSON。`;
 }
 
+export function buildCodexArtistExecArgs({
+  schemaPath,
+  outputPath,
+  workingDirectory,
+  model = "",
+  ignoreUserConfig = true,
+} = {}) {
+  const args = [
+    "--search",
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+  ];
+  if (ignoreUserConfig) args.push("--ignore-user-config");
+  args.push(
+    "--output-schema",
+    schemaPath,
+    "--output-last-message",
+    outputPath,
+    "-C",
+    workingDirectory,
+  );
+  const selectedModel = cleanText(model, 120);
+  if (selectedModel) args.push("--model", selectedModel);
+  args.push("-");
+  return args;
+}
+
+export function extractCodexCliDiagnostic(stdout = "", stderr = "") {
+  const chunks = [cleanText(stderr, 8_000)];
+  for (const line of String(stdout).split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const event = JSON.parse(trimmed);
+      const message =
+        cleanText(event?.error?.message, 4_000) ||
+        cleanText(event?.message, 4_000) ||
+        cleanText(event?.item?.message, 4_000);
+      if (message) chunks.push(message);
+    } catch {
+      // Progress JSONL is optional and never shown raw.
+    }
+  }
+  return chunks.filter(Boolean).join("\n").slice(-8_000);
+}
+
+export function classifyCodexCliFailure({
+  stdout = "",
+  stderr = "",
+  spawnError,
+} = {}) {
+  if (spawnError?.code === "ENOENT") return "CODEX_CLI_UNAVAILABLE";
+  const diagnostic = extractCodexCliDiagnostic(stdout, stderr);
+  if (/not supported when using Codex with a ChatGPT account/i.test(diagnostic)) {
+    return "CODEX_MODEL_UNSUPPORTED";
+  }
+  if (/login|auth|sign.?in|unauthorized/i.test(diagnostic)) {
+    return "CODEX_AUTH_REQUIRED";
+  }
+  return "CODEX_RESEARCH_FAILED";
+}
+
+function runCodexArtistProcess({
+  cliPath,
+  args,
+  prompt,
+  workingDirectory,
+  timeoutMs,
+  onProgress,
+}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cliPath, args, {
+      cwd: workingDirectory,
+      env: { ...process.env, NO_COLOR: "1" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    let stdout = "";
+    let stdoutBuffer = "";
+    let settled = false;
+    let latestStage = "";
+    const reportStage = (stage) => {
+      if (!ACTIVE_RESEARCH_STATUSES.has(stage) || latestStage === stage) return;
+      latestStage = stage;
+      onProgress({ stage });
+    };
+    reportStage("SEARCHING");
+    const verifyTimer = setTimeout(() => reportStage("VERIFYING"), 20_000);
+    const writingTimer = setTimeout(() => reportStage("WRITING"), 55_000);
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(() => reject(requestError("CODEX_RESEARCH_TIMEOUT", 504)));
+    }, timeoutMs);
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(verifyTimer);
+      clearTimeout(writingTimer);
+      callback();
+    };
+    child.stdout.on("data", (chunk) => {
+      const text = String(chunk);
+      stdout = `${stdout}${text}`.slice(-32_000);
+      stdoutBuffer = `${stdoutBuffer}${text}`;
+      const lines = stdoutBuffer.split("\n");
+      stdoutBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        try {
+          const event = JSON.parse(line);
+          const eventType = cleanText(event?.type, 100).toLowerCase();
+          const itemType = cleanText(event?.item?.type, 100).toLowerCase();
+          if (eventType.includes("web_search") || itemType.includes("web_search")) {
+            reportStage("SEARCHING");
+          } else if (itemType === "reasoning") {
+            reportStage("VERIFYING");
+          } else if (itemType === "agent_message") {
+            reportStage("WRITING");
+          }
+        } catch {
+          // Progress output is optional and never exposed raw.
+        }
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-8_000);
+    });
+    child.once("error", (error) => {
+      finish(() =>
+        reject(
+          requestError(classifyCodexCliFailure({ spawnError: error }), 503),
+        ),
+      );
+    });
+    child.once("exit", (code) => {
+      if (code === 0) return finish(resolve);
+      finish(() =>
+        reject(
+          requestError(classifyCodexCliFailure({ stdout, stderr }), 502),
+        ),
+      );
+    });
+    child.stdin.end(prompt);
+  });
+}
+
 export async function requestCodexArtistResearch({
   identity,
   timeoutMs = CODEX_TIMEOUT_MS,
   executable,
+  model = process.env.RECORDSHELF_CODEX_MODEL,
   onProgress = () => {},
 } = {}) {
   if (!cleanText(identity?.artist_id, 240) || !cleanText(identity?.artist_name, 180)) {
@@ -913,98 +1069,43 @@ export async function requestCodexArtistResearch({
   const outputPath = path.join(temporaryDirectory, "result.json");
   const promptTemplate = await fs.readFile(ARTIST_RESEARCH_PROMPT_PATH, "utf8");
   const cliPath = executable || (await resolveCodexExecutable());
-  const args = [
-    "--search",
-    "exec",
-    "--json",
-    "--ephemeral",
-    "--sandbox",
-    "read-only",
-    "--skip-git-repo-check",
-    "--output-schema",
-    schemaPath,
-    "--output-last-message",
-    outputPath,
-    "-C",
-    temporaryDirectory,
-  ];
-  if (process.env.RECORDSHELF_CODEX_MODEL) {
-    args.push("--model", process.env.RECORDSHELF_CODEX_MODEL);
-  }
-  args.push("-");
+  const prompt = codexArtistPrompt(identity, promptTemplate);
+  const requestedModel = cleanText(model, 120);
+  const modelsToTry = requestedModel ? [requestedModel, ""] : [""];
   try {
     onProgress({ stage: "PREPARING" });
     await fs.writeFile(schemaPath, `${JSON.stringify(ARTIST_RESEARCH_SCHEMA)}\n`, {
       mode: 0o600,
     });
-    await new Promise((resolve, reject) => {
-      const child = spawn(cliPath, args, {
-        cwd: temporaryDirectory,
-        env: { ...process.env, NO_COLOR: "1" },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let stderr = "";
-      let stdout = "";
-      let settled = false;
-      let latestStage = "";
-      const reportStage = (stage) => {
-        if (!ACTIVE_RESEARCH_STATUSES.has(stage) || latestStage === stage) return;
-        latestStage = stage;
-        onProgress({ stage });
-      };
-      reportStage("SEARCHING");
-      const verifyTimer = setTimeout(() => reportStage("VERIFYING"), 20_000);
-      const writingTimer = setTimeout(() => reportStage("WRITING"), 55_000);
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        finish(() => reject(requestError("CODEX_RESEARCH_TIMEOUT", 504)));
-      }, timeoutMs);
-      const finish = (callback) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        clearTimeout(verifyTimer);
-        clearTimeout(writingTimer);
-        callback();
-      };
-      child.stdout.on("data", (chunk) => {
-        stdout = `${stdout}${chunk}`;
-        const lines = stdout.split("\n");
-        stdout = lines.pop() ?? "";
-        for (const line of lines) {
-          try {
-            const event = JSON.parse(line);
-            const eventType = cleanText(event?.type, 100).toLowerCase();
-            const itemType = cleanText(event?.item?.type, 100).toLowerCase();
-            if (eventType.includes("web_search") || itemType.includes("web_search")) {
-              reportStage("SEARCHING");
-            } else if (itemType === "reasoning") {
-              reportStage("VERIFYING");
-            } else if (itemType === "agent_message") {
-              reportStage("WRITING");
-            }
-          } catch {
-            // Progress output is optional and never exposed raw.
-          }
+    let lastError = requestError("CODEX_RESEARCH_FAILED", 502);
+    for (const selectedModel of modelsToTry) {
+      try {
+        await runCodexArtistProcess({
+          cliPath,
+          args: buildCodexArtistExecArgs({
+            schemaPath,
+            outputPath,
+            workingDirectory: temporaryDirectory,
+            model: selectedModel,
+          }),
+          prompt,
+          workingDirectory: temporaryDirectory,
+          timeoutMs,
+          onProgress,
+        });
+        try {
+          return JSON.parse(await fs.readFile(outputPath, "utf8"));
+        } catch {
+          throw requestError("CODEX_RESEARCH_FAILED", 502);
         }
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr = `${stderr}${chunk}`.slice(-8_000);
-      });
-      child.once("error", (error) => {
-        const code = error?.code === "ENOENT" ? "CODEX_CLI_UNAVAILABLE" : "CODEX_RESEARCH_FAILED";
-        finish(() => reject(requestError(code, 503)));
-      });
-      child.once("exit", (code) => {
-        if (code === 0) return finish(resolve);
-        const errorCode = /login|auth|sign.?in|unauthorized/i.test(stderr)
-          ? "CODEX_AUTH_REQUIRED"
-          : "CODEX_RESEARCH_FAILED";
-        finish(() => reject(requestError(errorCode, 502)));
-      });
-      child.stdin.end(codexArtistPrompt(identity, promptTemplate));
-    });
-    return JSON.parse(await fs.readFile(outputPath, "utf8"));
+      } catch (error) {
+        lastError = error;
+        if (error?.code !== "CODEX_MODEL_UNSUPPORTED" || !selectedModel) {
+          throw error;
+        }
+      }
+    }
+    throw lastError;
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => {});
   }
@@ -1254,9 +1355,12 @@ export async function runArtistResearchJob(job, payload, options = {}) {
         baselineError?.code === "ARTIST_IDENTITY_AMBIGUOUS"
           ? "ARTIST_IDENTITY_AMBIGUOUS"
           : baselineError?.code === "ARTIST_RESEARCH_UPSTREAM_UNAVAILABLE" &&
-              !["CODEX_CLI_UNAVAILABLE", "CODEX_AUTH_REQUIRED", "CODEX_RESEARCH_TIMEOUT"].includes(
-                errorCode,
-              )
+              ![
+                "CODEX_CLI_UNAVAILABLE",
+                "CODEX_AUTH_REQUIRED",
+                "CODEX_RESEARCH_TIMEOUT",
+                "CODEX_MODEL_UNSUPPORTED",
+              ].includes(errorCode)
             ? "ARTIST_RESEARCH_UPSTREAM_UNAVAILABLE"
             : errorCode,
     });
