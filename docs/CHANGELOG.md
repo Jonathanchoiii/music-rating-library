@@ -3,6 +3,50 @@
 本文件只记录已经进入代码或打包产物的变化。产品规则与验收标准以
 [`PRD.md`](../PRD.md) 为准，维护分工见 [`MAINTENANCE.md`](MAINTENANCE.md)。
 
+## 0.1.24 — 2026-08-18
+
+### 新功能
+
+- 设置新增「匹配 Apple Music 艺人主页」：只用该艺人已确认的 Apple Music 专辑链接反查目录艺人，姓名/别名精确命中且 Apple 艺人 ID 唯一时才填入缺失的艺人主页。合辑、同名冲突和已有链接会跳过。匹配成功后不会自动拉取艺人封面或动态视觉；封面仍需在艺人详情里手动点击素材按钮。艺人链接编辑器也提供同一条「从已确认专辑匹配」动作。
+
+### 数据与隐私
+
+- 本版本不迁移、不重置也不合并私人音乐数据；继续使用
+  `~/Library/Application Support/RecordShelf/shared-local-state.json`。
+- 新写入的只有缺失的 `artistProfiles.platformLinks.appleMusic`；不新增凭证字段，也不把 Apple 目录响应存进共享状态。
+
+### 验证
+
+- 应用测试：294 项通过。
+- 桌面包装完整性测试通过。
+- 本地 Apple Silicon DMG：`app/desktop-release/RecordShelf-0.1.24-arm64.dmg`。
+
+### 已知限制
+
+- 没有已确认 Apple Music 专辑链接的艺人无法自动匹配；同名或多张专辑指向不同 Apple 艺人时保持空白，避免填错人。
+- 本地 DMG 使用 ad-hoc 签名，未使用 Apple Developer ID 公证，不适合作为公共安装包分发。
+
+## 0.1.23 — 2026-08-18
+
+### 修复与调整
+
+- 修复 Mac 客户端双击后立刻弹出 `ERR_MODULE_NOT_FOUND`、无法打开的问题：`shared-state` 引用的 `src/lib/artistProfiles.js` 现在会打进 `app.asar`，主进程也不再静态导入仅供浏览器使用的 `sharedLocalState.js`。0.1.22 的 DMG 需要换成这一版才能启动。
+
+### 数据与隐私
+
+- 本版本不迁移、不重置也不合并私人音乐数据；继续使用
+  `~/Library/Application Support/RecordShelf/shared-local-state.json`。
+
+### 验证
+
+- 应用测试：286 项通过。
+- 桌面包装完整性测试通过：主进程静态本地 import 都在 `electron-builder` `files` 里。
+- 本地 Apple Silicon DMG：`app/desktop-release/RecordShelf-0.1.23-arm64.dmg`。
+
+### 已知限制
+
+- 本地 DMG 使用 ad-hoc 签名，未使用 Apple Developer ID 公证，不适合作为公共安装包分发。
+
 ## 0.1.22 — 2026-08-18
 
 ### 新功能

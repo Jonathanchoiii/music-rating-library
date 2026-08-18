@@ -44,6 +44,49 @@ export function parseAppleMusicAlbumUrl(input) {
   };
 }
 
+export function parseAppleMusicArtistUrl(input) {
+  const value = typeof input === "string" ? input.trim() : "";
+  if (!value) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== "https:") return null;
+  if (parsed.username || parsed.password) return null;
+  if (!APPLE_MUSIC_HOSTNAMES.has(parsed.hostname.toLocaleLowerCase())) {
+    return null;
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const artistIndex = segments.findIndex(
+    (part) => part.toLocaleLowerCase() === "artist",
+  );
+  if (artistIndex < 0) return null;
+  const artistId = segments
+    .slice(artistIndex + 1)
+    .find((part) => ALBUM_ID_PATTERN.test(part));
+  if (!artistId) return null;
+
+  const possibleStorefront =
+    artistIndex > 0 ? segments[artistIndex - 1].toLocaleLowerCase() : "";
+  const storefront = STOREFRONT_PATTERN.test(possibleStorefront)
+    ? possibleStorefront
+    : null;
+
+  return {
+    provider: "appleMusic",
+    sourceStorefront: storefront,
+    sourceArtistId: artistId,
+    canonicalUrl: storefront
+      ? `https://music.apple.com/${storefront}/artist/${artistId}`
+      : `https://music.apple.com/artist/${artistId}`,
+  };
+}
+
 export function parseAppleMusicCatalogAlbumUrl(input) {
   const storefrontAlbum = parseAppleMusicAlbumUrl(input);
   if (storefrontAlbum) return storefrontAlbum;

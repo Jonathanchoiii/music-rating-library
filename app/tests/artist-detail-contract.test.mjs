@@ -187,6 +187,8 @@ test("artist detail exposes compact artist platform links and one manual media r
     "utf8",
   );
   assert.match(source, /onSavePlatformLinks/);
+  assert.match(source, /onMatchAppleLink/);
+  assert.match(source, /从已确认专辑匹配 Apple Music/);
   assert.match(source, /onRequestMedia/);
   assert.match(source, /visibleArtistMediaMessage/);
   assert.equal(

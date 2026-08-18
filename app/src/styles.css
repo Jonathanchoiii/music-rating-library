@@ -7511,7 +7511,7 @@ html.is-readonly-preview .import-link {
 .artist-platform-editor label span { color: var(--muted-dark); font-size: 12px; }
 .artist-platform-editor input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--text); }
 .artist-platform-error { margin: 10px 0 0; color: var(--danger); font-size: 12px; }
-.artist-platform-editor-actions { margin-top: 14px; justify-content: flex-end; }
+.artist-platform-editor-actions { margin-top: 14px; justify-content: flex-end; flex-wrap: wrap; }
 
 .artist-detail-aliases {
   font-size: 14px;

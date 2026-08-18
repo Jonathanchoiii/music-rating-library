@@ -14,7 +14,7 @@ npm run build:desktop
 输出：
 
 - `app/desktop-release/mac-arm64/RecordShelf.app`
-- `app/desktop-release/RecordShelf-0.1.22-arm64.dmg`
+- `app/desktop-release/RecordShelf-0.1.24-arm64.dmg`
 
 生成的 `.app` 与 DMG 包含构建当时的私人音乐资料，不要公开上传或分享。
 

@@ -1,5 +1,4 @@
 import { ARTIST_PROFILE_STORAGE_KEY } from "./sharedStorageKeys.js";
-import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
 
 export const EMPTY_ARTIST_PROFILE_STATE = Object.freeze({
   version: 3,
@@ -650,7 +649,11 @@ export function saveArtistProfileState(
       ARTIST_PROFILE_STORAGE_KEY,
       JSON.stringify(sanitizeArtistProfileState(value)),
     );
-    if (notify) notifySharedLocalStateChanged();
+    if (notify) {
+      void import("./sharedLocalState.js").then((module) => {
+        module.notifySharedLocalStateChanged();
+      });
+    }
     return true;
   } catch {
     return false;
