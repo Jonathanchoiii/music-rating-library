@@ -327,3 +327,22 @@ test("settings does not expose Apple artist homepage matching", async () => {
   assert.equal(source.includes("matchAppleArtistHomepages"), false);
   assert.equal(source.includes("/api/artists/media"), false);
 });
+
+test("settings does not expose phone preview sync", async () => {
+  const settingsFiles = [
+    "../src/App.jsx",
+    "../src/components/SettingsDialog.jsx",
+    "../src/components/SettingsHome.jsx",
+  ];
+  const sources = await Promise.all(
+    settingsFiles.map((rel) => fs.readFile(new URL(rel, import.meta.url), "utf8")),
+  );
+  assert.match(sources[0], /isSettingsRoute \? \([\s\S]*<SettingsDialog/);
+  assert.match(sources[1], /<SettingsHome\b/);
+  for (const source of sources) {
+    assert.equal(source.includes("同步到手机预览"), false);
+    assert.equal(source.includes("手机预览"), false);
+    assert.equal(source.includes("/api/remote-preview/sync"), false);
+    assert.equal(source.includes("syncPhonePreview"), false);
+  }
+});

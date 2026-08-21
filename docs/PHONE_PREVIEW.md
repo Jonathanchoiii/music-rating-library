@@ -7,7 +7,7 @@ iCloud 可以把文件同步到 iPhone 的“文件”App，**不能**替代 Rec
 
 ## 怎么工作
 
-1. **Mac 开机时**：RecordShelf 或 `npm run remote-preview:sync` 把
+1. **Mac 开机时**：运行 `npm run remote-preview:sync` 把
    `shared-local-state.json`、本机目录、`/private-covers` 封面、动态 WebP
    打成一份快照。
 2. 这份快照上传到 **Vercel Blob（私有）**，并可选复制到
@@ -64,7 +64,7 @@ cd app
 npm run remote-preview:sync
 ```
 
-或在本地 RecordShelf「设置 → 同步到手机预览」。没有 Blob token 时，脚本仍会打好本机快照并尽量复制到 iCloud Drive，但**网站上还是看不到**。
+设置页当前不提供「同步到手机预览」按钮。没有 Blob token 时，脚本仍会打好本机快照并尽量复制到 iCloud Drive，但**网站上还是看不到**。
 
 ## iCloud 能做什么 / 不能做什么
 

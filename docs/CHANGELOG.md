@@ -5,6 +5,29 @@
 
 ## Unreleased
 
+## 0.1.26 — 2026-08-19
+
+### 修复与调整
+
+- 设置不再显示「手机预览 / 同步到手机预览」。该能力尚未对用户开放；本机仍可用 `npm run remote-preview:sync`，但不作为设置入口。
+- 应用与桌面包版本更新为 0.1.26。
+
+### 数据与隐私
+
+- 本版本不迁移、不重置也不合并私人音乐数据；继续使用
+  `~/Library/Application Support/RecordShelf/shared-local-state.json`。
+- 本变更不读取评分、评论或听过日期；没有新增凭证字段。
+
+### 验证
+
+- 应用测试：301 项通过。
+- 桌面包装完整性测试通过。
+- 本地 Apple Silicon DMG：`app/desktop-release/RecordShelf-0.1.26-arm64.dmg`。
+
+### 已知限制
+
+- 本地 DMG 使用 ad-hoc 签名，未使用 Apple Developer ID 公证，不适合作为公共安装包分发。
+
 ## 0.1.25 — 2026-08-18
 
 ### 修复与调整

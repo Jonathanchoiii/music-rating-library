@@ -58,6 +58,32 @@ test("preview storage never includes NeoDB OAuth client records", () => {
   assert.equal(storage[NEODB_OAUTH_CLIENT_KEY], undefined);
 });
 
+test("settings does not expose phone preview sync", async () => {
+  const settingsFiles = {
+    "App.jsx": "../src/App.jsx",
+    "SettingsDialog.jsx": "../src/components/SettingsDialog.jsx",
+    "SettingsHome.jsx": "../src/components/SettingsHome.jsx",
+    "PreviewGate.jsx": "../src/components/PreviewGate.jsx",
+  };
+  const sources = Object.fromEntries(
+    await Promise.all(
+      Object.entries(settingsFiles).map(async ([name, rel]) => [
+        name,
+        await fs.readFile(new URL(rel, import.meta.url), "utf8"),
+      ]),
+    ),
+  );
+  assert.match(sources["App.jsx"], /isSettingsRoute \? \([\s\S]*<SettingsDialog/);
+  assert.match(sources["SettingsDialog.jsx"], /<SettingsHome\b/);
+  assert.match(sources["SettingsHome.jsx"], /settings-section-label">资料管理</);
+  for (const [name, source] of Object.entries(sources)) {
+    assert.equal(source.includes("同步到手机预览"), false, name);
+    assert.equal(source.includes("手机预览"), false, name);
+    assert.equal(source.includes("/api/remote-preview/sync"), false, name);
+    assert.equal(source.includes("syncPhonePreview"), false, name);
+  }
+});
+
 test("authoritative 4173 stays writable unless ?readonly=1", () => {
   assert.equal(
     isReadOnlyModeFromLocation({

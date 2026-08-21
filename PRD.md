@@ -2,8 +2,8 @@
 
 > 文档类型：Spec-first 产品需求与实现规格  
 > 状态：v0.5 Draft<br>
-> 更新日期：2026-08-18<br>
-> 已核对实现基线：RecordShelf 0.1.25<br>
+> 更新日期：2026-08-19<br>
+> 已核对实现基线：RecordShelf 0.1.26<br>
 > 默认语言：简体中文  
 > 目标读者：产品负责人、设计师、开发者、测试人员、编码 AI  
 > MVP 定位：一个移动端与桌面端都好用的响应式 Web 应用，用于导入、维护、浏览和回顾个人音乐发行记录。  
@@ -955,9 +955,10 @@ MVP 只需 owner 可见的简要变更历史，不要求可视化 diff。
 - 启动时先读取共享状态再挂载应用；运行中增量写入共享文件。另一端重新获得
   焦点或重新打开时读取较新 revision 并恢复，保证 Web 与 Mac 看到相同结果。
 - Mac 关机后的手机浏览走只读远程预览，不是 4173。本机
-  `npm run remote-preview:sync`（或设置里的「同步到手机预览」）打包目录、
+  `npm run remote-preview:sync` 打包目录、
   `shared-local-state`、封面和动态 WebP，可选复制到 iCloud Drive 备份，并上传到
-  私有对象存储。托管 SPA 只 GET/展示：隐藏添加唱片、评分编辑、曲目写入、介绍保存
+  私有对象存储。设置页当前不提供「同步到手机预览」入口，该能力尚未对用户开放。
+  托管 SPA 只 GET/展示：隐藏添加唱片、评分编辑、曲目写入、介绍保存
   和动态封面抓取。快照不得进入 Git / DMG / GitHub。iCloud 只能备份文件，不能替代
   网站。URL 必须有密码或 Deployment Protection。过期可以，展示更新时间即可。
   本机 4173 写入路径保持不变。详见 [docs/PHONE_PREVIEW.md](docs/PHONE_PREVIEW.md)。

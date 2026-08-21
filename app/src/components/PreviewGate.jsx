@@ -4,7 +4,7 @@ import { loginRemotePreview } from "../lib/remotePreview.js";
 const MESSAGES = {
   login: "这是你的私人只读档案。输入预览密码后继续。",
   setup: "还没有配置预览密码。请先在 Vercel 或本机 Application Support 里设置 RECORDSHELF_PREVIEW_PASSWORD。",
-  empty: "Mac 还没有上传成功的快照。请在电脑上运行 npm run remote-preview:sync 或打开设置里的「同步到手机预览」。",
+  empty: "Mac 还没有上传成功的快照。请在电脑上运行 npm run remote-preview:sync。",
   error: "暂时无法读取远程快照。请确认 Vercel Blob 已配置，并在 Mac 上重新同步一次。",
 };
 
