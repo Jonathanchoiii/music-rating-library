@@ -12,6 +12,7 @@ const componentPath = path.join(
   "components",
   "ArtistDetail.jsx",
 );
+const appPath = path.join(directory, "..", "src", "App.jsx");
 
 test("artist detail closes only when the backdrop itself is clicked", async () => {
   const source = await fs.readFile(componentPath, "utf8");
@@ -107,20 +108,37 @@ test("photo hero has no tuner and samples overlay title contrast", async () => {
   assert.match(source, /motion-artwork-icon/);
 });
 
-test("artist exploration only toggles a preference and does not tease a catalog refresh", async () => {
+test("artist exploration renders a manually refreshed exact catalog and completion", async () => {
   const source = await fs.readFile(componentPath, "utf8");
-  assert.match(source, /onToggleExploration\(!profile\.explorationEnabled\)/);
+  assert.match(source, /onToggleExploration\(true\)/);
   assert.match(source, /artist-exploration-empty/);
-  assert.match(source, /未听目录尚未开放/);
-  assert.match(source, /当前只展示上方「我的收录」/);
-  assert.match(source, /开关只记住偏好；未听过的外部目录目前不能拉取/);
-  assert.equal(source.includes("等待精确目录"), false);
-  assert.equal(source.includes("主动刷新并核验艺人身份"), false);
-  assert.equal(source.includes("灰色待解锁状态出现"), false);
-  assert.equal(source.includes("发现尚未收录、尚未听过的精确作品目录"), false);
-  assert.equal(source.includes("onRequestExplorationCatalog"), false);
-  assert.equal(source.includes("discoveredWorks"), false);
+  assert.match(source, /onRequestExplorationCatalog/);
+  assert.match(source, /buildArtistExplorationModel/);
+  assert.match(source, /歌手完成度/);
+  assert.match(source, /首唯一歌曲/);
+  assert.match(source, /is-unheard/);
+  assert.match(source, /按精确 Artist ID/);
+  assert.match(source, /关闭探索模式/);
   assert.match(source, /我的收录/);
+});
+
+test("read-only preview can fetch an ephemeral exploration catalog", async () => {
+  const source = await fs.readFile(appPath, "utf8");
+  assert.match(
+    source,
+    /async function requestSelectedArtistCatalog\(\) \{\s+if \(!selectedArtistGroup\) return;/,
+  );
+  assert.match(
+    source,
+    /onRequestExplorationCatalog=\{requestSelectedArtistCatalog\}/,
+  );
+  assert.equal(
+    source.includes(
+      "readOnly ? undefined : requestSelectedArtistCatalog",
+    ),
+    false,
+  );
+  assert.match(source, /if \(!readOnly\) \{\s+saveArtistProfileState/);
 });
 
 test("artist detail exposes one manual public-research action", async () => {

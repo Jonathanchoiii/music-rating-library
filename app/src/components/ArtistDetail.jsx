@@ -3,6 +3,9 @@ import {
   AppleLogo,
   ArrowClockwise,
   ArrowRight,
+  ArrowSquareOut,
+  CaretDown,
+  Check,
   Compass,
   ListBullets,
   LockSimple,
@@ -15,6 +18,10 @@ import {
   YoutubeLogo,
 } from "@phosphor-icons/react";
 import { normalizeArtistPlatformUrl, visibleArtistMediaMessage } from "../lib/artistProfiles.js";
+import {
+  buildArtistExplorationModel,
+  groupExplorationReleases,
+} from "../lib/artistExploration.js";
 import { readArtistHeroInk } from "../lib/artistHeroInk.js";
 import { getCoverPaletteProxyUrl } from "../lib/coverPalette.js";
 import {
@@ -24,6 +31,7 @@ import {
 } from "../lib/music.js";
 import { Cover } from "./ReleaseViews.jsx";
 import { Rating } from "./Rating.jsx";
+import { formatTrackDuration } from "../lib/tracklist.js";
 
 const TYPE_FILTERS = [
   ["ALL", "全部"],
@@ -60,6 +68,7 @@ export function ArtistDetail({
   onOpenRelease,
   onOpenArtist,
   onToggleExploration,
+  onRequestExplorationCatalog,
   onChangeReleaseView,
   onRequestIntroduction,
   onSavePlatformLinks,
@@ -67,6 +76,10 @@ export function ArtistDetail({
   onToggleMotion,
 }) {
   const [typeFilter, setTypeFilter] = useState("ALL");
+  const [catalogTypeFilter, setCatalogTypeFilter] = useState("ALL");
+  const [expandedCatalogReleases, setExpandedCatalogReleases] = useState(
+    () => new Set(),
+  );
   const [releaseView, setReleaseView] = useState(
     profile?.releaseView === "grid" ? "grid" : "list",
   );
@@ -85,6 +98,8 @@ export function ArtistDetail({
   const researchActive = ACTIVE_ARTIST_RESEARCH_STATUSES.has(
     profile?.introductionStatus,
   );
+  const catalog = profile?.explorationCatalog;
+  const catalogChecking = catalog?.status === "CHECKING";
   const drawerRef = useRef(null);
   const visualRef = useRef(null);
   const heroMediaRef = useRef(null);
@@ -175,6 +190,11 @@ export function ArtistDetail({
   }, [artist?.id, profile?.releaseView]);
 
   useEffect(() => {
+    setCatalogTypeFilter("ALL");
+    setExpandedCatalogReleases(new Set());
+  }, [artist?.id]);
+
+  useEffect(() => {
     const nextLinks = profile?.platformLinks ?? {};
     setLinkDraft(nextLinks);
     setConfirmedLinks(nextLinks);
@@ -226,6 +246,40 @@ export function ArtistDetail({
         ) ?? [],
     [artist, typeFilter],
   );
+  const exploration = useMemo(
+    () => buildArtistExplorationModel(catalog, artist?.releases ?? []),
+    [catalog, artist?.releases],
+  );
+  const groupedCatalogReleases = useMemo(
+    () => groupExplorationReleases(exploration.releases),
+    [exploration.releases],
+  );
+  const catalogReleases = useMemo(
+    () =>
+      groupedCatalogReleases.filter(
+        (release) =>
+          catalogTypeFilter === "ALL" ||
+          release.releaseType === catalogTypeFilter,
+      ),
+    [catalogTypeFilter, groupedCatalogReleases],
+  );
+
+  function requestExplorationCatalog() {
+    if (!confirmedLinks?.appleMusic) {
+      setEditingLinks(true);
+      return;
+    }
+    onRequestExplorationCatalog?.();
+  }
+
+  function toggleCatalogRelease(releaseId) {
+    setExpandedCatalogReleases((current) => {
+      const next = new Set(current);
+      if (next.has(releaseId)) next.delete(releaseId);
+      else next.add(releaseId);
+      return next;
+    });
+  }
 
   if (!artist) return null;
 
@@ -580,34 +634,240 @@ export function ArtistDetail({
           <header>
             <div>
               <h3>探索模式</h3>
-              <p>开关只记住偏好；未听过的外部目录目前不能拉取</p>
+              <p>
+                {catalog?.checkedAt
+                  ? `Apple Music 目录 · ${displayDate(catalog.checkedAt)}`
+                  : "用真实艺人目录找到还没听过的歌"}
+              </p>
             </div>
             <button
               type="button"
-              className="listening-guide-update"
+              className={`listening-guide-update${
+                catalogChecking ? " is-saving" : ""
+              }`}
               aria-pressed={profile.explorationEnabled}
               aria-label={
-                profile.explorationEnabled ? "关闭探索模式" : "开启探索模式"
+                profile.explorationEnabled ? "更新探索目录" : "开启探索模式"
               }
               title={
-                profile.explorationEnabled ? "关闭探索模式" : "开启探索模式"
+                profile.explorationEnabled ? "更新探索目录" : "开启探索模式"
               }
-              onClick={() => onToggleExploration(!profile.explorationEnabled)}
+              disabled={catalogChecking}
+              onClick={() =>
+                profile.explorationEnabled
+                  ? requestExplorationCatalog()
+                  : onToggleExploration(true)
+              }
             >
-              <ArrowClockwise aria-hidden="true" />
+              {catalogChecking ? (
+                <SpinnerGap aria-hidden="true" />
+              ) : (
+                <ArrowClockwise aria-hidden="true" />
+              )}
             </button>
           </header>
-          {profile.explorationEnabled ? (
+          {!profile.explorationEnabled ? (
+            <div className="artist-exploration-empty artist-exploration-intro">
+              <Compass aria-hidden="true" />
+              <div>
+                <strong>看看这位艺人还有哪些歌没听过</strong>
+                <p>
+                  目录只在你主动刷新时读取；你的评分、评论与收听日期不会发送给 Apple。
+                </p>
+                <button
+                  type="button"
+                  className="secondary-button artist-exploration-cta"
+                  onClick={() => onToggleExploration(true)}
+                >
+                  开启探索模式
+                </button>
+              </div>
+            </div>
+          ) : catalogChecking && !exploration.releases.length ? (
+            <div className="artist-exploration-empty" role="status">
+              <SpinnerGap className="is-spinning" aria-hidden="true" />
+              <div>
+                <strong>正在整理真实作品目录</strong>
+                <p>读取专辑、EP、Single 与曲目，并按唯一歌曲去重。</p>
+              </div>
+            </div>
+          ) : !exploration.releases.length ? (
             <div className="artist-exploration-empty">
               <LockSimple aria-hidden="true" />
               <div>
-                <strong>未听目录尚未开放</strong>
+                <strong>
+                  {catalog?.status === "FAILED"
+                    ? "作品目录暂时没有更新"
+                    : confirmedLinks?.appleMusic
+                      ? "还没有缓存作品目录"
+                      : "先确认这位艺人的 Apple Music 主页"}
+                </strong>
                 <p>
-                  当前只展示上方「我的收录」里已经在 RecordShelf 中的作品。开启探索模式不会联网、不会核验身份，也不会出现灰色待解锁卡片。
+                  {catalog?.error ||
+                    (confirmedLinks?.appleMusic
+                      ? "刷新后会按精确 Artist ID 读取公开作品，不会按名字猜测。"
+                      : "粘贴精确 Artist URL 后，才能避免同名艺人串页。")}
                 </p>
+                <button
+                  type="button"
+                  className="secondary-button artist-exploration-cta"
+                  onClick={requestExplorationCatalog}
+                >
+                  {confirmedLinks?.appleMusic ? "拉取作品目录" : "添加艺人主页"}
+                </button>
               </div>
             </div>
-          ) : null}
+          ) : (
+            <>
+              {catalog?.status === "FAILED" && catalog?.error ? (
+                <p className="artist-exploration-error" role="status">
+                  {catalog.error} 已保留上次成功目录。
+                </p>
+              ) : null}
+              <div className="artist-completion-card">
+                <div className="artist-completion-score">
+                  <strong>{exploration.completionPercent}%</strong>
+                  <span>歌手完成度</span>
+                </div>
+                <div className="artist-completion-detail">
+                  <div
+                    className="artist-completion-track"
+                    role="progressbar"
+                    aria-label="歌手完成度"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={exploration.completionPercent}
+                  >
+                    <span style={{ width: `${exploration.completionPercent}%` }} />
+                  </div>
+                  <p>
+                    已听 {exploration.heardUniqueTrackCount} / {exploration.uniqueTrackCount} 首唯一歌曲
+                  </p>
+                  <small>
+                    {exploration.ratedReleaseCount} 张已评分唱片 · {exploration.matchedReleaseCount} 张匹配本地记录
+                  </small>
+                </div>
+              </div>
+
+              <div className="artist-release-tabs artist-catalog-tabs" role="tablist" aria-label="探索发行类型">
+                {TYPE_FILTERS.filter(([value]) => value !== "OTHER").map(
+                  ([value, label]) => {
+                    const count =
+                      value === "ALL"
+                        ? groupedCatalogReleases.length
+                        : groupedCatalogReleases.filter(
+                            (release) => release.releaseType === value,
+                          ).length;
+                    if (value !== "ALL" && count === 0) return null;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        role="tab"
+                        aria-selected={catalogTypeFilter === value}
+                        className={catalogTypeFilter === value ? "is-active" : ""}
+                        onClick={() => setCatalogTypeFilter(value)}
+                      >
+                        {label} <span>{count}</span>
+                      </button>
+                    );
+                  },
+                )}
+              </div>
+
+              <div className="artist-catalog-list">
+                {catalogReleases.map((release) => {
+                  const expanded = expandedCatalogReleases.has(release.id);
+                  return (
+                    <article
+                      key={release.id}
+                      className={`artist-catalog-release${
+                        release.listened ? " is-listened" : ""
+                      }`}
+                    >
+                      <div className="artist-catalog-release-head">
+                        <button
+                          type="button"
+                          className="artist-catalog-release-toggle"
+                          aria-expanded={expanded}
+                          onClick={() => toggleCatalogRelease(release.id)}
+                        >
+                          <CatalogCover release={release} />
+                          <span className="artist-catalog-release-copy">
+                            <strong>{release.title}</strong>
+                            <span>
+                              {release.releaseType === "SINGLE"
+                                ? "Single"
+                                : release.releaseType}
+                              {release.releaseDate
+                                ? ` · ${displayDate(release.releaseDate)}`
+                                : ""}
+                            </span>
+                            <small>
+                              {release.heardTrackCount} / {release.tracks.length} 首已听
+                              {release.collapsedVariantCount > 0
+                                ? ` · 另 ${release.collapsedVariantCount} 个同日版本已折叠`
+                                : ""}
+                            </small>
+                          </span>
+                          <CaretDown aria-hidden="true" />
+                        </button>
+                        <div className="artist-catalog-release-actions">
+                          {release.matchedReleaseId ? (
+                            <button
+                              type="button"
+                              className="artist-catalog-local-link"
+                              onClick={() => onOpenRelease(release.matchedReleaseId)}
+                              title="打开 RecordShelf 记录"
+                            >
+                              {release.rating != null ? `${release.rating}/10` : "已收录"}
+                            </button>
+                          ) : null}
+                          {release.url ? (
+                            <a
+                              href={release.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label={`在 Apple Music 打开《${release.title}》`}
+                              title="在 Apple Music 打开"
+                            >
+                              <ArrowSquareOut aria-hidden="true" />
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                      {expanded ? (
+                        <ol className="artist-catalog-tracks">
+                          {release.tracks.map((track) => (
+                            <li
+                              key={`${release.id}:${track.id}`}
+                              className={track.listened ? "is-listened" : "is-unheard"}
+                            >
+                              <span className="artist-catalog-track-status" aria-hidden="true">
+                                {track.listened ? <Check weight="bold" /> : <LockSimple />}
+                              </span>
+                              <span className="artist-catalog-track-number">
+                                {track.trackNumber}
+                              </span>
+                              <span className="artist-catalog-track-title">{track.title}</span>
+                              <time>{formatTrackDuration(track.durationMs)}</time>
+                            </li>
+                          ))}
+                        </ol>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                className="artist-exploration-close"
+                onClick={() => onToggleExploration(false)}
+              >
+                关闭探索模式
+              </button>
+            </>
+          )}
         </section>
 
         <section className="artist-detail-section artist-introduction-section">
@@ -706,6 +966,26 @@ export function ArtistDetail({
         </footer>
       </aside>
     </div>
+  );
+}
+
+function CatalogCover({ release }) {
+  const [failed, setFailed] = useState(false);
+  if (!release?.artworkUrl || failed) {
+    return (
+      <span className="artist-catalog-cover is-placeholder" aria-hidden="true">
+        {String(release?.title ?? "?").trim().slice(0, 1).toLocaleUpperCase()}
+      </span>
+    );
+  }
+  return (
+    <img
+      className="artist-catalog-cover"
+      src={release.artworkUrl}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
   );
 }
 

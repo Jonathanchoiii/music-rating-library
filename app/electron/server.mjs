@@ -22,6 +22,8 @@ import { handleReleaseMetadataPersistRequest } from "../shared-state/release-met
 import { handleRemotePreviewSyncRequest } from "../remote-preview/local-http.mjs";
 import { handleArtistResearchRequest } from "../artist-research/index.mjs";
 import { handleAppleArtistLinksRequest } from "../apple-artist-links/index.mjs";
+import { handleArtistCatalogRequest } from "../artist-catalog/index.mjs";
+import { handleRoamCountryRefreshRequest } from "../roam-country-refresh/index.mjs";
 
 const CLIENT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -208,7 +210,13 @@ export async function startRecordShelfServer(port = 4173, options = {}) {
       if (await handleArtistResearchRequest(request, response, options)) {
         return;
       }
+      if (await handleArtistCatalogRequest(request, response, options)) {
+        return;
+      }
       if (await handleAppleArtistLinksRequest(request, response, options)) {
+        return;
+      }
+      if (await handleRoamCountryRefreshRequest(request, response, options)) {
         return;
       }
       if (await handleSharedStateRequest(request, response)) {

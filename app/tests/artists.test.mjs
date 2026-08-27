@@ -5,6 +5,7 @@ import {
   ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
   ARTIST_IDENTITY_STORAGE_KEY,
   DEFAULT_ARTIST_IDENTITY_STATE,
+  ensureArtistIdentitiesForReleases,
   findArtistNameConflicts,
   findDuplicateArtistMbidGroups,
   getArtistAliasIndex,
@@ -49,6 +50,26 @@ test("artist aliases resolve to one stable artist identity", () => {
   assert.equal(groups[0].artist, "魏如萱");
   assert.equal(groups[0].releases.length, 3);
   assert.deepEqual(releases[1].artists, ["魏如萱 Waa"]);
+});
+
+test("library releases automatically create durable artist-management identities", () => {
+  const first = ensureArtistIdentitiesForReleases(
+    { schemaVersion: 2, identities: [] },
+    [release("one", "Tyla / Tems"), release("two", "Tyla")],
+  );
+  assert.equal(first.created, 2);
+  assert.deepEqual(
+    first.state.identities.map((identity) => identity.canonicalName).sort(),
+    ["Tems", "Tyla"],
+  );
+  assert.equal(first.state.identities.every((identity) => identity.source === "RELEASE_CREDIT"), true);
+  assert.equal(first.state.identities.every((identity) => identity.musicBrainzMbid === ""), true);
+
+  const second = ensureArtistIdentitiesForReleases(first.state, [
+    release("three", "Tyla / Tems"),
+  ]);
+  assert.equal(second.created, 0);
+  assert.deepEqual(second.state, first.state);
 });
 
 test("an alias search matches releases credited with another alias", () => {

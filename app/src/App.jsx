@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowDown,
   ArrowUp,
   DownloadSimple,
   Funnel,
   GearSix,
+  GlobeHemisphereWest,
   GridFour,
   GridNine,
   ListBullets,
@@ -60,6 +69,7 @@ import {
   ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
   ARTIST_IDENTITY_STORAGE_KEY,
   DEFAULT_ARTIST_IDENTITY_STATE,
+  ensureArtistIdentitiesForReleases,
   getReleaseArtistTargets,
   groupReleasesByArtistIdentity,
   loadArtistIdentityState,
@@ -110,15 +120,25 @@ import {
   getLibraryRouteState,
   getLibrarySearchResults,
 } from "./lib/librarySearch.js";
-import { isReadOnlyMode } from "./lib/readonlyMode.js";
+import { getLocalAuthoringHref, isReadOnlyMode } from "./lib/readonlyMode.js";
 import { getRemotePreviewMeta } from "./lib/remotePreview.js";
+import {
+  buildRoamModel,
+  getRoamCountryRefreshCandidates,
+} from "./lib/roam.js";
+
+const RoamPage = lazy(() =>
+  import("./components/RoamPage.jsx").then((module) => ({
+    default: module.RoamPage,
+  })),
+);
 
 const PAGE_SIZE = 84;
 
 const navItems = [
   { href: "/", label: "音乐库", Icon: VinylRecord },
   { href: "/artists", label: "艺人", Icon: UsersThree },
-  { href: "/admin/add", label: "添加", Icon: Plus },
+  { href: "/roam", label: "漫游", Icon: GlobeHemisphereWest },
   { href: "/?focus=search", label: "搜索", Icon: MagnifyingGlass },
   { href: "/settings", label: "设置", Icon: GearSix },
 ];
@@ -150,6 +170,7 @@ function LibraryApp() {
   const [artistSort, setArtistSort] = useState("average_desc");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const [toast, setToast] = useState("");
+  const [roamCountriesRefreshing, setRoamCountriesRefreshing] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [listeningReleaseId, setListeningReleaseId] = useState(null);
   const [optimisticDetailId, setOptimisticDetailId] = useState(null);
@@ -157,6 +178,7 @@ function LibraryApp() {
   const libraryWorkspaceReturnRef = useRef(null);
   const skipInitialUserStatePersistRef = useRef(true);
   const skipInitialArtistProfilePersistRef = useRef(true);
+  const roamRefreshAutoStartRef = useRef(false);
 
   const refreshListeningGuideStatuses = useCallback(async () => {
     try {
@@ -173,6 +195,8 @@ function LibraryApp() {
 
   const {
     isArtistRoute,
+    isRoamRoute,
+    selectedRoamCountry,
     isAddRoute,
     isImportRoute,
     isSyncRoute,
@@ -184,6 +208,7 @@ function LibraryApp() {
     detailId: routeDetailId,
     detailReturnTarget,
     detailReturnArtistId,
+    detailReturnCountryCode,
   } = getLibraryRouteState(location);
   const detailId = optimisticDetailId ?? routeDetailId;
   const selectedRelease = releases.find((release) => release.id === detailId);
@@ -213,8 +238,16 @@ function LibraryApp() {
   }, [readOnly, releases, releaseTypeOverrides]);
 
   useEffect(() => {
-    saveArtistIdentityState(artistIdentityState);
-  }, [artistIdentityState]);
+    if (!readOnly) saveArtistIdentityState(artistIdentityState);
+  }, [artistIdentityState, readOnly]);
+
+  useEffect(() => {
+    if (readOnly) return;
+    setArtistIdentityState((current) => {
+      const reconciliation = ensureArtistIdentitiesForReleases(current, releases);
+      return reconciliation.created ? reconciliation.state : current;
+    });
+  }, [readOnly, releases]);
 
   useEffect(() => {
     if (skipInitialArtistProfilePersistRef.current) {
@@ -295,6 +328,7 @@ function LibraryApp() {
   }, []);
 
   useEffect(() => {
+    if (isRoamRoute) return;
     const params = new URLSearchParams(location.search);
     if (params.get("focus") === "search") {
       window.setTimeout(
@@ -309,6 +343,7 @@ function LibraryApp() {
   }, [routeDetailId]);
 
   useEffect(() => {
+    if (isRoamRoute) return;
     const params = new URLSearchParams(location.search);
     if (params.get("view") === view) return;
     params.set("view", view);
@@ -317,7 +352,7 @@ function LibraryApp() {
       replace: true,
       preventScrollReset: true,
     });
-  }, [view, location.pathname, location.search, navigate]);
+  }, [view, location.pathname, location.search, navigate, isRoamRoute]);
 
   useEffect(() => {
     if (
@@ -378,6 +413,18 @@ function LibraryApp() {
   const allArtistGroups = useMemo(
     () => groupReleasesByArtistIdentity(releases, artistIdentityState, ""),
     [artistIdentityState, releases],
+  );
+  const roamModel = useMemo(
+    () => buildRoamModel({ artistGroups: allArtistGroups, artistProfileState }),
+    [allArtistGroups, artistProfileState],
+  );
+  const roamCountryRefreshCandidates = useMemo(
+    () => getRoamCountryRefreshCandidates({
+      artistGroups: allArtistGroups,
+      artistIdentityState,
+      artistProfileState,
+    }),
+    [allArtistGroups, artistIdentityState, artistProfileState],
   );
   const artistGroups = useMemo(
     () =>
@@ -580,11 +627,16 @@ function LibraryApp() {
       ? "duplicates"
       : isArtistRoute
         ? "artists"
+        : isRoamRoute
+          ? "roam"
         : "library";
     setOptimisticDetailId(id);
     const params = new URLSearchParams({ view, from });
     if (from === "artists" && selectedArtistId) {
       params.set("artist", selectedArtistId);
+    }
+    if (from === "roam" && selectedRoamCountry) {
+      params.set("country", selectedRoamCountry);
     }
     navigate(`/releases/${encodeURIComponent(id)}?${params.toString()}`, {
       preventScrollReset: true,
@@ -613,6 +665,91 @@ function LibraryApp() {
     }
     clearSelectedArtist();
   }
+
+  async function requestRoamCountryRefresh() {
+    if (roamCountriesRefreshing) return;
+    if (!roamCountryRefreshCandidates.length) {
+      setToast("当前没有待核验的已听艺人");
+      return;
+    }
+    const delay = (milliseconds) =>
+      new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    setRoamCountriesRefreshing(true);
+    setToast(`准备核验 ${roamCountryRefreshCandidates.length} 位艺人的国家资料`);
+    try {
+      const response = await fetch("/api/roam/countries/refresh", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ candidates: roamCountryRefreshCandidates }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.job?.jobId) {
+        throw new Error("未能开始国家资料核验。");
+      }
+      let job = body.job;
+      const deadline = Date.now() + 15 * 60 * 1000;
+      while (["CHECKING", "SAVING"].includes(job.status) && Date.now() < deadline) {
+        setToast(
+          job.currentArtist
+            ? `正在核验 ${job.currentArtist}（${job.checked}/${job.total}）`
+            : `正在核验艺人国家资料（${job.checked}/${job.total}）`,
+        );
+        await delay(900);
+        const pollResponse = await fetch(
+          `/api/roam/countries/refresh?jobId=${encodeURIComponent(job.jobId)}`,
+          { headers: { accept: "application/json" } },
+        );
+        const pollBody = await pollResponse.json().catch(() => ({}));
+        if (!pollResponse.ok || !pollBody.job) {
+          throw new Error("无法读取国家资料核验进度。");
+        }
+        job = pollBody.job;
+      }
+      if (job.status !== "COMPLETED") {
+        throw new Error("国家资料核验未完成，请稍后重试。");
+      }
+      if (job.updates?.length) {
+        setArtistProfileState((current) =>
+          job.updates.reduce(
+            (next, update) => updateArtistProfile(
+              next,
+              update.artistId,
+              update.profile,
+            ),
+            current,
+          ),
+        );
+      }
+      setToast(
+        job.updated
+          ? `已补充 ${job.updated} 位艺人的国家资料`
+          : `已核验 ${job.checked} 位艺人，暂未发现可确认的新地区`,
+      );
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "国家资料核验失败");
+    } finally {
+      setRoamCountriesRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (
+      !isRoamRoute ||
+      readOnly ||
+      params.get("refreshCountries") !== "1" ||
+      roamRefreshAutoStartRef.current
+    ) {
+      return;
+    }
+    roamRefreshAutoStartRef.current = true;
+    params.delete("refreshCountries");
+    navigate(`/roam${params.size ? `?${params.toString()}` : ""}`, {
+      replace: true,
+      preventScrollReset: true,
+    });
+    void requestRoamCountryRefresh();
+  }, [isRoamRoute, location.search, readOnly]);
 
   async function requestArtistIntroduction() {
     if (!selectedArtistGroup) return;
@@ -772,6 +909,52 @@ function LibraryApp() {
         },
       });
       setToast("艺人素材更新失败");
+    }
+  }
+
+  async function requestSelectedArtistCatalog() {
+    if (!selectedArtistGroup) return;
+    const artistId = selectedArtistGroup.id;
+    const appleMusicUrl = selectedArtistProfile?.platformLinks?.appleMusic;
+    if (!appleMusicUrl) {
+      setToast("请先添加 Apple Music 艺人主页链接");
+      return;
+    }
+    persistArtistProfilePatch(artistId, {
+      explorationEnabled: true,
+      explorationCatalog: {
+        ...(selectedArtistProfile?.explorationCatalog ?? {}),
+        status: "CHECKING",
+        error: "",
+      },
+    });
+    try {
+      const response = await fetch("/api/artists/catalog", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ appleMusicUrl }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.catalog) {
+        throw new Error(body.message || "艺人作品目录暂时无法更新。");
+      }
+      persistArtistProfilePatch(artistId, {
+        explorationEnabled: true,
+        explorationCatalog: body.catalog,
+      });
+      setToast(`已更新 ${body.catalog.releases?.length ?? 0} 张艺人发行`);
+    } catch (error) {
+      persistArtistProfilePatch(artistId, {
+        explorationCatalog: {
+          ...(selectedArtistProfile?.explorationCatalog ?? {}),
+          status: "FAILED",
+          error:
+            error instanceof Error
+              ? error.message
+              : "艺人作品目录暂时无法更新。",
+        },
+      });
+      setToast("艺人作品目录更新失败");
     }
   }
 
@@ -1262,10 +1445,27 @@ function LibraryApp() {
     ? "/settings/duplicates"
     : isArtistRoute || detailReturnTarget === "artists"
       ? "/artists"
+      : isRoamRoute || detailReturnTarget === "roam"
+        ? detailReturnCountryCode
+          ? `/roam/${detailReturnCountryCode.toLowerCase()}`
+          : "/roam"
       : "/";
+  const addReleaseHref = readOnly
+    ? getLocalAuthoringHref({
+        hostname: window.location.hostname,
+        protocol: window.location.protocol,
+        pathname: "/admin/add",
+        search: `view=${view}`,
+      })
+    : `/admin/add?view=${view}`;
+  const showLibraryAddFab =
+    location.pathname === "/" && Boolean(addReleaseHref);
   function navItemIsActive(href) {
     if (href === "/artists") {
       return isArtistRoute || detailReturnTarget === "artists";
+    }
+    if (href === "/roam") {
+      return isRoamRoute || detailReturnTarget === "roam";
     }
     if (href === "/settings") {
       return (
@@ -1279,7 +1479,7 @@ function LibraryApp() {
       return (
         location.pathname === "/" ||
         (location.pathname.startsWith("/releases/") &&
-          !["artists", "duplicates"].includes(detailReturnTarget))
+          !["artists", "duplicates", "roam"].includes(detailReturnTarget))
       );
     }
     return location.pathname === href;
@@ -1299,10 +1499,7 @@ function LibraryApp() {
           <img src="/recordshelf-logo.png" alt="" aria-hidden="true" />
         </Link>
         <nav>
-          {(readOnly
-            ? navItems.filter((item) => item.href !== "/admin/add")
-            : navItems
-          ).map(({ href, label, Icon }) => {
+          {navItems.map(({ href, label, Icon }) => {
             const active = navItemIsActive(href);
             return (
               <Link
@@ -1328,6 +1525,31 @@ function LibraryApp() {
       </aside>
 
       <main className="library-main">
+        {isRoamRoute ? (
+          <Suspense
+            fallback={
+              <div className="roam-loading" role="status">
+                正在展开你的听歌世界…
+              </div>
+            }
+          >
+            <RoamPage
+              model={roamModel}
+              selectedCountryCode={selectedRoamCountry}
+              onOpenRelease={openRelease}
+              onOpenArtist={selectArtist}
+              onRefreshCountries={readOnly ? undefined : requestRoamCountryRefresh}
+              refreshCountriesHref={readOnly ? getLocalAuthoringHref({
+                hostname: window.location.hostname,
+                protocol: window.location.protocol,
+                pathname: "/roam",
+                search: "?refreshCountries=1",
+              }) : ""}
+              refreshingCountries={roamCountriesRefreshing}
+            />
+          </Suspense>
+        ) : (
+          <>
         <header className="library-header">
           <div>
             <p className="eyebrow">
@@ -1362,12 +1584,6 @@ function LibraryApp() {
                 </span>
               ) : null}
             </button>
-            {readOnly ? null : (
-              <Link className="primary-button desktop-add" to="/admin/add">
-                <Plus aria-hidden="true" />
-                添加唱片
-              </Link>
-            )}
           </div>
         </header>
 
@@ -1620,13 +1836,24 @@ function LibraryApp() {
         ) : null}
           </>
         )}
+          </>
+        )}
       </main>
 
+      {showLibraryAddFab ? (
+        <Link
+          className="library-add-fab"
+          to={addReleaseHref}
+          aria-label="添加唱片"
+          title={readOnly ? "前往本机可写端添加唱片" : "添加唱片"}
+        >
+          <Plus weight="bold" aria-hidden="true" />
+          <span>添加唱片</span>
+        </Link>
+      ) : null}
+
       <nav className="mobile-nav" aria-label="移动端导航">
-        {(readOnly
-          ? navItems.filter((item) => item.href !== "/admin/add")
-          : navItems
-        ).map(({ href, label, Icon }) => {
+        {navItems.map(({ href, label, Icon }) => {
           const active = navItemIsActive(href);
           return (
             <Link
@@ -1645,7 +1872,7 @@ function LibraryApp() {
       {showScrollTop ? (
         <button
           type="button"
-          className={`scroll-top-button${toast ? " has-toast" : ""}`}
+          className={`scroll-top-button${toast ? " has-toast" : ""}${showLibraryAddFab ? " has-library-add-fab" : ""}`}
           aria-label="返回页面顶部"
           title="返回顶部"
           onClick={() =>
@@ -1675,6 +1902,13 @@ function LibraryApp() {
             navigate(`/artists?${params.toString()}`, {
               preventScrollReset: true,
             });
+          } else if (detailReturnTarget === "roam") {
+            navigate(
+              detailReturnCountryCode
+                ? `/roam/${detailReturnCountryCode.toLowerCase()}`
+                : "/roam",
+              { preventScrollReset: true },
+            );
           } else {
             navigate(`${activeBasePath}?view=${view}`, {
               preventScrollReset: true,
@@ -1706,7 +1940,7 @@ function LibraryApp() {
           onOpenRelease={openRelease}
           onOpenArtist={selectArtist}
           onToggleExploration={(explorationEnabled) => {
-            if (!selectedArtistGroup || readOnly) return;
+            if (!selectedArtistGroup) return;
             setArtistProfileState((current) =>
               updateArtistProfile(
                 current,
@@ -1728,6 +1962,7 @@ function LibraryApp() {
             );
           }}
           onRequestIntroduction={requestArtistIntroduction}
+          onRequestExplorationCatalog={requestSelectedArtistCatalog}
           onSavePlatformLinks={readOnly ? undefined : saveSelectedArtistPlatformLinks}
           onRequestMedia={readOnly ? undefined : requestSelectedArtistMedia}
           onToggleMotion={(nextEnabled) => {
@@ -1811,7 +2046,7 @@ function LibraryApp() {
         onClose={() => setShowFilters(false)}
       />
       {toast ? (
-        <div className="toast" role="status">
+        <div className={`toast${showLibraryAddFab ? " has-library-add-fab" : ""}`} role="status">
           {toast}
         </div>
       ) : null}

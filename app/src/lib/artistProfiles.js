@@ -1,7 +1,7 @@
 import { ARTIST_PROFILE_STORAGE_KEY } from "./sharedStorageKeys.js";
 
 export const EMPTY_ARTIST_PROFILE_STATE = Object.freeze({
-  version: 3,
+  version: 4,
   profiles: {},
 });
 
@@ -86,6 +86,14 @@ function preferMedia(primary, fallback) {
   };
 }
 
+function preferExplorationCatalog(primary, fallback) {
+  const left = sanitizeExplorationCatalog(primary);
+  const right = sanitizeExplorationCatalog(fallback);
+  if (left.status === "READY" && left.releases.length) return left;
+  if (right.status === "READY" && right.releases.length) return right;
+  return left.checkedAt || left.status !== "EMPTY" ? left : right;
+}
+
 function mergePreferredArtistProfile(primary, fallback) {
   const left = sanitizeArtistProfile(primary);
   const right = sanitizeArtistProfile(fallback);
@@ -95,6 +103,10 @@ function mergePreferredArtistProfile(primary, fallback) {
     introduction: preferText(left.introduction, right.introduction),
     platformLinks: preferPlatformLinks(left.platformLinks, right.platformLinks),
     media: preferMedia(left.media, right.media),
+    explorationCatalog: preferExplorationCatalog(
+      left.explorationCatalog,
+      right.explorationCatalog,
+    ),
     publicFacts: mergePublicFacts(right.publicFacts, left.publicFacts),
     sources: left.sources.length ? left.sources : right.sources,
     updatedAt: preferText(left.updatedAt, right.updatedAt),
@@ -231,6 +243,84 @@ function sanitizeMedia(value) {
     truncated: media.truncated === true,
     notice: cleanText(media.notice),
     error: sanitizeMediaError({ ...media, localMotionUrl }),
+  };
+}
+
+function safeHttpsUrl(value) {
+  const text = cleanText(value);
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" && !url.username && !url.password
+      ? url.toString()
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function sanitizeExplorationTrack(value) {
+  const track = value && typeof value === "object" ? value : {};
+  const id = cleanText(track.id);
+  const title = cleanText(track.title);
+  if (!id || !title) return null;
+  return {
+    id,
+    isrc: cleanText(track.isrc),
+    title,
+    artistName: cleanText(track.artistName),
+    durationMs: Math.max(0, Math.round(Number(track.durationMs) || 0)),
+    discNumber: Math.max(1, Math.round(Number(track.discNumber) || 1)),
+    trackNumber: Math.max(1, Math.round(Number(track.trackNumber) || 1)),
+    url: safeHttpsUrl(track.url),
+  };
+}
+
+function sanitizeExplorationRelease(value) {
+  const release = value && typeof value === "object" ? value : {};
+  const id = cleanText(release.id);
+  const title = cleanText(release.title);
+  if (!id || !title) return null;
+  return {
+    id,
+    title,
+    artistName: cleanText(release.artistName),
+    releaseType: ["LP", "EP", "SINGLE"].includes(release.releaseType)
+      ? release.releaseType
+      : "LP",
+    releaseDate: cleanText(release.releaseDate),
+    artworkUrl: safeHttpsUrl(release.artworkUrl),
+    url: safeHttpsUrl(release.url),
+    trackCount: Math.max(0, Math.round(Number(release.trackCount) || 0)),
+    upc: cleanText(release.upc),
+    isCompilation: release.isCompilation === true,
+    tracks: Array.isArray(release.tracks)
+      ? release.tracks.map(sanitizeExplorationTrack).filter(Boolean).slice(0, 300)
+      : [],
+  };
+}
+
+function sanitizeExplorationCatalog(value) {
+  const catalog = value && typeof value === "object" ? value : {};
+  return {
+    status: ["EMPTY", "CHECKING", "READY", "FAILED"].includes(catalog.status)
+      ? catalog.status
+      : "EMPTY",
+    source: cleanText(catalog.source),
+    artistId: cleanText(catalog.artistId),
+    storefront: /^[a-z]{2}$/i.test(cleanText(catalog.storefront))
+      ? cleanText(catalog.storefront).toLocaleLowerCase()
+      : "",
+    artistName: cleanText(catalog.artistName),
+    artistUrl: normalizeArtistPlatformUrl("appleMusic", catalog.artistUrl),
+    checkedAt: cleanText(catalog.checkedAt),
+    releases: Array.isArray(catalog.releases)
+      ? catalog.releases
+          .map(sanitizeExplorationRelease)
+          .filter(Boolean)
+          .slice(0, 400)
+      : [],
+    error: cleanText(catalog.error),
   };
 }
 
@@ -582,6 +672,7 @@ function sanitizeArtistProfile(profile) {
     warnings: cleanTextList(value.warnings, 20),
     platformLinks: sanitizePlatformLinks(value.platformLinks),
     media: sanitizeMedia(value.media),
+    explorationCatalog: sanitizeExplorationCatalog(value.explorationCatalog),
     sources: sanitizeSources(value.sources),
     researchMessage: cleanText(value.researchMessage),
     researchError: cleanText(value.researchError),
@@ -629,7 +720,7 @@ export function sanitizeArtistProfileState(value) {
       profiles[artistId] = sanitizeArtistProfile(profile);
     });
   }
-  return { version: 3, profiles: coalesceArtistProfileIds(profiles) };
+  return { version: 4, profiles: coalesceArtistProfileIds(profiles) };
 }
 
 export function loadArtistProfileState(storage = window.localStorage) {
@@ -703,6 +794,21 @@ export function updateArtistProfile(state, artistId, patch, nameHints = []) {
                 patch.media?.sourceVideoUrl || previous.media?.sourceVideoUrl,
             })
           : previous.media,
+        explorationCatalog: Object.prototype.hasOwnProperty.call(
+          patch,
+          "explorationCatalog",
+        )
+          ? sanitizeExplorationCatalog({
+              ...previous.explorationCatalog,
+              ...patch.explorationCatalog,
+              releases: Object.prototype.hasOwnProperty.call(
+                patch.explorationCatalog ?? {},
+                "releases",
+              )
+                ? patch.explorationCatalog.releases
+                : previous.explorationCatalog.releases,
+            })
+          : previous.explorationCatalog,
         updatedAt: new Date().toISOString(),
       },
     },

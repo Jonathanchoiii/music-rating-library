@@ -96,12 +96,18 @@ export function getLibraryRouteState(location) {
   const rawArtistId = params.get("artist") ?? "";
   const selectedArtistId = decodeArtistProfileId(rawArtistId) || rawArtistId;
   const isArtistRoute = pathname === "/artists";
+  const isRoamRoute = pathname === "/roam" || pathname.startsWith("/roam/");
+  const selectedRoamCountry = pathname.startsWith("/roam/")
+    ? decodeURIComponent(pathname.split("/").filter(Boolean).pop()).toUpperCase()
+    : "";
   const isDuplicateRoute =
     pathname === "/settings/duplicates" || pathname === "/duplicates";
   const isSettingsRoute =
     pathname === "/settings" || pathname === "/settings/artists";
   return {
     isArtistRoute,
+    isRoamRoute,
+    selectedRoamCountry,
     isAddRoute: pathname === "/admin/add",
     isImportRoute: pathname === "/admin/import",
     isSyncRoute: pathname === "/sync",
@@ -115,5 +121,6 @@ export function getLibraryRouteState(location) {
       : null,
     detailReturnTarget: params.get("from"),
     detailReturnArtistId: selectedArtistId,
+    detailReturnCountryCode: (params.get("country") ?? "").toUpperCase(),
   };
 }

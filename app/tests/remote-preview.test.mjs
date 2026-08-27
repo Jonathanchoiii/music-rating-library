@@ -11,7 +11,10 @@ import {
   sanitizePreviewStorage,
 } from "../remote-preview/package-snapshot.mjs";
 import { NEODB_OAUTH_CLIENT_KEY } from "../src/lib/sharedStorageKeys.js";
-import { isReadOnlyModeFromLocation } from "../src/lib/readonlyMode.js";
+import {
+  getLocalAuthoringHref,
+  isReadOnlyModeFromLocation,
+} from "../src/lib/readonlyMode.js";
 
 test("private media names only accept same-origin cover and motion routes", () => {
   assert.equal(
@@ -112,6 +115,36 @@ test("authoritative 4173 stays writable unless ?readonly=1", () => {
     }),
     true,
   );
+});
+
+test("local read-only preview can hand add-release to the authoritative writer", () => {
+  assert.equal(
+    getLocalAuthoringHref({
+      hostname: "127.0.0.1",
+      protocol: "http:",
+      search: "view=grid",
+    }),
+    "http://localhost:4173/admin/add?view=grid",
+  );
+  assert.equal(
+    getLocalAuthoringHref({ hostname: "recordshelf.vercel.app" }),
+    "",
+  );
+});
+
+test("library keeps one right-floating add-release action across viewports", async () => {
+  const appSource = await fs.readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
+  const styles = await fs.readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  const navBlock = appSource.match(/const navItems = \[([\s\S]*?)\];/)?.[1] ?? "";
+  assert.doesNotMatch(navBlock, /\/admin\/add/);
+  assert.match(appSource, /const showLibraryAddFab =[\s\S]*?location\.pathname === "\/" && Boolean\(addReleaseHref\)/);
+  assert.match(appSource, /className="library-add-fab"[\s\S]*?to=\{addReleaseHref\}/);
+  assert.doesNotMatch(appSource, /className="primary-button desktop-add"/);
+  assert.match(styles, /\.library-add-fab \{[\s\S]*?position: fixed/);
+  assert.match(styles, /\.library-add-fab \{[\s\S]*?bottom: 28px/);
+  assert.match(styles, /\.library-add-fab[\s\S]*?bottom: calc\(92px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.library-add-fab \{[\s\S]*?right: 16px/);
+  assert.match(styles, /\.scroll-top-button\.has-library-add-fab,[\s\S]*?\.toast\.has-library-add-fab[\s\S]*?bottom: calc\(154px/);
 });
 
 test("packager copies referenced covers and motion without oauth keys", async () => {

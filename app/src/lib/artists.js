@@ -315,6 +315,56 @@ export function createArtistIdentity(canonicalName) {
   });
 }
 
+function stableReleaseCreditArtistId(name) {
+  let hash = 0x811c9dc5;
+  for (const character of normalizeText(name)) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `artist-credit-${(hash >>> 0).toString(36)}`;
+}
+
+export function ensureArtistIdentitiesForReleases(identityState, releases = []) {
+  const state = sanitizeArtistIdentityState(identityState);
+  const aliasIndex = getArtistAliasIndex(state);
+  const identities = [...state.identities];
+  const identityIds = new Map(
+    identities.map((identity) => [identity.id, normalizeText(identity.canonicalName)]),
+  );
+  let created = 0;
+
+  for (const release of releases) {
+    for (const credit of splitArtistCredits(release?.artists ?? [])) {
+      const name = cleanName(credit);
+      const normalized = normalizeText(name);
+      if (!normalized || aliasIndex.has(normalized)) continue;
+      let id = stableReleaseCreditArtistId(name);
+      if (identityIds.has(id) && identityIds.get(id) !== normalized) {
+        id = createLocalId("artist-credit");
+      }
+      const identity = sanitizeIdentity({
+        id,
+        canonicalName: name,
+        sortName: name,
+        source: "RELEASE_CREDIT",
+        aliases: [],
+      });
+      if (!identity) continue;
+      identities.push(identity);
+      identityIds.set(identity.id, normalized);
+      aliasIndex.set(normalized, identity);
+      created += 1;
+    }
+  }
+
+  return {
+    state: created
+      ? sanitizeArtistIdentityState({ ...state, identities })
+      : state,
+    created,
+  };
+}
+
 export function findArtistNameConflicts(
   identityState,
   artistNames,

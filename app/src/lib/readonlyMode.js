@@ -35,3 +35,20 @@ export function isReadOnlyMode() {
     search: window.location.search,
   });
 }
+
+export function getLocalAuthoringHref({
+  hostname = "",
+  protocol = "http:",
+  pathname = "/admin/add",
+  search = "",
+} = {}) {
+  if (!["127.0.0.1", "localhost"].includes(String(hostname))) return "";
+  const safeProtocol = protocol === "https:" ? "https:" : "http:";
+  const safePathname = String(pathname).startsWith("/")
+    ? String(pathname)
+    : `/${String(pathname)}`;
+  const safeSearch = search && !String(search).startsWith("?")
+    ? `?${String(search)}`
+    : String(search);
+  return `${safeProtocol}//localhost:4173${safePathname}${safeSearch}`;
+}
