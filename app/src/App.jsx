@@ -1,21 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowDown,
   ArrowUp,
   DownloadSimple,
   Funnel,
   GearSix,
+  GlobeHemisphereWest,
   GridFour,
   GridNine,
   ListBullets,
   MagnifyingGlass,
-  MusicNotes,
   Plus,
+  Rows,
   SquaresFour,
   UploadSimple,
   UsersThree,
   VinylRecord,
-  X,
 } from "@phosphor-icons/react";
 import {
   BrowserRouter,
@@ -23,27 +31,22 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { seedReleases } from "./data/seed.js";
+import { getSeedReleases, seedReleases } from "./data/seed.js";
 import {
-  getCurrentRating,
   findExactNeoDbDuplicateGroups,
-  compareReleaseDates,
-  getReleaseContextMatches,
-  getLatestListenedAt,
-  getNextVisibleLimit,
   findReleaseByReferenceUrl,
-  normalizeText,
-  reconcileCanonicalCoverOverride,
-  reconcileCanonicalExternalLinkOverride,
-  reconcileCanonicalTitleOverride,
-  releaseMatchesPrimarySearch,
+  getNextVisibleLimit,
+  upsertConfirmedExternalLink,
+  clearConfirmedExternalLink,
 } from "./lib/music.js";
 import {
   ArtistGroups,
   ReleaseGrid,
   ReleaseList,
+  ReleaseShelf,
 } from "./components/ReleaseViews.jsx";
 import { ReleaseDetail } from "./components/ReleaseDetail.jsx";
+import { ArtistDetail } from "./components/ArtistDetail.jsx";
 import { AddReleaseDialog } from "./components/AddReleaseDialog.jsx";
 import { ImportDialog } from "./components/ImportDialog.jsx";
 import { NeoDbSyncDialog } from "./components/NeoDbSyncDialog.jsx";
@@ -53,9 +56,9 @@ import {
   NEODB_OAUTH_PENDING_KEY,
   NEODB_SYNC_STATE_KEY,
   dedupeEquivalentListeningEntries,
-  getReleaseMetadataFields,
 } from "./lib/neodbSync.js";
 import { ContextualSearchResults } from "./components/ContextualSearchResults.jsx";
+import { LibrarySearchField } from "./components/LibrarySearchField.jsx";
 import { DuplicateManager } from "./components/DuplicateManager.jsx";
 import { SettingsDialog } from "./components/SettingsDialog.jsx";
 import {
@@ -66,10 +69,10 @@ import {
   ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
   ARTIST_IDENTITY_STORAGE_KEY,
   DEFAULT_ARTIST_IDENTITY_STATE,
+  ensureArtistIdentitiesForReleases,
   getReleaseArtistTargets,
   groupReleasesByArtistIdentity,
   loadArtistIdentityState,
-  releaseMatchesMappedArtistQuery,
   saveArtistIdentityState,
   sanitizeArtistIdentityState,
   sortArtistGroups,
@@ -79,7 +82,6 @@ import {
   EMPTY_LIBRARY_FILTERS,
   LIBRARY_FILTER_STORAGE_KEY,
   loadLibraryFilters,
-  releaseMatchesLibraryFilters,
   saveLibraryFilters,
   sanitizeLibraryFilters,
 } from "./lib/filters.js";
@@ -89,210 +91,57 @@ import {
   mergeSelectedReleases,
   validateRecordshelfBackup,
 } from "./lib/backupMerge.js";
-import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "./lib/sharedStorageKeys.js";
+import {
+  ARTIST_PROFILE_STORAGE_KEY,
+  DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
+  LEGACY_FULL_LIBRARY_KEYS,
+  LEGACY_USER_STATE_KEY,
+  USER_STATE_KEY,
+} from "./lib/sharedStorageKeys.js";
+import {
+  EMPTY_ARTIST_PROFILE_STATE,
+  artistResearchJobPatch,
+  decodeArtistProfileId,
+  getArtistProfile,
+  loadArtistProfileState,
+  saveArtistProfileState,
+  updateArtistProfile,
+} from "./lib/artistProfiles.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
+import { persistReleaseOverlay } from "./lib/releaseMetadataPersist.js";
+import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
+import {
+  getBaseRelease,
+  loadInitialLibraryState,
+  persistUserState,
+} from "./lib/libraryUserState.js";
+import {
+  countReleaseTypes,
+  getLibraryRouteState,
+  getLibrarySearchResults,
+} from "./lib/librarySearch.js";
+import { getLocalAuthoringHref, isReadOnlyMode } from "./lib/readonlyMode.js";
+import { getRemotePreviewMeta } from "./lib/remotePreview.js";
+import {
+  buildRoamModel,
+  getRoamCountryRefreshCandidates,
+} from "./lib/roam.js";
 
-const USER_STATE_KEY = "recordshelf-user-state-v2";
-const LEGACY_USER_STATE_KEY = "recordshelf-user-state-v1";
-const LEGACY_FULL_LIBRARY_KEYS = [
-  "recordshelf-mvp-releases-v5",
-  "recordshelf-mvp-releases-v4",
-  "recordshelf-mvp-releases-v3",
-  "recordshelf-mvp-releases-v2",
-  "recordshelf-mvp-releases-v1",
-];
+const RoamPage = lazy(() =>
+  import("./components/RoamPage.jsx").then((module) => ({
+    default: module.RoamPage,
+  })),
+);
+
 const PAGE_SIZE = 84;
-const BASE_RELEASE_BY_ID = new Map(
-  seedReleases.map((release) => [release.id, release]),
-);
-const BASE_ENTRY_IDS_BY_RELEASE = new Map(
-  seedReleases.map((release) => [
-    release.id,
-    new Set(release.listeningEntries.map((entry) => entry.id)),
-  ]),
-);
-const RELEASE_METADATA_FIELDS = getReleaseMetadataFields();
 
 const navItems = [
   { href: "/", label: "音乐库", Icon: VinylRecord },
   { href: "/artists", label: "艺人", Icon: UsersThree },
-  { href: "/admin/add", label: "添加", Icon: Plus },
+  { href: "/roam", label: "漫游", Icon: GlobeHemisphereWest },
   { href: "/?focus=search", label: "搜索", Icon: MagnifyingGlass },
   { href: "/settings", label: "设置", Icon: GearSix },
 ];
-
-function deriveUserState(releases, releaseTypeOverrides = {}) {
-  const listeningEntryAdditions = {};
-  const listeningEntryRemovals = {};
-  const releaseMetadataOverrides = {};
-  const userReleases = [];
-  const currentReleaseIds = new Set(releases.map((release) => release.id));
-  const removedReleaseIds = seedReleases
-    .filter((release) => !currentReleaseIds.has(release.id))
-    .map((release) => release.id);
-
-  for (const release of releases) {
-    const baseRelease = BASE_RELEASE_BY_ID.get(release.id);
-    if (!baseRelease) {
-      userReleases.push(release);
-      continue;
-    }
-    const baseEntryIds = BASE_ENTRY_IDS_BY_RELEASE.get(release.id);
-    const additions = release.listeningEntries.filter(
-      (entry) => !baseEntryIds.has(entry.id),
-    );
-    if (additions.length) {
-      listeningEntryAdditions[release.id] = additions;
-    }
-    const currentEntryIds = new Set(
-      release.listeningEntries.map((entry) => entry.id),
-    );
-    const removals = baseRelease.listeningEntries
-      .filter((entry) => !currentEntryIds.has(entry.id))
-      .map((entry) => entry.id);
-    if (removals.length) {
-      listeningEntryRemovals[release.id] = removals;
-    }
-    const metadataPatch = Object.fromEntries(
-      RELEASE_METADATA_FIELDS.filter(
-        (field) =>
-          JSON.stringify(release[field]) !==
-          JSON.stringify(baseRelease[field]),
-      ).map((field) => [field, release[field]]),
-    );
-    if (Object.keys(metadataPatch).length) {
-      releaseMetadataOverrides[release.id] = metadataPatch;
-    }
-  }
-
-  return {
-    releaseTypeOverrides,
-    listeningEntryAdditions,
-    listeningEntryRemovals,
-    releaseMetadataOverrides,
-    removedReleaseIds,
-    userReleases,
-  };
-}
-
-function applyUserState(userState = {}) {
-  const releaseTypeOverrides = userState.releaseTypeOverrides ?? {};
-  const listeningEntryAdditions = userState.listeningEntryAdditions ?? {};
-  const listeningEntryRemovals = userState.listeningEntryRemovals ?? {};
-  const releaseMetadataOverrides = userState.releaseMetadataOverrides ?? {};
-  const removedReleaseIds = new Set(userState.removedReleaseIds ?? []);
-  const baseReleases = seedReleases
-    .filter((release) => !removedReleaseIds.has(release.id))
-    .map((release) => {
-      const removedEntryIds = new Set(
-        listeningEntryRemovals[release.id] ?? [],
-      );
-      const metadataOverride = reconcileCanonicalTitleOverride(
-        release,
-        reconcileCanonicalCoverOverride(
-          release,
-          reconcileCanonicalExternalLinkOverride(
-            release,
-            releaseMetadataOverrides[release.id] ?? {},
-          ),
-        ),
-      );
-      return {
-        ...release,
-        ...metadataOverride,
-        releaseType:
-          releaseTypeOverrides[release.id] ??
-          metadataOverride.releaseType ??
-          release.releaseType,
-        releaseTypeUserConfirmed:
-          metadataOverride.releaseTypeUserConfirmed ??
-          (Object.hasOwn(releaseTypeOverrides, release.id)
-            ? true
-            : release.releaseTypeUserConfirmed ?? false),
-        listeningEntries: [
-          ...dedupeEquivalentListeningEntries([
-            ...release.listeningEntries.filter(
-              (entry) => !removedEntryIds.has(entry.id),
-            ),
-            ...(listeningEntryAdditions[release.id] ?? []),
-          ]),
-        ],
-      };
-    });
-  return [...(userState.userReleases ?? []), ...baseReleases];
-}
-
-function keepExplicitLegacyTypeOverrides(overrides = {}) {
-  return Object.fromEntries(
-    Object.entries(overrides).filter(
-      ([releaseId, releaseType]) =>
-        BASE_RELEASE_BY_ID.has(releaseId) && releaseType !== "OTHER",
-    ),
-  );
-}
-
-function loadInitialLibraryState() {
-  try {
-    const savedUserState = window.localStorage.getItem(USER_STATE_KEY);
-    if (savedUserState) {
-      const userState = JSON.parse(savedUserState);
-      return { releases: applyUserState(userState), userState };
-    }
-
-    const legacyUserStateValue =
-      window.localStorage.getItem(LEGACY_USER_STATE_KEY);
-    if (legacyUserStateValue) {
-      const legacyUserState = JSON.parse(legacyUserStateValue);
-      const userState = {
-        ...legacyUserState,
-        releaseTypeOverrides: keepExplicitLegacyTypeOverrides(
-          legacyUserState.releaseTypeOverrides,
-        ),
-      };
-      window.localStorage.setItem(USER_STATE_KEY, JSON.stringify(userState));
-      window.localStorage.removeItem(LEGACY_USER_STATE_KEY);
-      return { releases: applyUserState(userState), userState };
-    }
-
-    for (const legacyKey of LEGACY_FULL_LIBRARY_KEYS) {
-      const legacyValue = window.localStorage.getItem(legacyKey);
-      if (!legacyValue) continue;
-      const legacyReleases = JSON.parse(legacyValue);
-      const legacyTypeOverrides = Object.fromEntries(
-        legacyReleases
-          .filter((release) => {
-            const baseRelease = BASE_RELEASE_BY_ID.get(release.id);
-            return (
-              baseRelease &&
-              release.releaseType !== "OTHER" &&
-              release.releaseType !== baseRelease.releaseType
-            );
-          })
-          .map((release) => [release.id, release.releaseType]),
-      );
-      const migratedState = deriveUserState(
-        legacyReleases,
-        legacyTypeOverrides,
-      );
-      window.localStorage.setItem(
-        USER_STATE_KEY,
-        JSON.stringify(migratedState),
-      );
-      LEGACY_FULL_LIBRARY_KEYS.forEach((key) =>
-        window.localStorage.removeItem(key),
-      );
-      return {
-        releases: applyUserState(migratedState),
-        userState: migratedState,
-      };
-    }
-    const userState = deriveUserState(seedReleases);
-    return { releases: applyUserState(userState), userState };
-  } catch {
-    const userState = deriveUserState(seedReleases);
-    return { releases: applyUserState(userState), userState };
-  }
-}
 
 function LibraryApp() {
   const location = useLocation();
@@ -302,6 +151,9 @@ function LibraryApp() {
   const [artistIdentityState, setArtistIdentityState] = useState(
     loadArtistIdentityState,
   );
+  const [artistProfileState, setArtistProfileState] = useState(
+    loadArtistProfileState,
+  );
   const [releaseTypeOverrides, setReleaseTypeOverrides] = useState(
     initialLibraryState.userState.releaseTypeOverrides ?? {},
   );
@@ -310,34 +162,55 @@ function LibraryApp() {
   );
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(loadLibraryFilters);
+  const [listeningGuideStatuses, setListeningGuideStatuses] = useState({});
   const [showFilters, setShowFilters] = useState(false);
+  const readOnly = isReadOnlyMode();
+  const previewMeta = getRemotePreviewMeta();
   const [sort, setSort] = useState("listened_desc");
   const [artistSort, setArtistSort] = useState("average_desc");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const [toast, setToast] = useState("");
+  const [roamCountriesRefreshing, setRoamCountriesRefreshing] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [listeningReleaseId, setListeningReleaseId] = useState(null);
+  const [optimisticDetailId, setOptimisticDetailId] = useState(null);
   const loadMoreSentinelRef = useRef(null);
   const libraryWorkspaceReturnRef = useRef(null);
+  const skipInitialUserStatePersistRef = useRef(true);
+  const skipInitialArtistProfilePersistRef = useRef(true);
+  const roamRefreshAutoStartRef = useRef(false);
 
-  const isArtistRoute = location.pathname === "/artists";
-  const isAddRoute = location.pathname === "/admin/add";
-  const isImportRoute = location.pathname === "/admin/import";
-  const isSyncRoute = location.pathname === "/sync";
-  const isSettingsRoute =
-    location.pathname === "/settings" ||
-    location.pathname === "/settings/artists";
-  const isArtistSettingsRoute =
-    location.pathname === "/settings/artists";
-  const isDuplicateRoute =
-    location.pathname === "/settings/duplicates" ||
-    location.pathname === "/duplicates";
-  const selectedArtistId =
-    new URLSearchParams(location.search).get("artist") ?? "";
-  const isArtistIndex = isArtistRoute && !selectedArtistId;
-  const detailId = location.pathname.startsWith("/releases/")
-    ? decodeURIComponent(location.pathname.split("/").pop())
-    : null;
+  const refreshListeningGuideStatuses = useCallback(async () => {
+    try {
+      const response = await fetch("/api/listening-guides/statuses", {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      setListeningGuideStatuses(payload.statuses ?? {});
+    } catch {
+      // The filter remains usable with an empty local index while the service starts.
+    }
+  }, []);
+
+  const {
+    isArtistRoute,
+    isRoamRoute,
+    selectedRoamCountry,
+    isAddRoute,
+    isImportRoute,
+    isSyncRoute,
+    isSettingsRoute,
+    isArtistSettingsRoute,
+    isDuplicateRoute,
+    selectedArtistId,
+    isArtistIndex,
+    detailId: routeDetailId,
+    detailReturnTarget,
+    detailReturnArtistId,
+    detailReturnCountryCode,
+  } = getLibraryRouteState(location);
+  const detailId = optimisticDetailId ?? routeDetailId;
   const selectedRelease = releases.find((release) => release.id === detailId);
   const selectedReleaseArtistTargets = useMemo(
     () =>
@@ -354,33 +227,88 @@ function LibraryApp() {
   );
 
   useEffect(() => {
-    const serializedState = JSON.stringify(
-      deriveUserState(releases, releaseTypeOverrides),
-    );
-    try {
-      window.localStorage.setItem(USER_STATE_KEY, serializedState);
-      notifySharedLocalStateChanged();
-    } catch (error) {
-      try {
-        LEGACY_FULL_LIBRARY_KEYS.forEach((key) =>
-          window.localStorage.removeItem(key),
-        );
-        window.localStorage.removeItem(LEGACY_USER_STATE_KEY);
-        window.localStorage.setItem(USER_STATE_KEY, serializedState);
-        notifySharedLocalStateChanged();
-      } catch (retryError) {
-        console.warn("用户变更暂时无法写入本地存储", retryError ?? error);
-      }
+    if (skipInitialUserStatePersistRef.current) {
+      skipInitialUserStatePersistRef.current = false;
+      return;
     }
-  }, [releases, releaseTypeOverrides]);
+    if (readOnly) return;
+    if (persistUserState(releases, releaseTypeOverrides)) {
+      notifySharedLocalStateChanged();
+    }
+  }, [readOnly, releases, releaseTypeOverrides]);
 
   useEffect(() => {
-    saveArtistIdentityState(artistIdentityState);
-  }, [artistIdentityState]);
+    if (!readOnly) saveArtistIdentityState(artistIdentityState);
+  }, [artistIdentityState, readOnly]);
+
+  useEffect(() => {
+    if (readOnly) return;
+    setArtistIdentityState((current) => {
+      const reconciliation = ensureArtistIdentitiesForReleases(current, releases);
+      return reconciliation.created ? reconciliation.state : current;
+    });
+  }, [readOnly, releases]);
+
+  useEffect(() => {
+    if (skipInitialArtistProfilePersistRef.current) {
+      skipInitialArtistProfilePersistRef.current = false;
+      return;
+    }
+    saveArtistProfileState(artistProfileState, window.localStorage, {
+      notify: !readOnly,
+    });
+  }, [artistProfileState, readOnly]);
 
   useEffect(() => {
     saveLibraryFilters(filters);
   }, [filters]);
+
+  useEffect(() => {
+    refreshListeningGuideStatuses();
+    const handleGuideChange = (event) => {
+      const releaseId = event.detail?.releaseId;
+      if (!releaseId) {
+        refreshListeningGuideStatuses();
+        return;
+      }
+      setListeningGuideStatuses((current) => ({
+        ...current,
+        [releaseId]: event.detail?.status ?? "EMPTY",
+      }));
+    };
+    window.addEventListener("recordshelf-listening-guide-changed", handleGuideChange);
+    return () =>
+      window.removeEventListener(
+        "recordshelf-listening-guide-changed",
+        handleGuideChange,
+      );
+  }, [refreshListeningGuideStatuses]);
+
+  useEffect(() => {
+    if (showFilters) refreshListeningGuideStatuses();
+  }, [refreshListeningGuideStatuses, showFilters]);
+
+  useEffect(() => {
+    if (!readOnly) return;
+    if (
+      isAddRoute ||
+      isImportRoute ||
+      isSyncRoute ||
+      isArtistSettingsRoute ||
+      isDuplicateRoute
+    ) {
+      navigate(`/?view=${view}`, { replace: true });
+    }
+  }, [
+    isAddRoute,
+    isArtistSettingsRoute,
+    isDuplicateRoute,
+    isImportRoute,
+    isSyncRoute,
+    navigate,
+    readOnly,
+    view,
+  ]);
 
   useEffect(() => {
     setReleases((current) => {
@@ -400,6 +328,7 @@ function LibraryApp() {
   }, []);
 
   useEffect(() => {
+    if (isRoamRoute) return;
     const params = new URLSearchParams(location.search);
     if (params.get("focus") === "search") {
       window.setTimeout(
@@ -410,14 +339,27 @@ function LibraryApp() {
   }, [location.search]);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    params.set("view", view);
-    const next = `${location.pathname}?${params.toString()}`;
-    window.history.replaceState({}, "", next);
-  }, [view, location.pathname, location.search]);
+    setOptimisticDetailId(null);
+  }, [routeDetailId]);
 
   useEffect(() => {
-    if (isArtistRoute && !selectedArtistId && view === "wall") {
+    if (isRoamRoute) return;
+    const params = new URLSearchParams(location.search);
+    if (params.get("view") === view) return;
+    params.set("view", view);
+    const search = params.toString();
+    navigate(`${location.pathname}${search ? `?${search}` : ""}`, {
+      replace: true,
+      preventScrollReset: true,
+    });
+  }, [view, location.pathname, location.search, navigate, isRoamRoute]);
+
+  useEffect(() => {
+    if (
+      isArtistRoute &&
+      !selectedArtistId &&
+      ["wall", "shelf"].includes(view)
+    ) {
       setView("grid");
     }
   }, [isArtistRoute, selectedArtistId, view]);
@@ -440,86 +382,49 @@ function LibraryApp() {
       window.removeEventListener("scroll", updateScrollTopVisibility);
   }, []);
 
-  const searchResults = useMemo(() => {
-    const query = normalizeText(search);
-    const filtered = releases.filter((release) =>
-      releaseMatchesLibraryFilters(
-        release,
+  const searchResults = useMemo(
+    () =>
+      getLibrarySearchResults({
+        releases,
+        search,
         filters,
         artistIdentityState,
-      ),
-    );
-    const sortReleases = (releaseA, releaseB) => {
-      if (sort === "rating_desc") {
-        return (
-          (getCurrentRating(releaseB.listeningEntries) ?? -1) -
-          (getCurrentRating(releaseA.listeningEntries) ?? -1)
-        );
-      }
-      if (sort === "title_asc") {
-        return releaseA.title.localeCompare(releaseB.title, "zh-CN");
-      }
-      if (sort === "released_desc") {
-        return compareReleaseDates(releaseA, releaseB, "desc");
-      }
-      if (sort === "released_asc") {
-        return compareReleaseDates(releaseA, releaseB, "asc");
-      }
-      return (
-        Date.parse(getLatestListenedAt(releaseB.listeningEntries) ?? 0) -
-        Date.parse(getLatestListenedAt(releaseA.listeningEntries) ?? 0)
-      );
-    };
-    if (!query) {
-      return {
-        primary: [...filtered].sort(sortReleases),
-        contextual: [],
-      };
-    }
-
-    const primary = filtered
-      .filter(
-        (release) =>
-          releaseMatchesPrimarySearch(release, query) ||
-          releaseMatchesMappedArtistQuery(
-            release,
-            query,
-            artistIdentityState,
-          ),
-      )
-      .sort(sortReleases);
-    const primaryIds = new Set(primary.map((release) => release.id));
-    const contextual = filtered
-      .filter((release) => !primaryIds.has(release.id))
-      .map((release) => ({
-        release,
-        matches: getReleaseContextMatches(release, query),
-      }))
-      .filter((result) => result.matches.length)
-      .sort((resultA, resultB) =>
-        sortReleases(resultA.release, resultB.release),
-      );
-    return { primary, contextual };
-  }, [artistIdentityState, filters, releases, search, sort]);
+        listeningGuideStatuses,
+        sort,
+      }),
+    [
+      artistIdentityState,
+      filters,
+      listeningGuideStatuses,
+      releases,
+      search,
+      sort,
+    ],
+  );
   const visibleReleases = searchResults.primary;
   const contextualSearchResults = searchResults.contextual;
 
-  const counts = useMemo(
-    () =>
-      releases.reduce(
-        (result, release) => {
-          result.ALL += 1;
-          result[release.releaseType] = (result[release.releaseType] ?? 0) + 1;
-          return result;
-        },
-        { ALL: 0, LP: 0, EP: 0, SINGLE: 0 },
-      ),
-    [releases],
-  );
+  const counts = useMemo(() => countReleaseTypes(releases), [releases]);
   const displayedReleases = visibleReleases.slice(0, visibleLimit);
   const displayedContextualResults = contextualSearchResults.slice(
     0,
     visibleLimit,
+  );
+  const allArtistGroups = useMemo(
+    () => groupReleasesByArtistIdentity(releases, artistIdentityState, ""),
+    [artistIdentityState, releases],
+  );
+  const roamModel = useMemo(
+    () => buildRoamModel({ artistGroups: allArtistGroups, artistProfileState }),
+    [allArtistGroups, artistProfileState],
+  );
+  const roamCountryRefreshCandidates = useMemo(
+    () => getRoamCountryRefreshCandidates({
+      artistGroups: allArtistGroups,
+      artistIdentityState,
+      artistProfileState,
+    }),
+    [allArtistGroups, artistIdentityState, artistProfileState],
   );
   const artistGroups = useMemo(
     () =>
@@ -541,12 +446,62 @@ function LibraryApp() {
     () => sortArtistGroups(artistGroups, artistSort),
     [artistGroups, artistSort],
   );
-  const displayedArtistGroups = selectedArtistId
-    ? artistGroups
-    : sortedArtistGroups.slice(0, visibleLimit);
+  const displayedArtistGroups = sortedArtistGroups.slice(0, visibleLimit);
+  const selectedArtistGroup = useMemo(() => {
+    if (!selectedArtistId) return null;
+    const wanted = decodeArtistProfileId(selectedArtistId) || selectedArtistId;
+    return (
+      allArtistGroups.find((group) => group.id === selectedArtistId) ??
+      allArtistGroups.find(
+        (group) =>
+          (decodeArtistProfileId(group.id) || group.id) === wanted,
+      ) ??
+      null
+    );
+  }, [allArtistGroups, selectedArtistId]);
+  const selectedArtistProfile = selectedArtistGroup
+    ? getArtistProfile(artistProfileState, selectedArtistGroup.id, [
+        selectedArtistGroup.artist,
+        ...(selectedArtistGroup.aliases ?? []),
+      ])
+    : null;
+  const selectedArtistProfileNameHints = selectedArtistGroup
+    ? [selectedArtistGroup.artist, ...(selectedArtistGroup.aliases ?? [])]
+    : [];
+  const selectedArtistCollaborators = useMemo(() => {
+    if (!selectedArtistGroup) return [];
+    const collaborators = new Map();
+    selectedArtistGroup.releases.forEach((release) => {
+      getReleaseArtistTargets(release, artistIdentityState).forEach((target) => {
+        if (target.id === selectedArtistGroup.id) return;
+        const current = collaborators.get(target.id) ?? {
+          id: target.id,
+          name: target.canonicalName,
+          count: 0,
+          releaseIds: new Set(),
+          releases: [],
+        };
+        if (!current.releaseIds.has(release.id)) {
+          current.releaseIds.add(release.id);
+          current.count += 1;
+          current.releases.push(release);
+        }
+        collaborators.set(target.id, current);
+      });
+    });
+    return [...collaborators.values()]
+      .map(({ releaseIds, ...collaborator }) => collaborator)
+      .sort(
+        (a, b) =>
+          b.count - a.count || a.name.localeCompare(b.name, "zh-CN"),
+      );
+  }, [artistIdentityState, selectedArtistGroup]);
   const duplicateGroups = useMemo(
-    () => findExactNeoDbDuplicateGroups(releases),
-    [releases],
+    () =>
+      isSettingsRoute || isDuplicateRoute
+        ? findExactNeoDbDuplicateGroups(releases)
+        : [],
+    [isDuplicateRoute, isSettingsRoute, releases],
   );
   const duplicateReleaseCount = useMemo(
     () =>
@@ -672,10 +627,20 @@ function LibraryApp() {
       ? "duplicates"
       : isArtistRoute
         ? "artists"
+        : isRoamRoute
+          ? "roam"
         : "library";
-    navigate(
-      `/releases/${encodeURIComponent(id)}?view=${view}&from=${from}`,
-    );
+    setOptimisticDetailId(id);
+    const params = new URLSearchParams({ view, from });
+    if (from === "artists" && selectedArtistId) {
+      params.set("artist", selectedArtistId);
+    }
+    if (from === "roam" && selectedRoamCountry) {
+      params.set("country", selectedRoamCountry);
+    }
+    navigate(`/releases/${encodeURIComponent(id)}?${params.toString()}`, {
+      preventScrollReset: true,
+    });
   }
 
   function selectArtist(artistId) {
@@ -691,6 +656,334 @@ function LibraryApp() {
     params.set("view", view);
     navigate(`/artists?${params.toString()}`);
   }
+
+  function closeArtistDetail() {
+    const workspace = libraryWorkspaceReturnRef.current;
+    if (workspace) {
+      navigate(workspace.url, { preventScrollReset: true });
+      return;
+    }
+    clearSelectedArtist();
+  }
+
+  async function requestRoamCountryRefresh() {
+    if (roamCountriesRefreshing) return;
+    if (!roamCountryRefreshCandidates.length) {
+      setToast("当前没有待核验的已听艺人");
+      return;
+    }
+    const delay = (milliseconds) =>
+      new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    setRoamCountriesRefreshing(true);
+    setToast(`准备核验 ${roamCountryRefreshCandidates.length} 位艺人的国家资料`);
+    try {
+      const response = await fetch("/api/roam/countries/refresh", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ candidates: roamCountryRefreshCandidates }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.job?.jobId) {
+        throw new Error("未能开始国家资料核验。");
+      }
+      let job = body.job;
+      const deadline = Date.now() + 15 * 60 * 1000;
+      while (["CHECKING", "SAVING"].includes(job.status) && Date.now() < deadline) {
+        setToast(
+          job.currentArtist
+            ? `正在核验 ${job.currentArtist}（${job.checked}/${job.total}）`
+            : `正在核验艺人国家资料（${job.checked}/${job.total}）`,
+        );
+        await delay(900);
+        const pollResponse = await fetch(
+          `/api/roam/countries/refresh?jobId=${encodeURIComponent(job.jobId)}`,
+          { headers: { accept: "application/json" } },
+        );
+        const pollBody = await pollResponse.json().catch(() => ({}));
+        if (!pollResponse.ok || !pollBody.job) {
+          throw new Error("无法读取国家资料核验进度。");
+        }
+        job = pollBody.job;
+      }
+      if (job.status !== "COMPLETED") {
+        throw new Error("国家资料核验未完成，请稍后重试。");
+      }
+      if (job.updates?.length) {
+        setArtistProfileState((current) =>
+          job.updates.reduce(
+            (next, update) => updateArtistProfile(
+              next,
+              update.artistId,
+              update.profile,
+            ),
+            current,
+          ),
+        );
+      }
+      setToast(
+        job.updated
+          ? `已补充 ${job.updated} 位艺人的国家资料`
+          : `已核验 ${job.checked} 位艺人，暂未发现可确认的新地区`,
+      );
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "国家资料核验失败");
+    } finally {
+      setRoamCountriesRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (
+      !isRoamRoute ||
+      readOnly ||
+      params.get("refreshCountries") !== "1" ||
+      roamRefreshAutoStartRef.current
+    ) {
+      return;
+    }
+    roamRefreshAutoStartRef.current = true;
+    params.delete("refreshCountries");
+    navigate(`/roam${params.size ? `?${params.toString()}` : ""}`, {
+      replace: true,
+      preventScrollReset: true,
+    });
+    void requestRoamCountryRefresh();
+  }, [isRoamRoute, location.search, readOnly]);
+
+  async function requestArtistIntroduction() {
+    if (!selectedArtistGroup) return;
+    const artistId = selectedArtistGroup.id;
+    const delay = (milliseconds) =>
+      new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    const applyResearchProfile = (profilePatch) => {
+      setArtistProfileState((current) =>
+        updateArtistProfile(
+          current,
+          artistId,
+          profilePatch,
+          selectedArtistProfileNameHints,
+        ),
+      );
+    };
+    const applyResearchJob = (job) => {
+      const { kind, patch, toast } = artistResearchJobPatch(job);
+      applyResearchProfile(patch);
+      return { kind, toast };
+    };
+    applyResearchProfile({
+      introductionStatus: "PREPARING",
+      researchMessage: "正在准备艺人身份锚点…",
+      researchError: "",
+    });
+    try {
+      const response = await fetch("/api/artists/research", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          artistId,
+          name: selectedArtistGroup.artist,
+          aliases: selectedArtistGroup.aliases,
+          musicBrainzId: selectedArtistGroup.musicBrainzMbid,
+          platformLinks: selectedArtistProfile?.platformLinks,
+          releaseHints: selectedArtistGroup.releases.slice(0, 8).map((release) => ({
+            title: release.title,
+            artists: release.artists,
+            releaseType: release.releaseType,
+            releaseDate: release.releaseDate,
+          })),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message || "艺人公开资料暂时无法更新。");
+      }
+      if (body.profile) {
+        applyResearchProfile(body.profile);
+        setToast("艺人介绍与公开档案已更新");
+        return;
+      }
+      let job = body.job;
+      if (!job?.jobId) throw new Error("未能建立艺人研究任务，请稍后重试。");
+      const deadline = Date.now() + 12 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const { kind, toast } = applyResearchJob(job);
+        if (kind !== "progress") {
+          if (toast) setToast(toast);
+          return;
+        }
+        await delay(850);
+        const pollResponse = await fetch(
+          `/api/artists/research?jobId=${encodeURIComponent(job.jobId)}`,
+        );
+        const pollBody = await pollResponse.json().catch(() => ({}));
+        if (!pollResponse.ok || !pollBody.job) {
+          throw new Error("无法读取艺人研究进度，请稍后重试。");
+        }
+        job = pollBody.job;
+      }
+      throw new Error("联网研究等待超时，原有资料已保留。");
+    } catch (error) {
+      applyResearchProfile({
+        introductionStatus: "FAILED",
+        researchMessage: "",
+        researchError:
+          error instanceof Error
+            ? error.message
+            : "艺人公开资料暂时无法更新。",
+      });
+      setToast("艺人资料更新失败");
+    }
+  }
+
+  function persistArtistProfilePatch(artistId, patch) {
+    if (!artistId) return;
+    setArtistProfileState((current) => {
+      const next = updateArtistProfile(
+        current,
+        artistId,
+        patch,
+        selectedArtistProfileNameHints,
+      );
+      if (!readOnly) {
+        saveArtistProfileState(next, window.localStorage, { notify: true });
+      }
+      return next;
+    });
+  }
+
+  function saveSelectedArtistPlatformLinks(platformLinks) {
+    if (!selectedArtistGroup || readOnly) return;
+    persistArtistProfilePatch(selectedArtistGroup.id, { platformLinks });
+    setToast("艺人主页链接已保存");
+  }
+
+  async function requestSelectedArtistMedia() {
+    if (!selectedArtistGroup || readOnly) return;
+    const artistId = selectedArtistGroup.id;
+    const appleMusicUrl = selectedArtistProfile?.platformLinks?.appleMusic;
+    if (!appleMusicUrl) {
+      setToast("请先添加 Apple Music 艺人主页链接");
+      return;
+    }
+    persistArtistProfilePatch(artistId, {
+      media: {
+        ...(selectedArtistProfile?.media ?? {}),
+        status: "CHECKING",
+        error: "",
+        notice: "",
+        truncated: false,
+      },
+    });
+    try {
+      const response = await fetch("/api/artists/media", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ artistId, appleMusicUrl }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message || "艺人素材暂时无法更新。");
+      persistArtistProfilePatch(artistId, {
+        media: body.media,
+        platformLinks: {
+          appleMusic: body.appleMusicUrl || appleMusicUrl,
+        },
+      });
+      setToast(
+        body.media?.error
+          ? body.media.error
+          : body.media?.notice
+            ? body.media.notice
+            : body.media?.localMotionUrl
+              ? "艺人动态素材已写入本机"
+              : body.media?.imageUrl
+                ? "艺人图片已写入本机"
+                : "Apple Music 暂无可用艺人素材",
+      );
+    } catch (error) {
+      persistArtistProfilePatch(artistId, {
+        media: {
+          status: "FAILED",
+          error:
+            error instanceof Error ? error.message : "艺人素材暂时无法更新。",
+        },
+      });
+      setToast("艺人素材更新失败");
+    }
+  }
+
+  async function requestSelectedArtistCatalog() {
+    if (!selectedArtistGroup) return;
+    const artistId = selectedArtistGroup.id;
+    const appleMusicUrl = selectedArtistProfile?.platformLinks?.appleMusic;
+    if (!appleMusicUrl) {
+      setToast("请先添加 Apple Music 艺人主页链接");
+      return;
+    }
+    persistArtistProfilePatch(artistId, {
+      explorationEnabled: true,
+      explorationCatalog: {
+        ...(selectedArtistProfile?.explorationCatalog ?? {}),
+        status: "CHECKING",
+        error: "",
+      },
+    });
+    try {
+      const response = await fetch("/api/artists/catalog", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ appleMusicUrl }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.catalog) {
+        throw new Error(body.message || "艺人作品目录暂时无法更新。");
+      }
+      persistArtistProfilePatch(artistId, {
+        explorationEnabled: true,
+        explorationCatalog: body.catalog,
+      });
+      setToast(`已更新 ${body.catalog.releases?.length ?? 0} 张艺人发行`);
+    } catch (error) {
+      persistArtistProfilePatch(artistId, {
+        explorationCatalog: {
+          ...(selectedArtistProfile?.explorationCatalog ?? {}),
+          status: "FAILED",
+          error:
+            error instanceof Error
+              ? error.message
+              : "艺人作品目录暂时无法更新。",
+        },
+      });
+      setToast("艺人作品目录更新失败");
+    }
+  }
+
+  const applyLibrarySearch = useCallback(
+    (nextSearch) => {
+      if (nextSearch === search) return;
+      setSearch(nextSearch);
+      if (isDuplicateRoute) {
+        navigate(`/?view=${view}`);
+      } else if (isArtistRoute && selectedArtistId) {
+        const params = new URLSearchParams(location.search);
+        params.delete("artist");
+        navigate(`/artists?${params.toString()}`);
+      }
+    },
+    [
+      isArtistRoute,
+      isDuplicateRoute,
+      location.search,
+      navigate,
+      search,
+      selectedArtistId,
+      view,
+    ],
+  );
+
+  const clearLibrarySearch = useCallback(() => {
+    setSearch("");
+  }, []);
 
   function openArtistFromDetail(artistId) {
     const from = new URLSearchParams(location.search).get("from");
@@ -739,7 +1032,7 @@ function LibraryApp() {
 
   function updateReleaseType(releaseId, releaseType) {
     let updatedTitle = "";
-    const baseRelease = BASE_RELEASE_BY_ID.get(releaseId);
+    const baseRelease = getBaseRelease(releaseId);
     setReleases((current) =>
       current.map((release) => {
         if (release.id !== releaseId) return release;
@@ -772,6 +1065,182 @@ function LibraryApp() {
       }`,
     );
   }
+
+  function updateReleasePlatformLink(releaseId, provider, url) {
+    const providerLabels = {
+      NEODB: "NeoDB",
+      APPLE_MUSIC: "Apple Music",
+      SPOTIFY: "Spotify",
+    };
+    const currentRelease = releases.find(
+      (release) => release.id === releaseId,
+    );
+    if (!currentRelease) return "未找到发行记录";
+    const result = upsertConfirmedExternalLink(
+      currentRelease,
+      url,
+      provider,
+    );
+    if (result.error) {
+      setToast(result.error);
+      return result.error;
+    }
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId ? result.release : release,
+      ),
+    );
+    setToast(
+      `已为《${currentRelease.title}》保存 ${
+        providerLabels[provider] ?? provider
+      } 链接`,
+    );
+    return true;
+  }
+
+  function clearReleasePlatformLink(releaseId, provider) {
+    const providerLabels = {
+      NEODB: "NeoDB",
+      APPLE_MUSIC: "Apple Music",
+      SPOTIFY: "Spotify",
+    };
+    const currentRelease = releases.find(
+      (release) => release.id === releaseId,
+    );
+    if (!currentRelease) return "未找到发行记录";
+    const result = clearConfirmedExternalLink(currentRelease, provider);
+    if (result.error) {
+      setToast(result.error);
+      return result.error;
+    }
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId ? result.release : release,
+      ),
+    );
+    setToast(
+      `已清除《${currentRelease.title}》的 ${
+        providerLabels[provider] ?? provider
+      } 链接`,
+    );
+    return true;
+  }
+
+  function updateAlbumIntroduction(releaseId, rawText) {
+    const text = normalizeAlbumIntroduction(rawText);
+    let updatedTitle = "";
+    setReleases((current) =>
+      current.map((release) => {
+        if (release.id !== releaseId) return release;
+        updatedTitle = release.title;
+        if (!text) {
+          const next = { ...release };
+          delete next.albumIntroduction;
+          return next;
+        }
+        return { ...release, albumIntroduction: text };
+      }),
+    );
+    persistReleaseOverlay(releaseId, {
+      albumIntroduction: text || null,
+    });
+    setToast(
+      text
+        ? `已保存《${updatedTitle}》的专辑介绍`
+        : `已清除《${updatedTitle}》的专辑介绍`,
+    );
+  }
+
+  async function copyReleaseId(releaseId, releaseTitle) {
+    try {
+      await navigator.clipboard.writeText(releaseId);
+    } catch {
+      const fallback = document.createElement("textarea");
+      fallback.value = releaseId;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      const copied = document.execCommand("copy");
+      fallback.remove();
+      if (!copied) {
+        setToast("复制失败，请稍后再试");
+        return false;
+      }
+    }
+    setToast(`已复制《${releaseTitle}》的专辑 ID`);
+    return true;
+  }
+
+  function applyCoverUpdates(updates = []) {
+    const updatesById = new Map(
+      updates
+        .filter(
+          (update) =>
+            update?.id &&
+            (String(update.coverUrl ?? "").startsWith("/private-covers/") ||
+              /^https?:\/\//i.test(String(update.coverUrl ?? ""))),
+        )
+        .map((update) => [update.id, update]),
+    );
+    if (!updatesById.size) return;
+    setReleases((current) =>
+      current.map((release) => {
+        const update = updatesById.get(release.id);
+        if (!update) return release;
+        return {
+          ...release,
+          coverUrl: update.coverUrl,
+          coverRemoteUrl: update.coverRemoteUrl ?? release.coverRemoteUrl,
+          coverSource: update.coverSource ?? release.coverSource,
+          coverMatchedFrom:
+            update.coverMatchedFrom ?? release.coverMatchedFrom,
+          coverMatchedAt: update.coverMatchedAt ?? release.coverMatchedAt,
+        };
+      }),
+    );
+  }
+
+  function applyMotionArtworkUpdates(updates = []) {
+    const updatesById = new Map(
+      updates
+        .filter((update) => update?.id && update.motionArtwork?.checkedAt)
+        .map((update) => [update.id, update.motionArtwork]),
+    );
+    if (!updatesById.size) return;
+    setReleases((current) =>
+      current.map((release) =>
+        updatesById.has(release.id)
+          ? { ...release, motionArtwork: updatesById.get(release.id) }
+          : release,
+      ),
+    );
+    for (const [releaseId, motionArtwork] of updatesById) {
+      persistReleaseOverlay(releaseId, { motionArtwork });
+    }
+  }
+
+  function applyExternalRatings(releaseId, externalRatings) {
+    if (!releaseId || !externalRatings?.checkedAt) return;
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId
+          ? { ...release, externalRatings }
+        : release,
+      ),
+    );
+  }
+
+  const applyTracklist = useCallback((releaseId, tracklist) => {
+    if (!releaseId || tracklist?.status !== "SUCCESS") return;
+    setReleases((current) =>
+      current.map((release) =>
+        release.id === releaseId ? { ...release, tracklist } : release,
+      ),
+    );
+    persistReleaseOverlay(releaseId, { tracklist });
+  }, []);
 
   function findMergeCandidate(releaseId, inputUrl) {
     return findReleaseByReferenceUrl(
@@ -925,13 +1394,13 @@ function LibraryApp() {
     );
   }
 
-  function restoreFactorySettings() {
+  async function restoreFactorySettings() {
     const acknowledged = window.confirm(
-      "恢复出厂设置会清除 Web 与 Mac 共用的手动添加、编辑、删除、重复项取舍、艺人映射、筛选条件和 NeoDB 同步状态，并恢复初始音乐库。\n\n是否继续？",
+      "恢复出厂设置会清除 Web 与 Mac 共用的手动添加、编辑、删除、重复项取舍、艺人映射、筛选条件、NeoDB 同步状态和本机 AI 模型连接，并恢复初始音乐库。\n\n是否继续？",
     );
     if (!acknowledged) return;
     const finallyConfirmed = window.confirm(
-      "最后确认：恢复出厂设置后，本地修改无法撤销。建议先导出完整 JSON 备份。\n\n确定恢复出厂设置？",
+      "最后确认：恢复出厂设置后，本地修改无法撤销。建议先在设置中备份音乐库。\n\n确定恢复出厂设置？",
     );
     if (!finallyConfirmed) return;
 
@@ -945,16 +1414,21 @@ function LibraryApp() {
       NEODB_SYNC_STATE_KEY,
       NEODB_OAUTH_CLIENT_KEY,
       DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY,
+      ARTIST_PROFILE_STORAGE_KEY,
     ].forEach((key) => window.localStorage.removeItem(key));
     notifySharedLocalStateChanged();
     [NEODB_ACCESS_TOKEN_KEY, NEODB_OAUTH_PENDING_KEY].forEach((key) =>
       window.sessionStorage.removeItem(key),
     );
+    await fetch("/api/listening-guides/provider", { method: "DELETE" }).catch(
+      () => {},
+    );
 
-    setReleases(seedReleases);
+    setReleases(getSeedReleases());
     setArtistIdentityState(
       sanitizeArtistIdentityState(DEFAULT_ARTIST_IDENTITY_STATE),
     );
+    setArtistProfileState(EMPTY_ARTIST_PROFILE_STATE);
     setReleaseTypeOverrides({});
     setFilters(sanitizeLibraryFilters(EMPTY_LIBRARY_FILTERS));
     setSearch("");
@@ -967,15 +1441,31 @@ function LibraryApp() {
     navigate("/?view=grid");
   }
 
-  const detailReturnTarget = new URLSearchParams(location.search).get("from");
   const activeBasePath = isDuplicateRoute || detailReturnTarget === "duplicates"
     ? "/settings/duplicates"
     : isArtistRoute || detailReturnTarget === "artists"
       ? "/artists"
+      : isRoamRoute || detailReturnTarget === "roam"
+        ? detailReturnCountryCode
+          ? `/roam/${detailReturnCountryCode.toLowerCase()}`
+          : "/roam"
       : "/";
+  const addReleaseHref = readOnly
+    ? getLocalAuthoringHref({
+        hostname: window.location.hostname,
+        protocol: window.location.protocol,
+        pathname: "/admin/add",
+        search: `view=${view}`,
+      })
+    : `/admin/add?view=${view}`;
+  const showLibraryAddFab =
+    location.pathname === "/" && Boolean(addReleaseHref);
   function navItemIsActive(href) {
     if (href === "/artists") {
       return isArtistRoute || detailReturnTarget === "artists";
+    }
+    if (href === "/roam") {
+      return isRoamRoute || detailReturnTarget === "roam";
     }
     if (href === "/settings") {
       return (
@@ -989,7 +1479,7 @@ function LibraryApp() {
       return (
         location.pathname === "/" ||
         (location.pathname.startsWith("/releases/") &&
-          !["artists", "duplicates"].includes(detailReturnTarget))
+          !["artists", "duplicates", "roam"].includes(detailReturnTarget))
       );
     }
     return location.pathname === href;
@@ -1006,7 +1496,7 @@ function LibraryApp() {
     <div className="app-shell">
       <aside className="desktop-sidebar" aria-label="主导航">
         <Link className="brand-mark" to="/" aria-label="RecordShelf 首页">
-          <MusicNotes weight="fill" />
+          <img src="/recordshelf-logo.png" alt="" aria-hidden="true" />
         </Link>
         <nav>
           {navItems.map(({ href, label, Icon }) => {
@@ -1035,42 +1525,50 @@ function LibraryApp() {
       </aside>
 
       <main className="library-main">
+        {isRoamRoute ? (
+          <Suspense
+            fallback={
+              <div className="roam-loading" role="status">
+                正在展开你的听歌世界…
+              </div>
+            }
+          >
+            <RoamPage
+              model={roamModel}
+              selectedCountryCode={selectedRoamCountry}
+              onOpenRelease={openRelease}
+              onOpenArtist={selectArtist}
+              onRefreshCountries={readOnly ? undefined : requestRoamCountryRefresh}
+              refreshCountriesHref={readOnly ? getLocalAuthoringHref({
+                hostname: window.location.hostname,
+                protocol: window.location.protocol,
+                pathname: "/roam",
+                search: "?refreshCountries=1",
+              }) : ""}
+              refreshingCountries={roamCountriesRefreshing}
+            />
+          </Suspense>
+        ) : (
+          <>
         <header className="library-header">
           <div>
-            <p className="eyebrow">你的听歌档案</p>
+            <p className="eyebrow">
+              {readOnly ? "只读预览" : "你的听歌档案"}
+            </p>
             <h1>RecordShelf</h1>
-            <p>{releases.length} releases</p>
+            <p>
+              {releases.length} releases
+              {readOnly && previewMeta.updatedAt
+                ? ` · 更新于 ${new Date(previewMeta.updatedAt).toLocaleString("zh-CN")}`
+                : ""}
+            </p>
           </div>
           <div className="header-actions">
-            <label className="search-field">
-              <MagnifyingGlass aria-hidden="true" />
-              <span className="sr-only">搜索发行、艺人、流派或评论</span>
-              <input
-                id="library-search"
-                type="search"
-                value={search}
-                placeholder="搜索唱片、艺人或评论"
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  if (isDuplicateRoute) {
-                    navigate(`/?view=${view}`);
-                  } else if (isArtistRoute && selectedArtistId) {
-                    const params = new URLSearchParams(location.search);
-                    params.delete("artist");
-                    navigate(`/artists?${params.toString()}`);
-                  }
-                }}
-              />
-              {search ? (
-                <button
-                  type="button"
-                  onClick={() => setSearch("")}
-                  aria-label="清除搜索"
-                >
-                  <X aria-hidden="true" />
-                </button>
-              ) : null}
-            </label>
+            <LibrarySearchField
+              appliedQuery={search}
+              onApply={applyLibrarySearch}
+              onClear={clearLibrarySearch}
+            />
             <button
               type="button"
               className={`icon-button filter-button${
@@ -1086,10 +1584,6 @@ function LibraryApp() {
                 </span>
               ) : null}
             </button>
-            <Link className="primary-button desktop-add" to="/admin/add">
-              <Plus aria-hidden="true" />
-              添加唱片
-            </Link>
           </div>
         </header>
 
@@ -1103,10 +1597,12 @@ function LibraryApp() {
                 按艺人
               </Link>
             </div>
-            <Link className="import-link" to="/admin/import">
-              <UploadSimple aria-hidden="true" />
-              导入 CSV
-            </Link>
+            {readOnly ? null : (
+              <Link className="import-link" to="/admin/import">
+                <UploadSimple aria-hidden="true" />
+                导入 CSV
+              </Link>
+            )}
           </div>
         ) : null}
 
@@ -1207,6 +1703,7 @@ function LibraryApp() {
                       ["grid", GridFour, "宫格"],
                       ["list", ListBullets, "列表"],
                       ["wall", GridNine, "唱片墙"],
+                      ["shelf", Rows, "唱片架"],
                     ]
               ).map(([value, Icon, label]) => (
                 <button
@@ -1224,7 +1721,9 @@ function LibraryApp() {
           </div>
         </section>
 
-        <section className="library-content">
+        <section
+          className={`library-content${view === "shelf" ? " is-shelf-view" : ""}`}
+        >
           {search ? (
             <header className="primary-search-heading">
               <div>
@@ -1242,20 +1741,32 @@ function LibraryApp() {
             isArtistRoute ? (
               <ArtistGroups
                 groups={displayedArtistGroups}
-                selectedArtistId={selectedArtistId}
+                selectedArtistId=""
                 view={view}
                 onSelectArtist={selectArtist}
                 onClearArtist={clearSelectedArtist}
                 onOpen={openRelease}
-                onChangeType={updateReleaseType}
+                onChangeType={readOnly ? undefined : updateReleaseType}
+                onCopyReleaseId={copyReleaseId}
               />
             ) : view === "list" ? (
-              <ReleaseList releases={displayedReleases} onOpen={openRelease} />
+              <ReleaseList
+                releases={displayedReleases}
+                onOpen={openRelease}
+                onCopyReleaseId={copyReleaseId}
+              />
+            ) : view === "shelf" ? (
+              <ReleaseShelf
+                releases={displayedReleases}
+                onOpen={openRelease}
+                onCopyReleaseId={copyReleaseId}
+              />
             ) : (
               <ReleaseGrid
                 releases={displayedReleases}
                 onOpen={openRelease}
-                onChangeType={updateReleaseType}
+                onChangeType={readOnly ? undefined : updateReleaseType}
+                onCopyReleaseId={copyReleaseId}
                 wall={view === "wall"}
               />
             )
@@ -1325,7 +1836,21 @@ function LibraryApp() {
         ) : null}
           </>
         )}
+          </>
+        )}
       </main>
+
+      {showLibraryAddFab ? (
+        <Link
+          className="library-add-fab"
+          to={addReleaseHref}
+          aria-label="添加唱片"
+          title={readOnly ? "前往本机可写端添加唱片" : "添加唱片"}
+        >
+          <Plus weight="bold" aria-hidden="true" />
+          <span>添加唱片</span>
+        </Link>
+      ) : null}
 
       <nav className="mobile-nav" aria-label="移动端导航">
         {navItems.map(({ href, label, Icon }) => {
@@ -1347,7 +1872,7 @@ function LibraryApp() {
       {showScrollTop ? (
         <button
           type="button"
-          className={`scroll-top-button${toast ? " has-toast" : ""}`}
+          className={`scroll-top-button${toast ? " has-toast" : ""}${showLibraryAddFab ? " has-library-add-fab" : ""}`}
           aria-label="返回页面顶部"
           title="返回顶部"
           onClick={() =>
@@ -1367,14 +1892,88 @@ function LibraryApp() {
       <ReleaseDetail
         release={selectedRelease}
         artistTargets={selectedReleaseArtistTargets}
-        onClose={() => navigate(`${activeBasePath}?view=${view}`)}
-        onAddListening={(releaseId) => setListeningReleaseId(releaseId)}
-        onChangeType={updateReleaseType}
-        onFindMergeCandidate={findMergeCandidate}
-        onMergeRelease={mergeReleaseSelection}
+        onClose={() => {
+          setOptimisticDetailId(null);
+          if (detailReturnTarget === "artists" && detailReturnArtistId) {
+            const params = new URLSearchParams({
+              view,
+              artist: detailReturnArtistId,
+            });
+            navigate(`/artists?${params.toString()}`, {
+              preventScrollReset: true,
+            });
+          } else if (detailReturnTarget === "roam") {
+            navigate(
+              detailReturnCountryCode
+                ? `/roam/${detailReturnCountryCode.toLowerCase()}`
+                : "/roam",
+              { preventScrollReset: true },
+            );
+          } else {
+            navigate(`${activeBasePath}?view=${view}`, {
+              preventScrollReset: true,
+            });
+          }
+        }}
+        onAddListening={
+          readOnly ? undefined : (releaseId) => setListeningReleaseId(releaseId)
+        }
+        onChangeType={readOnly ? undefined : updateReleaseType}
+        onUpdatePlatformLink={readOnly ? undefined : updateReleasePlatformLink}
+        onClearPlatformLink={readOnly ? undefined : clearReleasePlatformLink}
+        onSaveAlbumIntroduction={readOnly ? undefined : updateAlbumIntroduction}
+        onFindMergeCandidate={readOnly ? undefined : findMergeCandidate}
+        onMergeRelease={readOnly ? undefined : mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
+        onApplyMotionArtworkUpdates={applyMotionArtworkUpdates}
+        onApplyExternalRatings={readOnly ? undefined : applyExternalRatings}
+        onApplyTracklist={readOnly ? undefined : applyTracklist}
+        onApplyCoverUpdates={readOnly ? undefined : applyCoverUpdates}
+        onToast={setToast}
       />
-      {isAddRoute ? (
+      {isArtistRoute ? (
+        <ArtistDetail
+          artist={selectedArtistGroup}
+          profile={selectedArtistProfile}
+          collaborators={selectedArtistCollaborators}
+          onClose={closeArtistDetail}
+          onOpenRelease={openRelease}
+          onOpenArtist={selectArtist}
+          onToggleExploration={(explorationEnabled) => {
+            if (!selectedArtistGroup) return;
+            setArtistProfileState((current) =>
+              updateArtistProfile(
+                current,
+                selectedArtistGroup.id,
+                { explorationEnabled },
+                selectedArtistProfileNameHints,
+              ),
+            );
+          }}
+          onChangeReleaseView={(releaseView) => {
+            if (!selectedArtistGroup || readOnly) return;
+            setArtistProfileState((current) =>
+              updateArtistProfile(
+                current,
+                selectedArtistGroup.id,
+                { releaseView },
+                selectedArtistProfileNameHints,
+              ),
+            );
+          }}
+          onRequestIntroduction={requestArtistIntroduction}
+          onRequestExplorationCatalog={requestSelectedArtistCatalog}
+          onSavePlatformLinks={readOnly ? undefined : saveSelectedArtistPlatformLinks}
+          onRequestMedia={readOnly ? undefined : requestSelectedArtistMedia}
+          onToggleMotion={(nextEnabled) => {
+            if (!selectedArtistGroup || readOnly) return;
+            persistArtistProfilePatch(selectedArtistGroup.id, {
+              media: { motionEnabled: nextEnabled },
+            });
+          }}
+        />
+      ) : null}
+      {isAddRoute && !readOnly ? (
         <AddReleaseDialog
           onClose={() => navigate(`${activeBasePath}?view=${view}`)}
           onSaveRelease={saveRelease}
@@ -1388,14 +1987,14 @@ function LibraryApp() {
           onSaveListening={saveListening}
         />
       ) : null}
-      {isImportRoute ? (
+      {isImportRoute && !readOnly ? (
         <ImportDialog
           releases={releases}
           onClose={() => navigate(`${activeBasePath}?view=${view}`)}
           onCommit={commitImport}
         />
       ) : null}
-      {isSyncRoute ? (
+      {isSyncRoute && !readOnly ? (
         <NeoDbSyncDialog
           releases={releases}
           identityReleases={seedReleases}
@@ -1421,14 +2020,16 @@ function LibraryApp() {
           onOpenDuplicateManager={() =>
             navigate(`/settings/duplicates?view=${view}`)
           }
-          onOpenSync={() => navigate(`/sync?view=${view}`)}
+          onOpenSync={readOnly ? undefined : () => navigate(`/sync?view=${view}`)}
           onBack={() => navigate(`/settings?view=${view}`)}
           onClose={() => navigate(`/?view=${view}`)}
           onExport={exportJson}
           backupText={serializedLibraryExport()}
-          onMergeBackup={mergeJsonBackup}
-          onRestore={restoreFactorySettings}
+          onMergeBackup={readOnly ? undefined : mergeJsonBackup}
+          onRestore={readOnly ? undefined : restoreFactorySettings}
           onToast={setToast}
+          onApplyCoverUpdates={readOnly ? undefined : applyCoverUpdates}
+          readOnly={readOnly}
         />
       ) : null}
       <FilterDrawer
@@ -1436,6 +2037,7 @@ function LibraryApp() {
         releases={releases}
         filters={filters}
         artistIdentityState={artistIdentityState}
+        listeningGuideStatuses={listeningGuideStatuses}
         onApply={(nextFilters) => {
           setFilters(nextFilters);
           setShowFilters(false);
@@ -1444,7 +2046,7 @@ function LibraryApp() {
         onClose={() => setShowFilters(false)}
       />
       {toast ? (
-        <div className="toast" role="status">
+        <div className={`toast${showLibraryAddFab ? " has-library-add-fab" : ""}`} role="status">
           {toast}
         </div>
       ) : null}

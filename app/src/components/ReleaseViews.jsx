@@ -1,46 +1,29 @@
-import {
-  ArrowLeft,
-  ArrowRight,
-  ImageBroken,
-  LockSimple,
-} from "@phosphor-icons/react";
+import { ArrowLeft, ArrowRight, LockSimple } from "@phosphor-icons/react";
+import { useState } from "react";
 import {
   displayDate,
   getCurrentRating,
+  getEffectiveMarkStatus,
   getLatestListenedAt,
   getLatestMarkedAt,
+  getMarkStatusLabel,
   getReleaseKindLabel,
 } from "../lib/music.js";
 import { Rating } from "./Rating.jsx";
+import { useReleaseIdMenu } from "./ReleaseIdMenu.jsx";
+import { markCoverLoadFailed } from "../lib/coverStatus.js";
+import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
 
 const QUICK_RELEASE_TYPES = ["OTHER", "LP", "EP", "SINGLE"];
-
-function coverHue(release) {
-  const key = `${release.title}${release.artists.join("")}`;
-  const total = [...key].reduce(
-    (sum, character) => sum + character.codePointAt(0),
-    0,
-  );
-  return total % 360;
-}
+const RELEASES_PER_SHELF = 5;
 
 export function Cover({ release, className = "" }) {
-  return release.coverUrl ? (
-    <img
-      className={`release-cover ${className}`}
-      src={release.coverUrl}
-      alt={`${release.artists.join("、")}《${release.title}》封面`}
-      loading="lazy"
+  return (
+    <ReleaseArtwork
+      release={release}
+      className={className}
+      onStaticError={() => markCoverLoadFailed(release.id)}
     />
-  ) : (
-    <div
-      className={`release-cover cover-placeholder ${className}`}
-      aria-label={`${release.title} 暂无封面`}
-      style={{ "--cover-hue": coverHue(release) }}
-    >
-      <ImageBroken aria-hidden="true" />
-      <span>{release.title.slice(0, 1).toUpperCase()}</span>
-    </div>
   );
 }
 
@@ -48,10 +31,13 @@ export function ReleaseGrid({
   releases,
   onOpen,
   onChangeType,
+  onCopyReleaseId,
   wall = false,
 }) {
+  const releaseIdMenu = useReleaseIdMenu(onCopyReleaseId);
   return (
-    <div className={wall ? "release-wall" : "release-grid"}>
+    <>
+      <div className={wall ? "release-wall" : "release-grid"}>
       {releases.map((release) => {
         const rating = getCurrentRating(release.listeningEntries);
         const latestMarkedAt = getLatestMarkedAt(release.listeningEntries);
@@ -59,11 +45,14 @@ export function ReleaseGrid({
           <article
             className={wall ? "wall-item" : "release-card"}
             key={release.id}
+            {...releaseIdMenu.bindRelease(release)}
           >
             <button
               type="button"
               className="cover-button"
-              onClick={() => onOpen(release.id)}
+              onClick={(event) =>
+                releaseIdMenu.activateRelease(event, release, onOpen)
+              }
               aria-label={`打开 ${release.artists[0]} 的 ${release.title}`}
             >
               <Cover release={release} />
@@ -88,7 +77,9 @@ export function ReleaseGrid({
                 <button
                   type="button"
                   className="release-title-button"
-                  onClick={() => onOpen(release.id)}
+                  onClick={(event) =>
+                    releaseIdMenu.activateRelease(event, release, onOpen)
+                  }
                 >
                   {release.title}
                 </button>
@@ -99,7 +90,8 @@ export function ReleaseGrid({
                 ) : null}
                 <p className="release-artist">{release.artists.join("、")}</p>
                 <div className="release-meta">
-                  <button
+                  {onChangeType ? (
+                    <button
                     type="button"
                     className="release-type-quick"
                     onClick={() => {
@@ -111,7 +103,7 @@ export function ReleaseGrid({
                           (Math.max(currentIndex, 0) + 1) %
                             QUICK_RELEASE_TYPES.length
                         ];
-                      onChangeType?.(release.id, nextType);
+                      onChangeType(release.id, nextType);
                     }}
                     aria-label={`《${release.title}》当前类型为 ${
                       release.releaseType === "OTHER"
@@ -124,6 +116,13 @@ export function ReleaseGrid({
                       ? "未分类"
                       : release.releaseType}
                   </button>
+                  ) : (
+                    <span className="release-type-quick">
+                      {release.releaseType === "OTHER"
+                        ? "未分类"
+                        : release.releaseType}
+                    </span>
+                  )}
                   <span aria-hidden="true">·</span>
                   <span>
                     {release.releaseDate
@@ -140,23 +139,32 @@ export function ReleaseGrid({
           </article>
         );
       })}
-    </div>
+      </div>
+      {releaseIdMenu.menuElement}
+    </>
   );
 }
 
-export function ReleaseList({ releases, onOpen }) {
+export function ReleaseList({ releases, onOpen, onCopyReleaseId }) {
+  const releaseIdMenu = useReleaseIdMenu(onCopyReleaseId);
   return (
-    <div className="release-list">
+    <>
+      <div className="release-list">
       {releases.map((release) => {
         const rating = getCurrentRating(release.listeningEntries);
         const latest = getLatestListenedAt(release.listeningEntries);
         const latestMarkedAt = getLatestMarkedAt(release.listeningEntries);
+        const effectiveMarkStatus = getEffectiveMarkStatus(release);
+        const markStatusLabel = getMarkStatusLabel(effectiveMarkStatus);
         return (
           <button
             type="button"
             className="release-list-row"
             key={release.id}
-            onClick={() => onOpen(release.id)}
+            onClick={(event) =>
+              releaseIdMenu.activateRelease(event, release, onOpen)
+            }
+            {...releaseIdMenu.bindRelease(release)}
           >
             <Cover release={release} />
             <span className="list-release-main">
@@ -182,6 +190,12 @@ export function ReleaseList({ releases, onOpen }) {
             <span className="list-release-genres">
               {release.genres.join(" · ") || "未标记流派"}
             </span>
+            <span
+              className={`list-release-status is-${effectiveMarkStatus ?? "unset"}`}
+              aria-label={`收藏状态：${markStatusLabel}`}
+            >
+              {markStatusLabel}
+            </span>
             <span className="list-release-date">
               {latest ? displayDate(latest) : displayDate(latestMarkedAt)}
             </span>
@@ -189,7 +203,114 @@ export function ReleaseList({ releases, onOpen }) {
           </button>
         );
       })}
-    </div>
+      </div>
+      {releaseIdMenu.menuElement}
+    </>
+  );
+}
+
+function shelfCardStyle(release, index) {
+  const seed = [...`${release.id}${release.title}`].reduce(
+    (total, character) => total + character.codePointAt(0),
+    0,
+  );
+  return {
+    "--shelf-slot": index,
+    "--shelf-lean": `${((seed % 17) - 8) / 10}deg`,
+    "--shelf-rise": `${seed % 12}px`,
+    "--shelf-scale": 0.94 + (seed % 7) / 100,
+  };
+}
+
+export function ReleaseShelf({ releases, onOpen, onCopyReleaseId }) {
+  const releaseIdMenu = useReleaseIdMenu(onCopyReleaseId);
+  const [activeMotionId, setActiveMotionId] = useState("");
+  const shelves = Array.from(
+    { length: Math.ceil(releases.length / RELEASES_PER_SHELF) },
+    (_, index) =>
+      releases.slice(
+        index * RELEASES_PER_SHELF,
+        (index + 1) * RELEASES_PER_SHELF,
+      ),
+  );
+
+  return (
+    <>
+      <div className="release-shelf-view">
+      <header className="release-shelf-intro">
+        <span>RECORD SHELF</span>
+        <small>{releases.length} 张正在展示</small>
+      </header>
+      <div className="release-shelf-stream">
+        {shelves.map((shelf, shelfIndex) => (
+          <section
+            className="release-shelf"
+            key={shelf.map((release) => release.id).join("-")}
+            aria-label={`唱片架 ${shelfIndex + 1}`}
+            style={{ "--shelf-count": shelf.length }}
+          >
+            <span className="release-shelf-index" aria-hidden="true">
+              <span>{String(shelfIndex + 1).padStart(2, "0")}</span>
+              <span>RECORDS</span>
+            </span>
+            <div className="release-shelf-row">
+              {shelf.map((release, index) => {
+                const rating = getCurrentRating(release.listeningEntries);
+                return (
+                  <article
+                    className="release-shelf-record"
+                    key={release.id}
+                    style={shelfCardStyle(release, index)}
+                    onPointerEnter={() => setActiveMotionId(release.id)}
+                    onPointerLeave={() => setActiveMotionId("")}
+                    onFocus={() => setActiveMotionId(release.id)}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setActiveMotionId("");
+                      }
+                    }}
+                    {...releaseIdMenu.bindRelease(release)}
+                  >
+                    <button
+                      type="button"
+                      className="release-shelf-cover-button"
+                      onClick={(event) =>
+                        releaseIdMenu.activateRelease(event, release, onOpen)
+                      }
+                      aria-label={`打开 ${release.artists.join("、")} 的 ${release.title}`}
+                    >
+                      <span className="release-shelf-sleeve">
+                        <ReleaseArtwork
+                          release={release}
+                          active={activeMotionId === release.id}
+                          onStaticError={() => markCoverLoadFailed(release.id)}
+                        />
+                        <span className="release-shelf-glare" aria-hidden="true" />
+                        {release.isPrivate ? (
+                          <span className="cover-lock" aria-label="私密记录">
+                            <LockSimple weight="fill" />
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="release-shelf-caption">
+                        <span>
+                          <strong>{release.title}</strong>
+                          <small>{release.artists.join("、")}</small>
+                        </span>
+                        {rating != null ? <em>{rating.toFixed(1)}</em> : null}
+                      </span>
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+            <span className="release-shelf-board" aria-hidden="true" />
+          </section>
+        ))}
+      </div>
+      </div>
+      {releaseIdMenu.menuElement}
+    </>
   );
 }
 
@@ -201,6 +322,7 @@ export function ArtistGroups({
   onClearArtist,
   onOpen,
   onChangeType,
+  onCopyReleaseId,
 }) {
   const selectedGroup = selectedArtistId
     ? groups.find((group) => group.id === selectedArtistId)
@@ -239,12 +361,20 @@ export function ArtistGroups({
           <ReleaseList
             releases={selectedGroup.releases}
             onOpen={onOpen}
+            onCopyReleaseId={onCopyReleaseId}
+          />
+        ) : view === "shelf" ? (
+          <ReleaseShelf
+            releases={selectedGroup.releases}
+            onOpen={onOpen}
+            onCopyReleaseId={onCopyReleaseId}
           />
         ) : (
           <ReleaseGrid
             releases={selectedGroup.releases}
             onOpen={onOpen}
             onChangeType={onChangeType}
+            onCopyReleaseId={onCopyReleaseId}
             wall={view === "wall"}
           />
         )}

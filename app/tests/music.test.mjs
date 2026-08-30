@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyCanonicalTitleEvidence,
+  buildConfirmedExternalLinks,
   classifyImportedRelease,
   compareReleaseDates,
   csvRowToRelease,
@@ -9,8 +10,10 @@ import {
   findExactNeoDbDuplicateGroups,
   findReleaseByReferenceUrl,
   getCurrentRating,
+  getEffectiveMarkStatus,
   getDatePrecision,
   getLatestMarkedAt,
+  getMarkStatusLabel,
   getNextVisibleLimit,
   getRecordShelfReleaseId,
   getReleaseContextMatches,
@@ -22,6 +25,8 @@ import {
   normalizeNeoDbUrl,
   normalizeSupportedReleaseUrl,
   normalizeReleaseType,
+  upsertConfirmedExternalLink,
+  clearConfirmedExternalLink,
   reconcileCanonicalCoverOverride,
   reconcileCanonicalExternalLinkOverride,
   reconcileCanonicalTitleOverride,
@@ -31,6 +36,7 @@ import {
   releaseImportIdentityKey,
   releasesHaveConflictingSourceIdentities,
   scoreToStars,
+  sortListeningEntriesNewestFirst,
 } from "../src/lib/music.js";
 import {
   advanceNeoDbRemovalReview,
@@ -42,12 +48,66 @@ import {
   buildNeoDbSyncPlan,
   buildVerifiedNeoDbRemovalCandidates,
   dedupeEquivalentListeningEntries,
+  getOrphanNeoDbLinkedSourceIds,
   getReleaseTypeVerificationFingerprint,
   neoDbMarkHash,
   neoDbMarkToRelease,
   pullNeoDbDelta,
+  refreshNeoDbCanonicalIdentity,
   verifyChangedReleaseTypes,
 } from "../src/lib/neodbSync.js";
+
+function neoDbCatalogNotFound(input) {
+  const url = String(input instanceof Request ? input.url : input);
+  return /\/api\/album\//.test(url);
+}
+
+function emptyCatalogResponse() {
+  return new Response(null, { status: 404 });
+}
+
+test("rotating NeoDB canonical audits advance their cursor without a scope error", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrls = [];
+  globalThis.fetch = async (_url, options) => {
+    requestedUrls = JSON.parse(options.body).urls;
+    return {
+      ok: true,
+      async json() {
+        return { canonicalUrls: {} };
+      },
+    };
+  };
+
+  try {
+    const result = await refreshNeoDbCanonicalIdentity(
+      [
+        {
+          id: "release-one",
+          externalLinks: [
+            { provider: "NEODB", url: "https://neodb.social/album/one" },
+          ],
+          listeningEntries: [],
+        },
+        {
+          id: "release-two",
+          externalLinks: [
+            { provider: "NEODB", url: "https://neodb.social/album/two" },
+          ],
+          listeningEntries: [],
+        },
+      ],
+      [],
+      { auditCursor: 1, auditSize: 1 },
+    );
+
+    assert.deepEqual(requestedUrls, ["https://neodb.social/album/two"]);
+    assert.equal(result.checkedUrlCount, 1);
+    assert.equal(result.nextAuditCursor, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("NeoDB CSV snapshots keep stable source ids and row fingerprints", () => {
   const snapshot = buildNeoDbCsvSnapshot([
@@ -94,6 +154,113 @@ test("NeoDB CSV snapshots keep stable source ids and row fingerprints", () => {
   assert.ok(dataRow.split(",").at(-1));
 });
 
+test("upsertConfirmedExternalLink accepts matching platform album URLs", () => {
+  const release = {
+    id: "release-links",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/source-one",
+        status: "CONFIRMED",
+      },
+    ],
+  };
+  const result = upsertConfirmedExternalLink(
+    release,
+    "https://music.apple.com/cn/album/example/1234567890",
+    "APPLE_MUSIC",
+  );
+  assert.equal(result.error, null);
+  assert.deepEqual(
+    result.release.externalLinks.map((link) => link.provider).sort(),
+    ["APPLE_MUSIC", "NEODB"],
+  );
+  assert.equal(
+    result.release.externalLinks.find(
+      (link) => link.provider === "APPLE_MUSIC",
+    )?.status,
+    "CONFIRMED",
+  );
+});
+
+test("upsertConfirmedExternalLink rejects wrong provider and non-album URLs", () => {
+  const release = { id: "release-links", externalLinks: [] };
+  const wrongProvider = upsertConfirmedExternalLink(
+    release,
+    "https://open.spotify.com/album/platform-one",
+    "APPLE_MUSIC",
+  );
+  assert.match(wrongProvider.error, /Apple Music/);
+  assert.equal(wrongProvider.release, release);
+
+  const nonAlbum = upsertConfirmedExternalLink(
+    release,
+    "https://open.spotify.com/track/song-one",
+    "SPOTIFY",
+  );
+  assert.match(nonAlbum.error, /Spotify/);
+  assert.equal(nonAlbum.release, release);
+});
+
+test("clearConfirmedExternalLink removes only the named platform URL", () => {
+  const release = {
+    id: "release-links",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/source-one",
+        status: "CONFIRMED",
+      },
+      {
+        provider: "SPOTIFY",
+        url: "https://open.spotify.com/album/platform-one",
+        status: "AUTO_CONFIRMED",
+      },
+    ],
+  };
+  const cleared = clearConfirmedExternalLink(release, "SPOTIFY");
+  assert.equal(cleared.error, null);
+  assert.deepEqual(
+    cleared.release.externalLinks.map((link) => link.provider),
+    ["NEODB"],
+  );
+
+  const empty = clearConfirmedExternalLink(cleared.release, "NEODB");
+  assert.equal(empty.error, null);
+  assert.deepEqual(empty.release.externalLinks, []);
+  assert.equal(clearConfirmedExternalLink(empty.release, "NEODB").release, empty.release);
+});
+
+test("manual add builds all confirmed platform links and reports field errors", () => {
+  const valid = buildConfirmedExternalLinks({
+    neodbUrl:
+      "https://neodb.social/album/4RXOw79OuQvsatSQu74qzA?from=share",
+    spotifyUrl:
+      "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa?si=tracking",
+    appleMusicUrl:
+      "https://music.apple.com/cn/album/example/1234567890?l=zh",
+  });
+  assert.deepEqual(valid.errors, {});
+  assert.deepEqual(
+    valid.externalLinks.map((link) => link.provider),
+    ["NEODB", "SPOTIFY", "APPLE_MUSIC"],
+  );
+  assert.ok(
+    valid.externalLinks.every((link) => link.status === "CONFIRMED"),
+  );
+  assert.ok(
+    valid.externalLinks.every((link) => !link.url.includes("?")),
+  );
+
+  const invalid = buildConfirmedExternalLinks({
+    spotifyUrl: "https://open.spotify.com/track/not-an-album",
+    appleMusicUrl: "https://open.spotify.com/album/wrong-provider",
+  });
+  assert.equal(invalid.externalLinks.length, 0);
+  assert.match(invalid.errors.spotifyUrl, /Spotify/);
+  assert.match(invalid.errors.appleMusicUrl, /Apple Music/);
+});
+
 test("supported release links normalize only exact album platforms", () => {
   assert.deepEqual(
     normalizeSupportedReleaseUrl(
@@ -103,6 +270,14 @@ test("supported release links normalize only exact album platforms", () => {
       provider: "SPOTIFY",
       providerLabel: "Spotify",
       normalizedUrl: "https://open.spotify.com/album/abc123",
+    },
+  );
+  assert.deepEqual(
+    normalizeSupportedReleaseUrl("https://music.apple.com/album/1750468113"),
+    {
+      provider: "APPLE_MUSIC",
+      providerLabel: "Apple Music",
+      normalizedUrl: "https://music.apple.com/us/album/1750468113",
     },
   );
   assert.equal(
@@ -214,6 +389,95 @@ test("detail merge lookup accepts another RecordShelf release URL", () => {
       "http://127.0.0.1:4173",
     ).status,
     "CURRENT_URL",
+  );
+});
+
+test("detail merge lookup accepts an exact copied release id", () => {
+  const releases = [
+    { id: "release-current", externalLinks: [], listeningEntries: [] },
+    { id: "release-candidate", externalLinks: [], listeningEntries: [] },
+  ];
+
+  const found = findReleaseByReferenceUrl(
+    releases,
+    "release-current",
+    "release-candidate",
+  );
+  assert.equal(found.status, "FOUND");
+  assert.equal(found.provider, "RECORDSHELF_ID");
+  assert.equal(found.providerLabel, "专辑 ID");
+  assert.equal(found.candidate.id, "release-candidate");
+
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "release-current",
+    ).status,
+    "CURRENT_URL",
+  );
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "release-missing",
+    ).status,
+    "NOT_FOUND",
+  );
+});
+
+test("detail merge lookup lists every title and alias match for manual choice", () => {
+  const releases = [
+    {
+      id: "release-current",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-same-title",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-title-suffix",
+      title: "安和桥北（纪念版）",
+      artists: ["宋冬野"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+    {
+      id: "release-alias",
+      title: "Anheqiao North",
+      translatedTitle: "安和桥北",
+      artists: ["Song Dongye"],
+      externalLinks: [],
+      listeningEntries: [],
+    },
+  ];
+
+  const result = findReleaseByReferenceUrl(
+    releases,
+    "release-current",
+    "安和桥北",
+  );
+  assert.equal(result.status, "TITLE_MATCHES");
+  assert.equal(result.providerLabel, "专辑名");
+  assert.deepEqual(
+    result.matches.map((release) => release.id),
+    ["release-alias", "release-same-title", "release-title-suffix"],
+  );
+
+  assert.equal(
+    findReleaseByReferenceUrl(
+      releases,
+      "release-current",
+      "https://example.com/not-supported",
+    ).status,
+    "UNSUPPORTED_URL",
   );
 });
 
@@ -402,6 +666,44 @@ test("9/10 maps to 4.5 stars", () => {
   assert.equal(scoreToStars(null), null);
 });
 
+test("mark status labels cover every NeoDB shelf state", () => {
+  assert.equal(getMarkStatusLabel("complete"), "听过");
+  assert.equal(getMarkStatusLabel("progress"), "在听");
+  assert.equal(getMarkStatusLabel("wishlist"), "想听");
+  assert.equal(getMarkStatusLabel("dropped"), "搁置");
+  assert.equal(getMarkStatusLabel(""), "未标记");
+});
+
+test("missing release status falls back to the latest entry or heard history", () => {
+  assert.equal(
+    getEffectiveMarkStatus({
+      markStatus: null,
+      listeningEntries: [
+        {
+          markedAt: "2026-07-20T00:00:00Z",
+          markStatus: "wishlist",
+        },
+        {
+          markedAt: "2026-07-21T00:00:00Z",
+          markStatus: "progress",
+        },
+      ],
+    }),
+    "progress",
+  );
+  assert.equal(
+    getEffectiveMarkStatus({
+      listeningEntries: [
+        {
+          listenedAt: "2026-07-21T00:00:00Z",
+          rating10: 8,
+        },
+      ],
+    }),
+    "complete",
+  );
+});
+
 test("automatic pagination advances one bounded batch at a time", () => {
   assert.equal(getNextVisibleLimit(84, 1833, 84), 168);
   assert.equal(getNextVisibleLimit(1800, 1833, 84), 1833);
@@ -444,6 +746,162 @@ test("current rating uses the latest rated entry and preserves history", () => {
   ];
   assert.equal(getCurrentRating(entries), 9);
   assert.equal(entries.length, 2);
+});
+
+test("current rating prefers NeoDB in-place edits that keep the original mark time", () => {
+  const entries = [
+    {
+      id: "old-copy",
+      rating10: 7,
+      ratedAt: "2025-07-25T10:00:00Z",
+      createdAt: "2025-07-25T10:00:00Z",
+      comment: "旧短评",
+    },
+    {
+      id: "synced-edit",
+      rating10: 9,
+      ratedAt: "2025-07-25T10:00:00Z",
+      createdAt: "2025-07-25T10:00:00Z",
+      updatedAt: "2026-08-15T03:00:00Z",
+      comment: "新短评",
+    },
+  ];
+  assert.equal(getCurrentRating(entries), 9);
+  assert.equal(
+    sortListeningEntriesNewestFirst(entries).map((entry) => entry.id)[0],
+    "synced-edit",
+  );
+});
+
+test("NeoDB rating edits with the same created_time append history and become current", () => {
+  const existing = neoDbMarkToRelease({
+    ...neoDbMark,
+    rating_grade: 7,
+    comment_text: "旧短评",
+    created_time: "2025-07-25T10:00:00Z",
+  });
+  const plan = buildNeoDbSyncPlan(
+    [existing],
+    [
+      {
+        mark: {
+          ...neoDbMark,
+          rating_grade: 9,
+          comment_text: "新短评",
+          created_time: "2025-07-25T10:00:00Z",
+        },
+        review: { body: "新写的长评" },
+        logs: [],
+      },
+    ],
+  );
+  const next = applyNeoDbSyncPlan([existing], plan);
+  assert.equal(plan.updates.length, 1);
+  assert.equal(getCurrentRating(next[0].listeningEntries), 9);
+  const newest = sortListeningEntriesNewestFirst(next[0].listeningEntries)[0];
+  assert.match(newest.comment, /新短评[\s\S]*新写的长评/);
+  assert.ok(newest.updatedAt);
+});
+
+test("NeoDB current mark still refreshes when only an older local row matches", () => {
+  const sourceItemId = neoDbMark.item.uuid;
+  const existing = {
+    ...neoDbMarkToRelease({
+      ...neoDbMark,
+      rating_grade: 8,
+      comment_text: "中间态",
+      created_time: "2025-07-25T10:00:00Z",
+    }),
+    listeningEntries: [
+      {
+        id: "older-matching-remote",
+        source: "NEODB",
+        sourceItemId,
+        rating10: 7,
+        comment: "旧短评",
+        markStatus: "complete",
+        ratedAt: "2025-07-25T10:00:00Z",
+        createdAt: "2025-07-25T10:00:00Z",
+        listenedAt: "2025-07-25T10:00:00Z",
+      },
+      {
+        id: "latest-local",
+        source: "NEODB",
+        sourceItemId,
+        rating10: 10,
+        comment: "本地仍显示的高分",
+        markStatus: "complete",
+        ratedAt: "2025-07-25T10:00:00Z",
+        createdAt: "2025-07-25T10:00:00Z",
+        updatedAt: "2026-08-15T02:00:00Z",
+        listenedAt: "2025-07-25T10:00:00Z",
+      },
+    ],
+  };
+  const plan = buildNeoDbSyncPlan(
+    [existing],
+    [
+      {
+        mark: {
+          ...neoDbMark,
+          rating_grade: 7,
+          comment_text: "旧短评",
+          created_time: "2025-07-25T10:00:00Z",
+        },
+        review: null,
+        logs: [],
+      },
+    ],
+  );
+  const next = applyNeoDbSyncPlan([existing], plan);
+  assert.equal(plan.updates.length, 1);
+  assert.equal(getCurrentRating(next[0].listeningEntries), 7);
+  assert.equal(
+    sortListeningEntriesNewestFirst(next[0].listeningEntries)[0].comment,
+    "旧短评",
+  );
+});
+
+test("listening timeline sorts the newest listening event first without mutating history", () => {
+  const entries = [
+    {
+      id: "old-listen",
+      listenedAt: "2024-01-01T00:00:00Z",
+      createdAt: "2026-08-03T00:00:00Z",
+    },
+    {
+      id: "same-day-older-edit",
+      listenedAt: "2026-08-02T00:00:00Z",
+      updatedAt: "2026-08-02T08:00:00Z",
+    },
+    {
+      id: "same-day-newer-edit",
+      listenedAt: "2026-08-02T00:00:00Z",
+      updatedAt: "2026-08-02T09:00:00Z",
+    },
+    {
+      id: "rated-only",
+      listenedAt: "",
+      ratedAt: "2025-07-01T00:00:00Z",
+    },
+    { id: "unknown-date" },
+  ];
+  const originalOrder = entries.map((entry) => entry.id);
+
+  assert.deepEqual(
+    sortListeningEntriesNewestFirst(entries).map((entry) => entry.id),
+    [
+      "same-day-newer-edit",
+      "same-day-older-edit",
+      "rated-only",
+      "old-listen",
+      "unknown-date",
+    ],
+  );
+  assert.deepEqual(
+    entries.map((entry) => entry.id),
+    originalOrder,
+  );
 });
 
 test("release type aliases normalize to PRD values", () => {
@@ -794,13 +1252,15 @@ test("context search reports the exact comment and secondary field that matched"
         comment: "这段让我想到 Charli xcx 的制作。",
       },
     ],
+    albumIntroduction: "Charli xcx 这张专辑的官方简介摘录。",
   };
   const matches = getReleaseContextMatches(release, "charli xcx");
   assert.deepEqual(
     matches.map((match) => match.label),
-    ["译名", "评论"],
+    ["译名", "评论", "专辑介绍"],
   );
   assert.equal(matches[1].text, "这段让我想到 Charli xcx 的制作。");
+  assert.equal(matches[2].text, "Charli xcx 这张专辑的官方简介摘录。");
 });
 
 test("NeoDB export preset maps artist, timestamp and streaming links", () => {
@@ -911,6 +1371,105 @@ test("NeoDB mark keeps original title and stores localized title as translation"
   assert.equal(release.listeningEntries[0].rating10, 9);
   assert.deepEqual(release.tags, ["dream pop"]);
   assert.deepEqual(release.genres, []);
+  assert.equal(
+    release.externalLinks.find((link) => link.provider === "NEODB")?.url,
+    "https://neodb.social/album/neodb-album-1",
+  );
+});
+
+test("NeoDB sync release keeps catalog release_date for sorting", () => {
+  const release = neoDbMarkToRelease({
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      release_date: "2025-06-09",
+    },
+  });
+  assert.equal(release.releaseDate, "2025-06-09");
+  assert.equal(release.releaseDatePrecision, "DAY");
+  assert.ok(release.releaseDateCheckedAt);
+});
+
+test("NeoDB sync plan backfills missing release dates from catalog", () => {
+  const existing = {
+    ...neoDbMarkToRelease(neoDbMark),
+    releaseDate: null,
+    releaseDatePrecision: "UNKNOWN",
+    releaseDateCheckedAt: null,
+  };
+  const plan = buildNeoDbSyncPlan(
+    [existing],
+    [
+      {
+        mark: {
+          ...neoDbMark,
+          item: {
+            ...neoDbMark.item,
+            release_date: "1990-09-17",
+          },
+        },
+        review: null,
+        logs: [],
+      },
+    ],
+  );
+  assert.equal(plan.updates.length, 1);
+  assert.equal(plan.updates[0].patch.releaseDate, "1990-09-17");
+  const next = applyNeoDbSyncPlan([existing], plan);
+  assert.equal(next[0].releaseDate, "1990-09-17");
+});
+
+test("NeoDB relative catalog urls become detail-page platform links", () => {
+  const release = neoDbMarkToRelease({
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      id: "https://neodb.social/album/neodb-album-1",
+      url: "/album/neodb-album-1",
+      api_url: "/api/album/neodb-album-1",
+      category: "music",
+    },
+  });
+  const neoDbLink = release.externalLinks.find(
+    (link) => link.provider === "NEODB",
+  );
+  assert.equal(neoDbLink?.url, "https://neodb.social/album/neodb-album-1");
+  assert.equal(neoDbLink?.status, "CONFIRMED");
+  assert.equal(
+    release.listeningEntries[0].sourceUrl,
+    "https://neodb.social/album/neodb-album-1",
+  );
+  assert.equal(
+    release.neodbSourceTitleUrl,
+    "https://neodb.social/album/neodb-album-1",
+  );
+});
+
+test("NeoDB exact Apple Music and Spotify resources become detail platform links", () => {
+  const release = neoDbMarkToRelease({
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      id: "https://neodb.social/album/neodb-album-1",
+      url: "/album/neodb-album-1",
+      api_url: "/api/album/neodb-album-1",
+      category: "music",
+      external_resources: [
+        { url: "https://music.apple.com/album/1750468113" },
+        { url: "https://open.spotify.com/album/316O0Xetgx2NJLRgJBw4uq?si=share" },
+        { url: "https://music.douban.com/subject/36927006/" },
+      ],
+    },
+  });
+  assert.deepEqual(
+    release.externalLinks.map((link) => [link.provider, link.url, link.status]),
+    [
+      ["NEODB", "https://neodb.social/album/neodb-album-1", "CONFIRMED"],
+      ["APPLE_MUSIC", "https://music.apple.com/us/album/1750468113", "AUTO_CONFIRMED"],
+      ["SPOTIFY", "https://open.spotify.com/album/316O0Xetgx2NJLRgJBw4uq", "AUTO_CONFIRMED"],
+    ],
+  );
+  assert.ok(release.neodbPlatformLinksCheckedAt);
 });
 
 test("sync type verification accepts exact agreement and leaves uncertainty unclassified", () => {
@@ -1053,6 +1612,508 @@ test("NeoDB sync appends changed history instead of overwriting an old entry", (
   assert.equal(next[0].listeningEntries.length, 2);
   assert.equal(next[0].listeningEntries[0].comment, "旧短评");
   assert.equal(next[0].listeningEntries[1].comment, "短评\n\n长评");
+});
+
+test("manual release with confirmed NeoDB link updates instead of adding a duplicate", () => {
+  const manual = {
+    id: "release-manual-less-than-a-lover",
+    title: "Less than a Lover",
+    artists: ["JENNIE"],
+    releaseType: "SINGLE",
+    coverUrl: "https://example.com/cover.jpg",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/neodb-album-1",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-manual-1",
+        listenedAt: "2026-07-26",
+        listenedAtPrecision: "DAY",
+        ratedAt: "2026-07-26T09:36:39.132Z",
+        rating10: 7,
+        comment: "手动短评",
+        source: "MANUAL",
+        sourceUrl: null,
+        markedAt: "2026-07-26T09:36:39.132Z",
+        createdAt: "2026-07-26T09:36:39.132Z",
+      },
+    ],
+  };
+  assert.deepEqual(
+    [...getOrphanNeoDbLinkedSourceIds([manual])],
+    ["neodb-album-1"],
+  );
+  const plan = buildNeoDbSyncPlan(
+    [manual],
+    [{ mark: neoDbMark, review: null, logs: [] }],
+  );
+  assert.equal(plan.additions.length, 0);
+  assert.equal(plan.updates.length, 1);
+  assert.equal(plan.updates[0].releaseId, manual.id);
+  const next = applyNeoDbSyncPlan([manual], plan);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].id, manual.id);
+  assert.equal(next[0].listeningEntries.length, 2);
+  assert.equal(next[0].listeningEntries[0].source, "MANUAL");
+  assert.equal(next[0].listeningEntries[1].source, "NEODB");
+  assert.equal(next[0].listeningEntries[1].sourceItemId, "neodb-album-1");
+  assert.equal(next[0].neodbSourceTitle, "Heaven or Las Vegas");
+});
+
+test("orphan NeoDB link still enriches when snapshot hash is unchanged", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "3KJmAMZWxECFhVBSl4Chba",
+      url: "https://neodb.social/album/3KJmAMZWxECFhVBSl4Chba",
+      title: "Less than a Lover",
+    },
+  };
+  const manual = {
+    id: "release-c55a5951-8105-4ec8-9223-d8ba5a9bf050",
+    title: "Less than a Lover",
+    artists: ["JENNIE"],
+    releaseType: "SINGLE",
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/3KJmAMZWxECFhVBSl4Chba",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-manual",
+        rating10: 7,
+        comment: "手动短评",
+        source: "MANUAL",
+        createdAt: "2026-07-26T09:36:39.132Z",
+      },
+    ],
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      return new Response(
+        JSON.stringify({ data: [mark], pages: 1, count: 1 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me")) {
+      return new Response(
+        JSON.stringify({ username: "tester" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (neoDbCatalogNotFound(url)) return emptyCatalogResponse();
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [manual],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: { "3KJmAMZWxECFhVBSl4Chba": unchangedHash },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(
+      result.plan.updates[0].releaseId,
+      "release-c55a5951-8105-4ec8-9223-d8ba5a9bf050",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("existing NeoDB history without a platform link is attached on later sync", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      id: "https://neodb.social/album/neodb-album-1",
+      uuid: "neodb-album-1",
+      url: "/album/neodb-album-1",
+      category: "music",
+    },
+  };
+  const existing = {
+    id: "release-local-without-link",
+    title: "Heaven or Las Vegas",
+    artists: ["Cocteau Twins"],
+    externalLinks: [],
+    listeningEntries: [
+      {
+        id: "entry-neodb-existing",
+        source: "NEODB",
+        sourceUrl: "/album/neodb-album-1",
+        sourceItemId: "neodb-album-1",
+        rating10: 9,
+        comment: "短评",
+      },
+    ],
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me")) {
+      return new Response(
+        JSON.stringify({ username: "tester" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (neoDbCatalogNotFound(url)) return emptyCatalogResponse();
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [existing],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: { "neodb-album-1": unchangedHash },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(result.plan.updates[0].releaseId, existing.id);
+    const next = applyNeoDbSyncPlan([existing], result.plan);
+    assert.equal(
+      next[0].externalLinks.find((link) => link.provider === "NEODB")?.url,
+      "https://neodb.social/album/neodb-album-1",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("NeoDB sync writes missing Apple Music and Spotify links without replacing confirmed ones", () => {
+  const existing = {
+    id: "release-local-platform-links",
+    title: "Heaven or Las Vegas",
+    artists: ["Cocteau Twins"],
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/neodb-album-1",
+        status: "CONFIRMED",
+      },
+      {
+        provider: "APPLE_MUSIC",
+        url: "https://music.apple.com/tw/album/sable-fable/1795572998",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-1",
+        source: "NEODB",
+        sourceItemId: "neodb-album-1",
+        sourceUrl: "https://neodb.social/album/neodb-album-1",
+      },
+    ],
+  };
+  const plan = buildNeoDbSyncPlan(
+    [existing],
+    [
+      {
+        mark: {
+          ...neoDbMark,
+          item: {
+            ...neoDbMark.item,
+            external_resources: [
+              { url: "https://music.apple.com/album/1111111111" },
+              { url: "https://open.spotify.com/album/spotifyExactAlbum" },
+            ],
+          },
+        },
+        review: null,
+        logs: [],
+      },
+    ],
+  );
+  const next = applyNeoDbSyncPlan([existing], plan);
+  assert.equal(
+    next[0].externalLinks.find((link) => link.provider === "APPLE_MUSIC")?.url,
+    "https://music.apple.com/tw/album/sable-fable/1795572998",
+  );
+  assert.equal(
+    next[0].externalLinks.find((link) => link.provider === "SPOTIFY")?.url,
+    "https://open.spotify.com/album/spotifyExactAlbum",
+  );
+  assert.equal(
+    next[0].externalLinks.find((link) => link.provider === "SPOTIFY")?.status,
+    "AUTO_CONFIRMED",
+  );
+});
+
+test("NeoDB catalog item supplies Apple Music and Spotify links during sync", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      id: "https://neodb.social/album/neodb-album-1",
+      uuid: "neodb-album-1",
+      url: "/album/neodb-album-1",
+      api_url: "/api/album/neodb-album-1",
+      category: "music",
+      external_resources: [],
+    },
+  };
+  const existing = {
+    id: "release-missing-platform-links",
+    title: "Heaven or Las Vegas",
+    artists: ["Cocteau Twins"],
+    externalLinks: [
+      {
+        provider: "NEODB",
+        url: "https://neodb.social/album/neodb-album-1",
+        status: "CONFIRMED",
+      },
+    ],
+    listeningEntries: [
+      {
+        id: "entry-neodb-existing",
+        source: "NEODB",
+        sourceItemId: "neodb-album-1",
+        sourceUrl: "https://neodb.social/album/neodb-album-1",
+      },
+    ],
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/album/neodb-album-1")) {
+      return new Response(
+        JSON.stringify({
+          ...mark.item,
+          id: "https://neodb.social/album/neodb-album-1",
+          url: "/album/neodb-album-1",
+          external_resources: [
+            { url: "https://music.apple.com/album/1750468113" },
+            { url: "https://open.spotify.com/album/316O0Xetgx2NJLRgJBw4uq" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me")) {
+      return new Response(
+        JSON.stringify({ username: "tester" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [existing],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: { "neodb-album-1": unchangedHash },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.updates.length, 1);
+    const next = applyNeoDbSyncPlan([existing], result.plan);
+    assert.equal(
+      next[0].externalLinks.find((link) => link.provider === "APPLE_MUSIC")?.url,
+      "https://music.apple.com/us/album/1750468113",
+    );
+    assert.equal(
+      next[0].externalLinks.find((link) => link.provider === "SPOTIFY")?.url,
+      "https://open.spotify.com/album/316O0Xetgx2NJLRgJBw4uq",
+    );
+    assert.ok(next[0].neodbPlatformLinksCheckedAt);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a snapshot-known NeoDB mark missing locally is retried as an addition", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "7e4XoqnbnOdt4VgFOEtVG2",
+      url: "https://neodb.social/album/7e4XoqnbnOdt4VgFOEtVG2",
+      title: "拆",
+    },
+  };
+  const unchangedHash = neoDbMarkHash(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (url.includes("/api/me/shelf/item/") && url.includes("/logs")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (neoDbCatalogNotFound(url)) return emptyCatalogResponse();
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          "7e4XoqnbnOdt4VgFOEtVG2": unchangedHash,
+        },
+        auditCursor: 0,
+      },
+    );
+    assert.equal(result.plan.additions.length, 1);
+    assert.equal(
+      result.plan.additions[0].sourceItemId,
+      "7e4XoqnbnOdt4VgFOEtVG2",
+    );
+    assert.equal(result.plan.additions[0].release.title, "拆");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a user-removed base release is not revived by snapshot recovery", async () => {
+  const originalFetch = globalThis.fetch;
+  const mark = {
+    ...neoDbMark,
+    item: {
+      ...neoDbMark.item,
+      uuid: "removed-base-release",
+      url: "https://neodb.social/album/removed-base-release",
+      title: "Keep Removed",
+    },
+  };
+  const baseRelease = neoDbMarkToRelease(mark);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/api/me/shelf/") && url.includes("page=")) {
+      const isCompleteShelf = url.includes("/shelf/complete?");
+      return new Response(
+        JSON.stringify({
+          data: isCompleteShelf ? [mark] : [],
+          pages: 1,
+          count: isCompleteShelf ? 1 : 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (neoDbCatalogNotFound(url)) return emptyCatalogResponse();
+    if (url.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          "removed-base-release": neoDbMarkHash(mark),
+        },
+        reviewSnapshot: {
+          "removed-base-release": "",
+        },
+        auditCursor: 0,
+      },
+      { identityReleases: [baseRelease] },
+    );
+    assert.equal(result.plan.additions.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("comment-only NeoDB changes do not request another type verification", () => {
@@ -1376,8 +2437,13 @@ test("NeoDB sync compares every music shelf before deciding a record was removed
   const requestedShelves = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
-    const shelf = String(url).match(/\/api\/me\/shelf\/([^?]+)/)?.[1];
-    if (!shelf) throw new Error(`Unexpected URL: ${url}`);
+    const href = String(url);
+    if (neoDbCatalogNotFound(href)) return emptyCatalogResponse();
+    if (href.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    const shelf = href.match(/\/api\/me\/shelf\/([^?]+)/)?.[1];
+    if (!shelf) throw new Error(`Unexpected URL: ${href}`);
     requestedShelves.push(shelf);
     const data =
       shelf === "complete"
@@ -1402,6 +2468,10 @@ test("NeoDB sync compares every music shelf before deciding a record was removed
           [neoDbMark.item.uuid]: neoDbMarkHash(neoDbMark),
           [wishlistMark.item.uuid]: neoDbMarkHash(wishlistMark),
         },
+        reviewSnapshot: {
+          [neoDbMark.item.uuid]: "",
+          [wishlistMark.item.uuid]: "",
+        },
         auditCursor: 0,
       },
       { identityReleases: releases },
@@ -1425,6 +2495,7 @@ test("ordinary NeoDB sync reads one global rotating audit page", async () => {
     const shelf = parsed.pathname.match(
       /\/api\/me\/shelf\/([^/]+)/,
     )?.[1];
+    if (neoDbCatalogNotFound(url)) return emptyCatalogResponse();
     if (!shelf) throw new Error(`Unexpected URL: ${url}`);
     requestedPages.push([
       shelf,
@@ -1458,6 +2529,176 @@ test("ordinary NeoDB sync reads one global rotating audit page", async () => {
       [["complete", 2]],
     );
     assert.equal(result.nextState.auditCursor, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ordinary NeoDB sync batch-checks an older known mark outside fetched pages", async () => {
+  const olderMark = {
+    ...neoDbMark,
+    comment_text: "修改后的旧条目评论",
+    item: {
+      ...neoDbMark.item,
+      uuid: "older-known-mark-1",
+      url: "https://neodb.social/album/older-known-mark-1",
+      title: "Older Known Album",
+    },
+  };
+  const existing = neoDbMarkToRelease({
+    ...olderMark,
+    comment_text: "修改前的旧条目评论",
+  });
+  const originalFetch = globalThis.fetch;
+  const requestedBatchIds = [];
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/api/me/shelf/items/")) {
+      requestedBatchIds.push(
+        ...decodeURIComponent(parsed.pathname.split("/").at(-1)).split(","),
+      );
+      return Response.json([olderMark]);
+    }
+    if (
+      parsed.pathname.includes("/api/me/shelf/") &&
+      parsed.searchParams.has("page")
+    ) {
+      return Response.json({ data: [], pages: 1, count: 1 });
+    }
+    if (parsed.pathname.includes("/api/me/review/item/")) {
+      return new Response(null, { status: 404 });
+    }
+    if (neoDbCatalogNotFound(parsed)) return emptyCatalogResponse();
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  try {
+    const result = await pullNeoDbDelta(
+      [existing],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: {
+          [olderMark.item.uuid]: neoDbMarkHash({
+            ...olderMark,
+            comment_text: "修改前的旧条目评论",
+          }),
+          "removed-snapshot-only": "old-hash",
+        },
+        auditCursor: 0,
+      },
+    );
+
+    assert.deepEqual(requestedBatchIds, [olderMark.item.uuid]);
+    assert.equal(result.knownAuditCount, 1);
+    assert.equal(result.knownAuditBatchCount, 1);
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(result.plan.updates[0].releaseId, existing.id);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("NeoDB sync applies an in-place edit after the catalog item redirects to a new id", async () => {
+  const legacyId = "legacy-follow-the-feeling";
+  const canonicalId = "canonical-follow-the-feeling";
+  const legacyUrl = `https://neodb.social/album/${legacyId}`;
+  const canonicalUrl = `https://neodb.social/album/${canonicalId}`;
+  const oldMark = {
+    ...neoDbMark,
+    rating_grade: 10,
+    comment_text: "旧评论",
+    created_time: "2025-07-26T10:00:00Z",
+    item: {
+      ...neoDbMark.item,
+      uuid: legacyId,
+      url: legacyUrl,
+      title: "跟着感觉走",
+      credits: [{ role: "Artist", name: "张震岳" }],
+    },
+  };
+  const currentMark = {
+    ...oldMark,
+    rating_grade: 7,
+    comment_text: "最新评论",
+    item: {
+      ...oldMark.item,
+      uuid: canonicalId,
+      url: canonicalUrl,
+    },
+  };
+  const existing = {
+    ...neoDbMarkToRelease(oldMark),
+    id: "stable-local-release",
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, options = {}) => {
+    const href = String(input);
+    if (href === "/api/neodb/canonicalize") {
+      const urls = JSON.parse(options.body).urls;
+      assert.deepEqual(urls, [legacyUrl]);
+      return Response.json({
+        canonicalUrls: { [legacyUrl]: canonicalUrl },
+      });
+    }
+    const parsed = new URL(href);
+    if (parsed.pathname.includes("/api/me/shelf/items/")) {
+      return Response.json([currentMark]);
+    }
+    if (
+      parsed.pathname.includes("/api/me/shelf/") &&
+      parsed.searchParams.has("page")
+    ) {
+      const shelf = parsed.pathname.split("/").at(-1);
+      const data = shelf === "complete" ? [currentMark] : [];
+      return Response.json({ data, pages: 1, count: data.length });
+    }
+    if (parsed.pathname.includes(`/api/me/review/item/${canonicalId}`)) {
+      return Response.json({ body: "补充的长评" });
+    }
+    if (neoDbCatalogNotFound(parsed)) return emptyCatalogResponse();
+    throw new Error(`Unexpected URL: ${href}`);
+  };
+
+  try {
+    const result = await pullNeoDbDelta(
+      [existing],
+      "test-token",
+      {
+        schemaVersion: 2,
+        profile: { username: "tester" },
+        remoteCount: 1,
+        snapshot: { [legacyId]: neoDbMarkHash(oldMark) },
+        reviewSnapshot: { [legacyId]: "" },
+        auditCursor: 0,
+      },
+    );
+
+    assert.deepEqual(result.canonicalChangedReleaseIds, [existing.id]);
+    assert.equal(result.plan.additions.length, 0);
+    assert.equal(result.plan.updates.length, 1);
+    assert.equal(result.plan.updates[0].releaseId, existing.id);
+    assert.equal(result.nextState.snapshot[legacyId], undefined);
+    assert.ok(result.nextState.snapshot[canonicalId]);
+
+    const next = applyNeoDbSyncPlan(
+      result.reconciledReleases,
+      result.plan,
+    );
+    assert.equal(next.length, 1);
+    assert.equal(next[0].id, existing.id);
+    assert.equal(
+      next[0].externalLinks.find((link) => link.provider === "NEODB")?.url,
+      canonicalUrl,
+    );
+    assert.equal(next[0].listeningEntries.length, 2);
+    assert.equal(getCurrentRating(next[0].listeningEntries), 7);
+    assert.equal(
+      sortListeningEntriesNewestFirst(next[0].listeningEntries)[0].comment,
+      "最新评论\n\n补充的长评",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

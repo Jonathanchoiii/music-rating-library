@@ -1,10 +1,29 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, get } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import worker from "../worker/index.js";
 import { handleSharedStateRequest } from "../shared-state/index.mjs";
+import { handleListeningGuideRequest } from "../listening-guides/index.mjs";
+import { handleAppleMusicEditorialRequest } from "../apple-music-notes/index.mjs";
+import {
+  handleCoverPaletteImageRequest,
+  handleLocalCoverEnrichRequest,
+  handlePrivateCoverStatic,
+} from "../scripts/private-covers-http.mjs";
+import {
+  handleAppleMotionArtworkRequest,
+  handleMotionArtworkFileRequest,
+} from "../scripts/apple-motion-artwork.mjs";
+import { handleExternalRatingsRequest } from "../external-ratings/index.mjs";
+import { handleTracklistRequest } from "../tracklists/index.mjs";
+import { handleReleaseMetadataPersistRequest } from "../shared-state/release-metadata.mjs";
+import { handleRemotePreviewSyncRequest } from "../remote-preview/local-http.mjs";
+import { handleArtistResearchRequest } from "../artist-research/index.mjs";
+import { handleAppleArtistLinksRequest } from "../apple-artist-links/index.mjs";
+import { handleArtistCatalogRequest } from "../artist-catalog/index.mjs";
+import { handleRoamCountryRefreshRequest } from "../roam-country-refresh/index.mjs";
 
 const CLIENT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -57,15 +76,36 @@ async function handleApi(request, response, origin) {
 }
 
 async function existingRecordShelf(origin) {
-  try {
-    const response = await fetch(origin, {
-      headers: { accept: "text/html" },
-      signal: AbortSignal.timeout(1_500),
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const request = get(
+      origin,
+      { headers: { accept: "text/html" } },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          if (body.length < 256_000) body += chunk;
+        });
+        response.on("end", () => {
+          finish(
+            (response.statusCode ?? 500) < 400 &&
+              body.includes("<title>RecordShelf"),
+          );
+        });
+      },
+    );
+    request.setTimeout(1_500, () => {
+      request.destroy();
+      finish(false);
     });
-    return response.ok && (await response.text()).includes("<title>RecordShelf");
-  } catch {
-    return false;
-  }
+    request.on("error", () => finish(false));
+  });
 }
 
 function safeStaticPath(pathname) {
@@ -130,10 +170,55 @@ async function handleStatic(request, response) {
     .pipe(response);
 }
 
-export async function startRecordShelfServer(port = 4173) {
+export async function startRecordShelfServer(port = 4173, options = {}) {
   const origin = `http://127.0.0.1:${port}`;
   const server = createServer(async (request, response) => {
     try {
+      if (await handlePrivateCoverStatic(request, response)) {
+        return;
+      }
+      if (await handleCoverPaletteImageRequest(request, response, options)) {
+        return;
+      }
+      if (await handleLocalCoverEnrichRequest(request, response)) {
+        return;
+      }
+      if (await handleAppleMotionArtworkRequest(request, response, options)) {
+        return;
+      }
+      if (await handleMotionArtworkFileRequest(request, response, options)) {
+        return;
+      }
+      if (await handleExternalRatingsRequest(request, response, options)) {
+        return;
+      }
+      if (await handleTracklistRequest(request, response, options)) {
+        return;
+      }
+      if (await handleReleaseMetadataPersistRequest(request, response)) {
+        return;
+      }
+      if (await handleRemotePreviewSyncRequest(request, response)) {
+        return;
+      }
+      if (await handleListeningGuideRequest(request, response)) {
+        return;
+      }
+      if (await handleAppleMusicEditorialRequest(request, response)) {
+        return;
+      }
+      if (await handleArtistResearchRequest(request, response, options)) {
+        return;
+      }
+      if (await handleArtistCatalogRequest(request, response, options)) {
+        return;
+      }
+      if (await handleAppleArtistLinksRequest(request, response, options)) {
+        return;
+      }
+      if (await handleRoamCountryRefreshRequest(request, response, options)) {
+        return;
+      }
       if (await handleSharedStateRequest(request, response)) {
         return;
       }
@@ -168,11 +253,11 @@ export async function startRecordShelfServer(port = 4173) {
     };
   } catch (error) {
     if (error?.code === "EADDRINUSE" && (await existingRecordShelf(origin))) {
-      return {
-        origin,
-        reusedExistingServer: true,
-        close: async () => {},
-      };
+      const occupiedError = new Error(
+        `检测到另一个 RecordShelf 正在占用 ${origin}。请先完全退出旧客户端（包括废纸篓里仍在运行的副本），再重新打开当前版本。`,
+      );
+      occupiedError.code = "RECORDSHELF_ALREADY_RUNNING";
+      throw occupiedError;
     }
     throw error;
   }

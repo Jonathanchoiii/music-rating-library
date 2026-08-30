@@ -1,17 +1,19 @@
 # RecordShelf
 
-一个以个人聆听记录为中心的响应式音乐档案。RecordShelf 可以整理发行、评分、评论和多次收听历史，并在宫格、列表、唱片墙与艺人视图之间切换。
+一个以个人聆听记录为中心的响应式音乐档案。RecordShelf 可以整理发行、评分、评论和多次收听历史，并在宫格、列表、唱片墙、唱片架与艺人视图之间切换。
 
 ![RecordShelf 匿名示例数据预览](docs/recordshelf-preview.png)
 
 ## 目前包含
 
-- 适配桌面与移动端的宫格、列表和唱片墙
+- 适配桌面与移动端的宫格、列表、唱片墙和唱片架
 - 10 分制评分与 5 星显示（例如 9 分 = 4.5 星）
 - 每次收听、评分和评论独立保留
 - 艺人别名、合作署名和 MusicBrainz ID 管理
 - CSV 导入与 NeoDB 增量同步流程
 - Apple Music、Spotify 和 NeoDB 外链
+- 专辑详情页的「专辑介绍」可手动编辑，保存在本机音乐库；若配置了
+  MusicKit Developer Token，也可读取 Apple Music 官方介绍并切换地区与语言版本
 - 发行类型、日期及其他已核验元数据筛选
 - NeoDB 地址规范化和疑似重复条目人工处理
 
@@ -38,6 +40,9 @@ npm run dev
 
 打开 `http://127.0.0.1:4173`。
 
+Mac 关机后若还想用手机浏览，需要单独的只读网站快照，而不是 iCloud 文件夹。
+配置步骤见 [手机只读预览](docs/PHONE_PREVIEW.md)。
+
 导入 NeoDB CSV 时，脚本默认把规范化结果写入被忽略的本机数据目录：
 
 ```bash
@@ -54,6 +59,32 @@ npm run import:neodb -- "/absolute/path/to/music_mark.csv"
 这些私人资料都不会由 GitHub 代为备份。
 共享文件每次更新前会在相邻的 `.backups/` 目录保留上一 revision，滚动保留
 最近 20 份，以便误操作后恢复。
+
+## 专辑介绍
+
+专辑详情页的「专辑介绍」可以自己写或粘贴，保存在 Web 与 Mac 共用的用户增量里。
+若同时配置了 MusicKit Developer Token，还可以读取 Apple Music 官方编辑介绍
+原文，并按地区 × 语言列出不同的官方文案版本。手写与官方原文互不覆盖。
+
+官方读取需要令牌，只在本机服务端使用：
+
+```bash
+cd app
+cp .env.example .env   # 然后填入 APPLE_MUSIC_DEVELOPER_TOKEN
+```
+
+也可以改为写入私人文件（权限 `0600`，两端共用）：
+
+```text
+~/Library/Application Support/RecordShelf/apple-music-developer-token
+```
+
+没有配置令牌时，该模块仍可手写介绍；官方读取会返回 `APPLE_MUSIC_NOT_CONFIGURED`，
+不会发出任何网络请求。官方文案缓存在
+`Application Support/RecordShelf/apple-music-editorial-notes.json`，属于可刷新
+的外部元数据，不会写入共享音乐数据库，也不会覆盖你自己的文字。
+实现细节、错误码与 Apple 协议注意事项见
+[Apple Music 官方介绍说明](docs/APPLE_MUSIC_EDITORIAL_NOTES.md)。
 
 ## macOS 本地应用
 
@@ -81,7 +112,9 @@ npm run test:sites
 npm run preview
 ```
 
-产品规则、数据模型和迁移约束见 [PRD.md](PRD.md)。
+产品规则、数据模型和迁移约束见 [PRD.md](PRD.md)。文档分工与提交前检查见
+[文档维护约定](docs/MAINTENANCE.md)，各版本已经交付的变化见
+[版本变更记录](docs/CHANGELOG.md)。
 
 ## 项目状态
 

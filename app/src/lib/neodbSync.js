@@ -3,17 +3,24 @@ import {
   getDatePrecision,
   inferReleaseTypeFromOfficialTitle,
   normalizeExternalReleaseType,
+  normalizeSupportedReleaseUrl,
   normalizeText,
+  sortListeningEntriesNewestFirst,
 } from "./music.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
+import {
+  NEODB_OAUTH_CLIENT_KEY,
+  NEODB_SYNC_STATE_KEY,
+} from "./sharedStorageKeys.js";
 
 export const NEODB_ORIGIN = "https://neodb.social";
-export const NEODB_SYNC_STATE_KEY = "recordshelf-neodb-sync-v1";
-export const NEODB_OAUTH_CLIENT_KEY = "recordshelf-neodb-oauth-client-v1";
+export { NEODB_SYNC_STATE_KEY, NEODB_OAUTH_CLIENT_KEY };
 export const NEODB_OAUTH_PENDING_KEY = "recordshelf-neodb-oauth-pending-v1";
 export const NEODB_ACCESS_TOKEN_KEY = "recordshelf-neodb-access-token-v1";
 
 const PAGE_SIZE = 100;
+const KNOWN_MARK_BATCH_SIZE = 20;
+const KNOWN_MARK_AUDIT_CONCURRENCY = 6;
 const SHELF_TYPES = ["complete", "progress", "wishlist", "dropped"];
 const SYNC_SCHEMA_VERSION = 2;
 const REMOVAL_EVIDENCE_VERSION = 2;
@@ -48,6 +55,7 @@ const METADATA_FIELDS = [
   "releaseType",
   "releaseDate",
   "releaseDatePrecision",
+  "releaseDateCheckedAt",
   "genres",
   "styles",
   "catalogLanguages",
@@ -64,6 +72,11 @@ const METADATA_FIELDS = [
   "mediaFormatSource",
   "metadataEvidence",
   "coverUrl",
+  "coverRemoteUrl",
+  "coverSource",
+  "coverMatchedFrom",
+  "coverMatchedAt",
+  "motionArtwork",
   "isPrivate",
   "externalLinks",
   "markStatus",
@@ -75,6 +88,10 @@ const METADATA_FIELDS = [
   "releaseTypeUserConfirmed",
   "neodbSourceType",
   "typeVerificationInputFingerprint",
+  "neodbPlatformLinksCheckedAt",
+  "albumIntroduction",
+  "externalRatings",
+  "tracklist",
 ];
 
 function stableHash(value) {
@@ -93,7 +110,10 @@ function jsonHash(value) {
 function sourceItemIdFromUrl(url) {
   if (!url) return null;
   try {
-    return new URL(url).pathname.split("/").filter(Boolean).at(-1) ?? null;
+    return (
+      new URL(url, NEODB_ORIGIN).pathname.split("/").filter(Boolean).at(-1) ??
+      null
+    );
   } catch {
     return null;
   }
@@ -102,15 +122,31 @@ function sourceItemIdFromUrl(url) {
 function normalizedNeoDbUrl(url) {
   if (!url) return null;
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(String(url), NEODB_ORIGIN);
+    const host = parsed.hostname.toLocaleLowerCase();
+    if (!(host === "neodb.social" || host.startsWith("neodb."))) return null;
     parsed.protocol = "https:";
     parsed.search = "";
     parsed.hash = "";
-    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
     return parsed.toString().replace(/\/$/, "");
   } catch {
     return null;
   }
+}
+
+function catalogUrlFromItem(item) {
+  if (!item) return null;
+  for (const value of [item.id, item.url]) {
+    const normalized = normalizedNeoDbUrl(value);
+    if (normalized) return normalized;
+  }
+  const uuid = String(item.uuid ?? "").trim();
+  if (!uuid) return null;
+  const category = String(item.category ?? "").toLocaleLowerCase();
+  const type = String(item.type ?? "").toLocaleLowerCase();
+  if (category && category !== "music" && type !== "album") return null;
+  return `${NEODB_ORIGIN}/album/${uuid}`;
 }
 
 export function buildNeoDbCanonicalAliases(releases = []) {
@@ -443,6 +479,21 @@ async function fetchCanonicalNeoDbUrls(urls) {
   return canonicalUrls;
 }
 
+function remapNeoDbSnapshotIds(snapshot = {}, aliases = new Map()) {
+  const next = {};
+  const deferredAliases = [];
+  for (const [sourceItemId, value] of Object.entries(snapshot)) {
+    const canonicalUrl = aliases.get(sourceItemId);
+    const canonicalId = sourceItemIdFromUrl(canonicalUrl) ?? sourceItemId;
+    if (canonicalId === sourceItemId) next[sourceItemId] = value;
+    else deferredAliases.push([canonicalId, value]);
+  }
+  for (const [canonicalId, value] of deferredAliases) {
+    if (!(canonicalId in next)) next[canonicalId] = value;
+  }
+  return next;
+}
+
 export async function refreshNeoDbCanonicalIdentity(
   releases,
   identityReleases = [],
@@ -460,9 +511,11 @@ export async function refreshNeoDbCanonicalIdentity(
   );
   const urls = neoDbUrlsFromReleases(known.releases);
   let urlsToCheck = urls;
+  let start = 0;
+  let count = urls.length;
   if (!forceFull) {
-    const start = urls.length ? auditCursor % urls.length : 0;
-    const count = Math.min(auditSize, urls.length);
+    start = urls.length ? auditCursor % urls.length : 0;
+    count = Math.min(auditSize, urls.length);
     const auditUrls = Array.from(
       { length: count },
       (_, offset) => urls[(start + offset) % urls.length],
@@ -500,7 +553,7 @@ export async function refreshNeoDbCanonicalIdentity(
 }
 
 function canonicalizeNeoDbMark(mark, aliases) {
-  const sourceUrl = normalizedNeoDbUrl(mark.item.url);
+  const sourceUrl = catalogUrlFromItem(mark.item);
   const canonicalUrl =
     aliases.get(mark.item.uuid) ?? aliases.get(sourceUrl) ?? sourceUrl;
   if (!canonicalUrl) return mark;
@@ -509,6 +562,7 @@ function canonicalizeNeoDbMark(mark, aliases) {
     item: {
       ...mark.item,
       uuid: sourceItemIdFromUrl(canonicalUrl) ?? mark.item.uuid,
+      id: canonicalUrl,
       url: canonicalUrl,
     },
   };
@@ -561,25 +615,91 @@ function translatedTitleFromItem(item) {
   return localized ?? null;
 }
 
+function catalogApiPathFromItem(item) {
+  if (item?.api_url) {
+    try {
+      const url = new URL(item.api_url, NEODB_ORIGIN);
+      return `${url.pathname}${url.search}`;
+    } catch {
+      return String(item.api_url).startsWith("/")
+        ? item.api_url
+        : `/${item.api_url}`;
+    }
+  }
+  const uuid = String(item?.uuid ?? "").trim();
+  if (!uuid) return null;
+  const category = String(item.category ?? "").toLocaleLowerCase();
+  const type = String(item.type ?? "").toLocaleLowerCase();
+  if (category && category !== "music" && type !== "album") return null;
+  return `/api/album/${encodeURIComponent(uuid)}`;
+}
+
+function mergeCatalogItem(shelfItem, catalogItem) {
+  if (!catalogItem) return shelfItem;
+  const seen = new Set();
+  const external_resources = [
+    ...(shelfItem?.external_resources ?? []),
+    ...(catalogItem.external_resources ?? []),
+  ].filter((resource) => {
+    const url = String(resource?.url ?? "").trim();
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+  return {
+    ...shelfItem,
+    ...catalogItem,
+    uuid: shelfItem?.uuid ?? catalogItem.uuid,
+    id: catalogItem.id ?? shelfItem?.id,
+    url: catalogItem.url ?? shelfItem?.url,
+    api_url: catalogItem.api_url ?? shelfItem?.api_url,
+    external_resources,
+  };
+}
+
+function platformLinkFromUrl(url) {
+  const normalized = normalizeSupportedReleaseUrl(url);
+  if (normalized) {
+    return {
+      provider: normalized.provider,
+      url: normalized.normalizedUrl,
+      status:
+        normalized.provider === "NEODB" ? "CONFIRMED" : "AUTO_CONFIRMED",
+    };
+  }
+  const provider = providerFromUrl(url);
+  if (!provider || provider === "OTHER" || provider === "DOUBAN") return null;
+  return {
+    provider,
+    url,
+    status: provider === "NEODB" ? "CONFIRMED" : "AUTO_CONFIRMED",
+  };
+}
+
 function externalLinksFromItem(item) {
   const urls = [
-    item.url,
+    catalogUrlFromItem(item),
     ...(item.external_resources ?? []).map((resource) => resource.url),
   ].filter(Boolean);
   const seen = new Set();
-  return urls
-    .map((url) => ({
-      provider: providerFromUrl(url),
-      url,
-      status: "CONFIRMED",
-    }))
-    .filter((link) => link.provider)
-    .filter((link) => {
-      const key = `${link.provider}|${link.url}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  const seenProviders = new Set();
+  const links = [];
+  for (const url of urls) {
+    const link = platformLinkFromUrl(url);
+    if (!link) continue;
+    const key = `${link.provider}|${link.url}`;
+    if (seen.has(key)) continue;
+    if (
+      ["NEODB", "APPLE_MUSIC", "SPOTIFY"].includes(link.provider) &&
+      seenProviders.has(link.provider)
+    ) {
+      continue;
+    }
+    seen.add(key);
+    seenProviders.add(link.provider);
+    links.push(link);
+  }
+  return links;
 }
 
 function releaseTypeFromItem(item) {
@@ -594,6 +714,7 @@ export function neoDbMarkHash(mark) {
   return jsonHash({
     shelfType: mark.shelf_type,
     visibility: mark.visibility,
+    postId: mark.post_id,
     createdTime: mark.created_time,
     comment: mark.comment_text,
     rating: mark.rating_grade,
@@ -617,6 +738,13 @@ function combinedComment(mark, review) {
     .join("\n\n") || null;
 }
 
+export function neoDbReviewHash(review = null) {
+  const body = typeof review?.body === "string" ? review.body.trim() : "";
+  const title = typeof review?.title === "string" ? review.title.trim() : "";
+  if (!body && !title) return "";
+  return jsonHash({ title, body });
+}
+
 export function neoDbMarkToEntry(mark, review = null, suffix = "") {
   const sourceItemId = mark.item.uuid;
   const createdAt = mark.created_time;
@@ -634,7 +762,7 @@ export function neoDbMarkToEntry(mark, review = null, suffix = "") {
     rating10: mark.rating_grade ?? null,
     comment: combinedComment(mark, review),
     source: "NEODB",
-    sourceUrl: mark.item.url,
+    sourceUrl: catalogUrlFromItem(mark.item) ?? mark.item.url,
     sourceItemId,
     markStatus: mark.shelf_type,
     markedAt: createdAt,
@@ -656,11 +784,27 @@ function markLogToEntry(mark, log) {
     rating10: log.rating_grade ?? null,
     comment: log.comment_text?.trim() || null,
     source: "NEODB",
-    sourceUrl: mark.item.url,
+    sourceUrl: catalogUrlFromItem(mark.item) ?? mark.item.url,
     sourceItemId: mark.item.uuid,
     markStatus: log.shelf_type,
     markedAt: createdAt,
     createdAt,
+  };
+}
+
+function releaseDateFromItem(item = {}) {
+  const raw =
+    item.release_date ||
+    item.releaseDate ||
+    (Number.isInteger(item.release_year) ? String(item.release_year) : "") ||
+    (Number.isInteger(item.year) ? String(item.year) : "");
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    return { releaseDate: null, releaseDatePrecision: "UNKNOWN" };
+  }
+  return {
+    releaseDate: value,
+    releaseDatePrecision: getDatePrecision(value),
   };
 }
 
@@ -672,28 +816,30 @@ export function neoDbMarkToRelease(mark, review = null, logs = []) {
   const historicalEntries = logs
     .map((log) => markLogToEntry(mark, log))
     .filter((entry) => !entriesAreEquivalent(entry, currentEntry));
+  const releaseDateFields = releaseDateFromItem(item);
   return {
     id: `release-neodb-sync-${item.uuid}`,
     title: item.title,
     translatedTitle,
     titleAliases: translatedTitle ? [translatedTitle] : [],
     neodbSourceTitle: item.title,
-    neodbSourceTitleUrl: item.url,
+    neodbSourceTitleUrl: catalogUrlFromItem(item) ?? item.url,
     neodbSourceTitleUpdatedAt: mark.created_time ?? null,
     artists: artistNamesFromItem(item),
     releaseType: "OTHER",
     releaseTypeSource: "PENDING_EXACT_CHECK",
     releaseTypeEvidence:
       reportedReleaseType === "OTHER" ? item.type ?? null : item.type,
-    releaseTypeMatchedFrom: item.url,
+    releaseTypeMatchedFrom: catalogUrlFromItem(item) ?? item.url,
     releaseTypeMatchedAt: null,
     neodbSourceType: item.type ?? null,
-    releaseDate: null,
-    releaseDatePrecision: "UNKNOWN",
+    ...releaseDateFields,
+    releaseDateCheckedAt: new Date().toISOString(),
     genres: [],
     coverUrl: item.cover_image_url ?? null,
     isPrivate: mark.visibility === 2,
     externalLinks: externalLinksFromItem(item),
+    neodbPlatformLinksCheckedAt: new Date().toISOString(),
     markStatus: mark.shelf_type,
     tags: mark.tags ?? [],
     listeningEntries: [...historicalEntries, currentEntry],
@@ -882,17 +1028,69 @@ export async function verifyChangedReleaseTypes(
   };
 }
 
+function neoDbIdsFromReleaseLinks(release) {
+  return (release.externalLinks ?? [])
+    .filter((link) => link.provider === "NEODB")
+    .flatMap((link) => [
+      sourceItemIdFromUrl(link.url),
+      sourceItemIdFromUrl(link.canonicalUrl),
+      sourceItemIdFromUrl(link.originalUrl),
+    ])
+    .filter(Boolean);
+}
+
+function neoDbIdsFromReleaseEntries(release) {
+  return (release.listeningEntries ?? [])
+    .filter((entry) => entry.source === "NEODB")
+    .map(
+      (entry) =>
+        entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl),
+    )
+    .filter(Boolean);
+}
+
 export function getNeoDbSourceIds(releases = []) {
+  return new Set(releases.flatMap((release) => neoDbIdsFromReleaseEntries(release)));
+}
+
+export function getNeoDbLinkedSourceIds(releases = []) {
+  return new Set(releases.flatMap((release) => neoDbIdsFromReleaseLinks(release)));
+}
+
+export function getOrphanNeoDbLinkedSourceIds(releases = []) {
+  const entryIds = getNeoDbSourceIds(releases);
   return new Set(
-    releases.flatMap((release) =>
-      release.listeningEntries
-        .filter((entry) => entry.source === "NEODB")
-        .map(
-          (entry) =>
-            entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl),
-        )
-        .filter(Boolean),
-    ),
+    [...getNeoDbLinkedSourceIds(releases)].filter((id) => !entryIds.has(id)),
+  );
+}
+
+export function getUnlinkedNeoDbSourceIds(releases = []) {
+  const linkedIds = getNeoDbLinkedSourceIds(releases);
+  return new Set(
+    [...getNeoDbSourceIds(releases)].filter((id) => !linkedIds.has(id)),
+  );
+}
+
+function hasProviderLink(release, provider) {
+  return (release.externalLinks ?? []).some(
+    (link) => link.provider === provider,
+  );
+}
+
+export function getUnlinkedPlatformSourceIds(releases = []) {
+  return new Set(
+    releases
+      .filter(
+        (release) =>
+          !release.neodbPlatformLinksCheckedAt &&
+          (!hasProviderLink(release, "APPLE_MUSIC") ||
+            !hasProviderLink(release, "SPOTIFY")),
+      )
+      .flatMap((release) => [
+        ...neoDbIdsFromReleaseEntries(release),
+        ...neoDbIdsFromReleaseLinks(release),
+      ])
+      .filter(Boolean),
   );
 }
 
@@ -952,13 +1150,14 @@ export function advanceNeoDbRemovalReview(
 }
 
 function findReleaseByNeoDbId(releases, sourceItemId) {
+  if (!sourceItemId) return null;
+  const byEntry = releases.find((release) =>
+    neoDbIdsFromReleaseEntries(release).includes(sourceItemId),
+  );
+  if (byEntry) return byEntry;
+  // Manual adds often confirm a NeoDB URL without a NEODB listening entry.
   return releases.find((release) =>
-    release.listeningEntries.some(
-      (entry) =>
-        entry.source === "NEODB" &&
-        (entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl)) ===
-          sourceItemId,
-    ),
+    neoDbIdsFromReleaseLinks(release).includes(sourceItemId),
   );
 }
 
@@ -998,24 +1197,97 @@ function entriesAreEquivalent(a, b) {
 }
 
 export function dedupeEquivalentListeningEntries(entries = []) {
-  const seen = new Set();
-  return entries.filter((entry) => {
+  const preferredByKey = new Map();
+  for (const entry of entries) {
     const key = JSON.stringify(comparableEntry(entry));
-    if (seen.has(key)) return false;
+    const current = preferredByKey.get(key);
+    if (!current) {
+      preferredByKey.set(key, entry);
+      continue;
+    }
+    const currentStamp = Date.parse(
+      current.updatedAt ?? current.createdAt ?? current.ratedAt ?? 0,
+    );
+    const nextStamp = Date.parse(
+      entry.updatedAt ?? entry.createdAt ?? entry.ratedAt ?? 0,
+    );
+    if (
+      nextStamp > currentStamp ||
+      (nextStamp === currentStamp && Boolean(entry.updatedAt) && !current.updatedAt)
+    ) {
+      preferredByKey.set(key, entry);
+    }
+  }
+  const seen = new Set();
+  const deduped = [];
+  for (const entry of entries) {
+    const key = JSON.stringify(comparableEntry(entry));
+    if (seen.has(key)) continue;
     seen.add(key);
-    return true;
+    deduped.push(preferredByKey.get(key));
+  }
+  return deduped;
+}
+
+function latestNeoDbListeningEntry(release, sourceItemId) {
+  if (!release || !sourceItemId) return null;
+  const entries = (release.listeningEntries ?? []).filter((entry) => {
+    if (entry.source !== "NEODB") return false;
+    const entrySourceId =
+      entry.sourceItemId ?? sourceItemIdFromUrl(entry.sourceUrl);
+    return entrySourceId === sourceItemId;
   });
+  if (!entries.length) return null;
+  return sortListeningEntriesNewestFirst(entries)[0];
+}
+
+function localNeoDbNeedsMarkRefresh(release, mark) {
+  const latest = latestNeoDbListeningEntry(release, mark.item?.uuid);
+  if (!latest) return Boolean(release);
+  if ((latest.rating10 ?? null) !== (mark.rating_grade ?? null)) return true;
+  if ((latest.markStatus ?? null) !== (mark.shelf_type ?? null)) return true;
+  if (
+    !String(release.releaseDate ?? "").trim() &&
+    !release.releaseDateCheckedAt
+  ) {
+    return true;
+  }
+  const remoteComment = String(mark.comment_text ?? "").trim();
+  const localComment = String(latest.comment ?? "").trim();
+  if (!remoteComment) return false;
+  return (
+    localComment !== remoteComment &&
+    !localComment.startsWith(`${remoteComment}\n`)
+  );
 }
 
 function mergeExternalLinks(existing = [], incoming = []) {
+  const replaceable = new Set(["APPLE_MUSIC", "SPOTIFY"]);
   const links = [...existing];
   const seen = new Set(links.map((link) => `${link.provider}|${link.url}`));
+  const indexByProvider = new Map();
+  links.forEach((link, index) => {
+    if (replaceable.has(link.provider) && !indexByProvider.has(link.provider)) {
+      indexByProvider.set(link.provider, index);
+    }
+  });
   for (const link of incoming) {
     const key = `${link.provider}|${link.url}`;
-    if (!seen.has(key)) {
+    if (seen.has(key)) continue;
+    if (replaceable.has(link.provider) && indexByProvider.has(link.provider)) {
+      const index = indexByProvider.get(link.provider);
+      const current = links[index];
+      if (current.status === "CONFIRMED") continue;
+      if (current.status !== "AUTO_CONFIRMED") continue;
+      links[index] = link;
       seen.add(key);
-      links.push(link);
+      continue;
     }
+    seen.add(key);
+    if (replaceable.has(link.provider)) {
+      indexByProvider.set(link.provider, links.length);
+    }
+    links.push(link);
   }
   return links;
 }
@@ -1079,6 +1351,9 @@ function metadataPatch(existing, incoming) {
         ? new Date().toISOString()
         : existing.neodbSourceTitleUpdatedAt,
     neodbSourceType: incoming.neodbSourceType ?? null,
+    neodbPlatformLinksCheckedAt:
+      existing.neodbPlatformLinksCheckedAt ??
+      incoming.neodbPlatformLinksCheckedAt,
   };
   if (shouldPromoteNeoDbTitle) {
     patch.title = incoming.title;
@@ -1092,6 +1367,14 @@ function metadataPatch(existing, incoming) {
     incoming.releaseType !== "OTHER"
   ) {
     patch.releaseType = incoming.releaseType;
+  }
+  if (!String(existing.releaseDate ?? "").trim() && incoming.releaseDate) {
+    patch.releaseDate = incoming.releaseDate;
+    patch.releaseDatePrecision =
+      incoming.releaseDatePrecision ?? getDatePrecision(incoming.releaseDate);
+  }
+  if (!existing.releaseDateCheckedAt && incoming.releaseDateCheckedAt) {
+    patch.releaseDateCheckedAt = incoming.releaseDateCheckedAt;
   }
   return patch;
 }
@@ -1130,25 +1413,38 @@ export function buildNeoDbSyncPlan(
     }
 
     const currentEntry = incoming.listeningEntries.at(-1);
-    const entryExists = existing.listeningEntries.some((entry) =>
-      entriesAreEquivalent(entry, currentEntry),
+    const latestLocalNeoDb = latestNeoDbListeningEntry(
+      existing,
+      mark.item.uuid,
     );
-    const newEntries = incoming.listeningEntries.filter(
-      (entry) =>
-        !existing.listeningEntries.some(
-          (current) =>
-            current.id === entry.id || entriesAreEquivalent(current, entry),
-        ),
-    );
+    const latestMatchesRemote =
+      latestLocalNeoDb && entriesAreEquivalent(latestLocalNeoDb, currentEntry);
+    // Always refresh the current remote mark when the latest local NeoDB copy
+    // drifted, even if an older historical row already matches the remote body.
+    const entriesToMerge = incoming.listeningEntries.filter((entry) => {
+      if (entry === currentEntry) return !latestMatchesRemote;
+      return !existing.listeningEntries.some(
+        (current) =>
+          current.id === entry.id || entriesAreEquivalent(current, entry),
+      );
+    });
     const patch = metadataPatch(existing, incoming);
     const changedMetadataFields = metadataChangedFields(existing, patch);
-    if (!entryExists || newEntries.length || metadataChanged(existing, patch)) {
+    if (
+      !latestMatchesRemote ||
+      entriesToMerge.length ||
+      metadataChanged(existing, patch)
+    ) {
+      const syncedAt = new Date().toISOString();
       updates.push({
         sourceItemId: mark.item.uuid,
         releaseId: existing.id,
         title: existing.title,
         patch,
-        entries: newEntries,
+        entries: entriesToMerge.map((entry) => ({
+          ...entry,
+          updatedAt: entry.updatedAt ?? syncedAt,
+        })),
         changedMetadataFields,
         typeVerificationRelevant:
           existing.releaseType === "OTHER" ||
@@ -1203,7 +1499,7 @@ export function applyNeoDbSyncPlan(
           ...update.patch,
           listeningEntries: dedupeEquivalentListeningEntries([
             ...release.listeningEntries,
-            ...update.entries,
+            ...(update.entries ?? []),
           ]),
         }
       : release;
@@ -1270,6 +1566,43 @@ async function mapWithConcurrency(items, limit, task) {
   return results;
 }
 
+async function fetchKnownMarkBatch(token, sourceItemIds) {
+  if (!sourceItemIds.length) return [];
+  const encodedIds = sourceItemIds.map(encodeURIComponent).join(",");
+  const marks = await fetchNeoDb(
+    `/api/me/shelf/items/${encodedIds}`,
+    token,
+    { allow404: true },
+  );
+  if (marks) return marks;
+  if (sourceItemIds.length === 1) return [];
+  const middle = Math.ceil(sourceItemIds.length / 2);
+  const [left, right] = await Promise.all([
+    fetchKnownMarkBatch(token, sourceItemIds.slice(0, middle)),
+    fetchKnownMarkBatch(token, sourceItemIds.slice(middle)),
+  ]);
+  return [...left, ...right];
+}
+
+async function fetchKnownMarks(token, sourceItemIds) {
+  const batches = [];
+  for (
+    let offset = 0;
+    offset < sourceItemIds.length;
+    offset += KNOWN_MARK_BATCH_SIZE
+  ) {
+    batches.push(
+      sourceItemIds.slice(offset, offset + KNOWN_MARK_BATCH_SIZE),
+    );
+  }
+  const results = await mapWithConcurrency(
+    batches,
+    KNOWN_MARK_AUDIT_CONCURRENCY,
+    (batch) => fetchKnownMarkBatch(token, batch),
+  );
+  return results.flat();
+}
+
 function shelfPagesBeyondFirst(totalPagesByShelf) {
   return SHELF_TYPES.flatMap((shelfType) =>
     Array.from(
@@ -1281,7 +1614,8 @@ function shelfPagesBeyondFirst(totalPagesByShelf) {
 
 async function enrichChangedMark(mark, token, includeLogs) {
   const uuid = encodeURIComponent(mark.item.uuid);
-  const [review, logsPage] = await Promise.all([
+  const catalogPath = catalogApiPathFromItem(mark.item);
+  const [review, logsPage, catalogItem] = await Promise.all([
     fetchNeoDb(`/api/me/review/item/${uuid}`, token, { allow404: true }),
     includeLogs
       ? fetchNeoDb(
@@ -1290,9 +1624,15 @@ async function enrichChangedMark(mark, token, includeLogs) {
           { allow404: true },
         )
       : Promise.resolve(null),
+    catalogPath
+      ? fetchNeoDb(catalogPath, token, { allow404: true })
+      : Promise.resolve(null),
   ]);
   return {
-    mark,
+    mark: {
+      ...mark,
+      item: mergeCatalogItem(mark.item, catalogItem),
+    },
     review,
     logs: logsPage?.data ?? [],
   };
@@ -1449,10 +1789,19 @@ export async function pullNeoDbDelta(
   previousState = {},
   { forceFull = false, identityReleases = releases } = {},
 ) {
-  const canonicalAliases = buildNeoDbCanonicalAliases(identityReleases);
+  let canonicalAliases = buildNeoDbCanonicalAliases(identityReleases);
   const localSourceIds = getNeoDbSourceIds(releases);
-  const knownIds = new Set([
+  const identitySourceIds = getNeoDbSourceIds(identityReleases);
+  const orphanLinkedSourceIds = getOrphanNeoDbLinkedSourceIds(releases);
+  const unlinkedSourceIds = getUnlinkedNeoDbSourceIds(releases);
+  const unlinkedPlatformSourceIds = getUnlinkedPlatformSourceIds(releases);
+  const auditableSourceIds = new Set([
     ...localSourceIds,
+    ...orphanLinkedSourceIds,
+    ...unlinkedPlatformSourceIds,
+  ]);
+  const knownIds = new Set([
+    ...auditableSourceIds,
     ...Object.keys(previousState.snapshot ?? {}),
   ]);
   const pageMap = new Map();
@@ -1545,40 +1894,225 @@ export async function pullNeoDbDelta(
     }
   }
 
-  const fetchedMarks = [
-    ...new Map(
-      [...pageMap.values()]
-        .flatMap((page) => page.data)
-        .sort(
-          (markA, markB) =>
-            Date.parse(markA.created_time ?? 0) -
-            Date.parse(markB.created_time ?? 0),
-        )
-        .map((mark) => [mark.item.uuid, mark]),
-    ).values(),
-  ];
-  const previousSnapshot = previousState.snapshot ?? {};
+  const pagedMarks = [...pageMap.values()].flatMap((page) => page.data);
+  const pagedSourceIds = new Set(
+    pagedMarks.map((mark) => mark.item.uuid).filter(Boolean),
+  );
+  const knownSourceIdsToAudit = shouldReconcile
+    ? []
+    : [...auditableSourceIds]
+        .filter((sourceItemId) => !pagedSourceIds.has(sourceItemId))
+        .sort();
+  const knownAuditMarks = knownSourceIdsToAudit.length
+    ? await fetchKnownMarks(token, knownSourceIdsToAudit)
+    : [];
+  let fetchedMarkMap = new Map(
+    [...pagedMarks, ...knownAuditMarks]
+      .sort(
+        (markA, markB) =>
+          Date.parse(markA.created_time ?? 0) -
+          Date.parse(markB.created_time ?? 0),
+      )
+      .map((mark) => [mark.item.uuid, mark]),
+  );
+  const missingOrphanIds = [...orphanLinkedSourceIds].filter(
+    (sourceItemId) => !fetchedMarkMap.has(sourceItemId),
+  );
+  if (missingOrphanIds.length) {
+    const orphanMarks = await mapWithConcurrency(
+      missingOrphanIds,
+      4,
+      async (sourceItemId) => {
+        const mark = await fetchNeoDb(
+          `/api/me/shelf/item/${encodeURIComponent(sourceItemId)}`,
+          token,
+          { allow404: true },
+        );
+        return mark
+          ? canonicalizeNeoDbMark(mark, canonicalAliases)
+          : null;
+      },
+    );
+    for (const mark of orphanMarks) {
+      if (mark?.item?.uuid) fetchedMarkMap.set(mark.item.uuid, mark);
+    }
+  }
+
+  // NeoDB may merge a catalog item and keep the old URL as a redirect while
+  // returning the replacement UUID from the shelf API. Resolve only the old
+  // local IDs that disappeared in the same run as an unmatched remote ID, so
+  // normal incremental sync does not turn into a full-library URL audit.
+  const unmatchedRemoteIds = new Set(
+    [...fetchedMarkMap.keys()].filter(
+      (sourceItemId) =>
+        !findReleaseByNeoDbId(releases, sourceItemId) &&
+        !findReleaseByNeoDbId(identityReleases, sourceItemId),
+    ),
+  );
+  const missingLocalIds = new Set(
+    [...auditableSourceIds].filter(
+      (sourceItemId) => !fetchedMarkMap.has(sourceItemId),
+    ),
+  );
+  let syncCanonicalResult = {
+    releases,
+    changedReleaseIds: [],
+  };
+  let canonicalIdentityError = null;
+  if (unmatchedRemoteIds.size && missingLocalIds.size) {
+    const candidateReleases = releases.filter((release) =>
+      [
+        ...neoDbIdsFromReleaseEntries(release),
+        ...neoDbIdsFromReleaseLinks(release),
+      ].some((sourceItemId) => missingLocalIds.has(sourceItemId)),
+    );
+    const candidateUrls = neoDbUrlsFromReleases(candidateReleases).filter(
+      (url) => missingLocalIds.has(sourceItemIdFromUrl(url)),
+    );
+    try {
+      const resolvedUrls = await fetchCanonicalNeoDbUrls(candidateUrls);
+      const relevantMappings = Object.fromEntries(
+        Object.entries(resolvedUrls).filter(([, canonicalUrl]) =>
+          unmatchedRemoteIds.has(sourceItemIdFromUrl(canonicalUrl)),
+        ),
+      );
+      if (Object.keys(relevantMappings).length) {
+        syncCanonicalResult = applyNeoDbCanonicalMappings(
+          releases,
+          relevantMappings,
+          identityReleases,
+        );
+        canonicalAliases = buildNeoDbCanonicalAliases([
+          ...identityReleases,
+          ...syncCanonicalResult.releases,
+        ]);
+        fetchedMarkMap = new Map(
+          [...fetchedMarkMap.values()].map((mark) => {
+            const canonicalMark = canonicalizeNeoDbMark(
+              mark,
+              canonicalAliases,
+            );
+            return [canonicalMark.item.uuid, canonicalMark];
+          }),
+        );
+      }
+    } catch (error) {
+      canonicalIdentityError =
+        error.message || "NeoDB 合并地址核验暂时不可用";
+    }
+  }
+
+  const reconciledReleases = syncCanonicalResult.releases;
+  const effectiveLocalSourceIds = getNeoDbSourceIds(reconciledReleases);
+  const effectiveIdentitySourceIds = getNeoDbSourceIds([
+    ...identityReleases,
+    ...reconciledReleases,
+  ]);
+  const effectiveOrphanLinkedSourceIds =
+    getOrphanNeoDbLinkedSourceIds(reconciledReleases);
+  const effectiveUnlinkedSourceIds =
+    getUnlinkedNeoDbSourceIds(reconciledReleases);
+  const effectiveUnlinkedPlatformSourceIds =
+    getUnlinkedPlatformSourceIds(reconciledReleases);
+  const fetchedMarks = [...fetchedMarkMap.values()];
+  const previousSnapshot = remapNeoDbSnapshotIds(
+    previousState.snapshot ?? {},
+    canonicalAliases,
+  );
+  const previousReviewSnapshot = remapNeoDbSnapshotIds(
+    previousState.reviewSnapshot ?? {},
+    canonicalAliases,
+  );
   const snapshot = shouldReconcile ? {} : { ...previousSnapshot };
+  const reviewSnapshot = shouldReconcile ? {} : { ...previousReviewSnapshot };
   const changedMarks = [];
+  const changedMarkIds = new Set();
+  const pendingSnapshotHashes = new Map();
   for (const mark of fetchedMarks) {
     const hash = neoDbMarkHash(mark);
-    if (forceFull || previousSnapshot[mark.item.uuid] !== hash) {
+    const needsLinkAttach =
+      effectiveOrphanLinkedSourceIds.has(mark.item.uuid) ||
+      effectiveUnlinkedSourceIds.has(mark.item.uuid) ||
+      effectiveUnlinkedPlatformSourceIds.has(mark.item.uuid);
+    const missingLocally =
+      !effectiveLocalSourceIds.has(mark.item.uuid) &&
+      !effectiveIdentitySourceIds.has(mark.item.uuid);
+    const localRelease = findReleaseByNeoDbId(
+      reconciledReleases,
+      mark.item.uuid,
+    );
+    const localOutOfDate =
+      Boolean(localRelease) && localNeoDbNeedsMarkRefresh(localRelease, mark);
+    if (
+      forceFull ||
+      previousSnapshot[mark.item.uuid] !== hash ||
+      needsLinkAttach ||
+      missingLocally ||
+      localOutOfDate
+    ) {
       changedMarks.push(mark);
+      changedMarkIds.add(mark.item.uuid);
+      pendingSnapshotHashes.set(mark.item.uuid, hash);
+    } else {
+      snapshot[mark.item.uuid] = hash;
     }
-    snapshot[mark.item.uuid] = hash;
+  }
+  const reviewCheckMarks = fetchedMarks.filter(
+    (mark) =>
+      mark?.item?.uuid &&
+      !changedMarkIds.has(mark.item.uuid) &&
+      (effectiveLocalSourceIds.has(mark.item.uuid) ||
+        effectiveIdentitySourceIds.has(mark.item.uuid) ||
+        effectiveOrphanLinkedSourceIds.has(mark.item.uuid)),
+  );
+  const reviewChecks = await mapWithConcurrency(
+    reviewCheckMarks,
+    5,
+    async (mark) => {
+      const review = await fetchNeoDb(
+        `/api/me/review/item/${encodeURIComponent(mark.item.uuid)}`,
+        token,
+        { allow404: true },
+      );
+      return { mark, review };
+    },
+  );
+  for (const { mark, review } of reviewChecks) {
+    const reviewHash = neoDbReviewHash(review);
+    if (
+      forceFull ||
+      previousReviewSnapshot[mark.item.uuid] !== reviewHash
+    ) {
+      changedMarks.push(mark);
+      changedMarkIds.add(mark.item.uuid);
+    }
+    reviewSnapshot[mark.item.uuid] = reviewHash;
   }
   const enrichedMarks = await mapWithConcurrency(
     changedMarks,
     5,
-    (mark) =>
-      enrichChangedMark(mark, token, !localSourceIds.has(mark.item.uuid)),
+    async (mark) => {
+      const enriched = await enrichChangedMark(
+        mark,
+        token,
+        !effectiveLocalSourceIds.has(mark.item.uuid),
+      );
+      reviewSnapshot[mark.item.uuid] = neoDbReviewHash(enriched.review);
+      return enriched;
+    },
   );
 
   const remoteIds = shouldReconcile
     ? new Set(fetchedMarks.map((mark) => mark.item.uuid))
     : null;
+  const effectiveKnownIds = new Set([
+    ...effectiveLocalSourceIds,
+    ...effectiveOrphanLinkedSourceIds,
+    ...effectiveUnlinkedPlatformSourceIds,
+    ...Object.keys(previousSnapshot),
+  ]);
   const removedSourceIds = shouldReconcile
-    ? [...knownIds].filter((id) => !remoteIds.has(id))
+    ? [...effectiveKnownIds].filter((id) => !remoteIds.has(id))
     : [];
   const auditCandidateCount = pagesBeyondFirst.length;
   const profile = previousState.profile ?? (await getNeoDbProfile(token));
@@ -1587,6 +2121,7 @@ export async function pullNeoDbDelta(
     schemaVersion: SYNC_SCHEMA_VERSION,
     profile,
     snapshot,
+    reviewSnapshot,
     remoteCount,
     auditCursor: auditCandidateCount
       ? ((previousState.auditCursor ?? 0) + 1) %
@@ -1598,16 +2133,34 @@ export async function pullNeoDbDelta(
       : previousState.lastFullReconcileAt ?? null,
   };
   const plan = buildNeoDbSyncPlan(
-    releases,
+    reconciledReleases,
     enrichedMarks,
     removedSourceIds,
   );
+  const resolvedSourceIds = new Set([
+    ...plan.unchanged,
+    ...plan.updates.map((item) => item.sourceItemId),
+    ...plan.additions.map((item) => item.sourceItemId),
+  ]);
+  for (const mark of changedMarks) {
+    const sourceItemId = mark.item?.uuid;
+    if (!sourceItemId || !resolvedSourceIds.has(sourceItemId)) continue;
+    snapshot[sourceItemId] =
+      pendingSnapshotHashes.get(sourceItemId) ?? neoDbMarkHash(mark);
+  }
   return {
     plan,
     nextState,
     fetchedPages: [...pageMap.keys()].sort(),
+    knownAuditCount: knownSourceIdsToAudit.length,
+    knownAuditBatchCount: Math.ceil(
+      knownSourceIdsToAudit.length / KNOWN_MARK_BATCH_SIZE,
+    ),
     fullReconcile: shouldReconcile,
     remoteSourceIds: shouldReconcile ? [...remoteIds] : null,
+    reconciledReleases,
+    canonicalChangedReleaseIds: syncCanonicalResult.changedReleaseIds,
+    canonicalIdentityError,
   };
 }
 

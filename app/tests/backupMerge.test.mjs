@@ -91,6 +91,19 @@ test("manual detail merge preserves the chosen record and absorbs unique history
   );
 });
 
+test("manual detail merge keeps a missing album introduction from the other record", () => {
+  const kept = release("keep-intro", "Keep title", "one");
+  const removed = release("remove-intro", "Removed title", "two");
+  removed.albumIntroduction = "Removed album introduction";
+
+  const absorbed = mergeSelectedReleases(kept, removed);
+  assert.equal(absorbed.release.albumIntroduction, "Removed album introduction");
+
+  kept.albumIntroduction = "Keeper introduction";
+  const keptWins = mergeSelectedReleases(kept, removed);
+  assert.equal(keptWins.release.albumIntroduction, "Keeper introduction");
+});
+
 test("backup release merge keeps different NeoDB identities separate on ID collision", () => {
   const first = release("collision", "EUSEXUA", "one");
   first.listeningEntries[0].source = "NEODB";

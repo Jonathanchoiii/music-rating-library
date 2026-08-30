@@ -337,5 +337,21 @@ export const demoReleases = [
   },
 ];
 
-export const seedReleases =
-  localLibrary.length > 0 ? localLibrary : demoReleases;
+let runtimeLibrary = null;
+
+export function installRuntimeLibrary(releases) {
+  runtimeLibrary = Array.isArray(releases) && releases.length ? releases : null;
+}
+
+export function getSeedReleases() {
+  if (runtimeLibrary?.length) return runtimeLibrary;
+  return localLibrary.length > 0 ? localLibrary : demoReleases;
+}
+
+export const seedReleases = new Proxy([], {
+  get(_target, property) {
+    const current = getSeedReleases();
+    const value = current[property];
+    return typeof value === "function" ? value.bind(current) : value;
+  },
+});

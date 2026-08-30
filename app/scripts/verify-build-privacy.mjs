@@ -29,13 +29,14 @@ try {
 } catch (error) {
   if (error?.code === "ENOENT") {
     console.log("No private library present; local privacy comparison skipped.");
-    process.exit(0);
+    privateLibrary = null;
+  } else {
+    throw error;
   }
-  throw error;
 }
 
-const privateMarker = privateLibrary.find((release) => release?.id)?.id;
-if (!privateMarker) {
+const privateMarker = privateLibrary?.find((release) => release?.id)?.id;
+if (privateLibrary && !privateMarker) {
   throw new Error("Private library has no stable release marker.");
 }
 
@@ -46,13 +47,26 @@ const desktopBundle = await javascriptContents(
   path.join(appRoot, "dist/desktop-client"),
 );
 
-if (publicBundle.includes(privateMarker)) {
-  throw new Error("Public build contains a private release marker.");
+if (privateMarker) {
+  if (publicBundle.includes(privateMarker)) {
+    throw new Error("Public build contains a private release marker.");
+  }
+  if (!desktopBundle.includes(privateMarker)) {
+    throw new Error("Desktop build is missing the local private library.");
+  }
 }
-if (!desktopBundle.includes(privateMarker)) {
-  throw new Error("Desktop build is missing the local private library.");
+
+const builtClientCode = `${publicBundle}\n${desktopBundle}`;
+const credentialPatterns = [
+  { label: "OpenAI API key", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
+  { label: "Google API key", pattern: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
+];
+for (const credential of credentialPatterns) {
+  if (credential.pattern.test(builtClientCode)) {
+    throw new Error(`Built client contains a possible ${credential.label}.`);
+  }
 }
 
 console.log(
-  "Build privacy verified: public demo is clean and desktop data is local.",
+  "Build privacy verified: public demo is clean, desktop data is local, and no provider keys were bundled.",
 );

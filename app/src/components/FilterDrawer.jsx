@@ -12,7 +12,7 @@ import { groupReleasesByArtistIdentity } from "../lib/artists.js";
 import {
   EMPTY_LIBRARY_FILTERS,
   activeFilterCount,
-  collectTrustedFacetOptions,
+  collectVisibleTrustedFacetOptions,
   filterReleases,
   sanitizeLibraryFilters,
 } from "../lib/filters.js";
@@ -45,7 +45,6 @@ const COMPLETENESS_OPTIONS = [
   ["MISSING_COVER", "缺封面"],
   ["MISSING_STREAMING", "缺流媒体链接"],
   ["MISSING_GENRE", "缺流派"],
-  ["MISSING_LANGUAGE", "缺目录语言"],
 ];
 
 const CONFIDENCE_OPTIONS = [
@@ -102,6 +101,23 @@ function FilterChoices({ options, selected, onToggle, emptyText }) {
   );
 }
 
+function TernaryChoices({ value, onChange, options }) {
+  return (
+    <div className="filter-segmented">
+      {options.map(([optionValue, label]) => (
+        <button
+          type="button"
+          key={optionValue}
+          className={value === optionValue ? "is-active" : ""}
+          onClick={() => onChange(optionValue)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function DateRange({ label, from, to, onChange }) {
   return (
     <div className="filter-date-range">
@@ -132,6 +148,7 @@ export function FilterDrawer({
   releases,
   filters,
   artistIdentityState,
+  listeningGuideStatuses,
   onApply,
   onClose,
 }) {
@@ -174,17 +191,39 @@ export function FilterDrawer({
     );
   const facetOptions = useMemo(
     () =>
-      Object.fromEntries(
-        FACET_CONFIGS.map(([field]) => [
-          field,
-          collectTrustedFacetOptions(releases, field),
-        ]),
+      collectVisibleTrustedFacetOptions(
+        releases,
+        FACET_CONFIGS.map(([field]) => field),
       ),
     [releases],
   );
+  const availableFacetConfigs = FACET_CONFIGS.filter(
+    ([field]) => facetOptions[field]?.length > 0,
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setDraft((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const [field] of FACET_CONFIGS) {
+        if (facetOptions[field]?.length || !current[field].length) continue;
+        next[field] = [];
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [facetOptions, open]);
+
   const previewCount = useMemo(
-    () => filterReleases(releases, draft, artistIdentityState).length,
-    [artistIdentityState, draft, releases],
+    () =>
+      filterReleases(
+        releases,
+        draft,
+        artistIdentityState,
+        listeningGuideStatuses,
+      ).length,
+    [artistIdentityState, draft, listeningGuideStatuses, releases],
   );
 
   if (!open) return null;
@@ -248,30 +287,7 @@ export function FilterDrawer({
                 }
               />
               <DateRange
-                label="标记时间"
-                from={draft.markedDateFrom}
-                to={draft.markedDateTo}
-                onChange={(edge, value) =>
-                  update(
-                    edge === "from" ? "markedDateFrom" : "markedDateTo",
-                    value,
-                  )
-                }
-              />
-              <div className="filter-listened-heading">
-                <span>听过时间</span>
-                <select
-                  value={draft.listenedDateMode}
-                  onChange={(event) =>
-                    update("listenedDateMode", event.target.value)
-                  }
-                >
-                  <option value="LATEST">最近一次</option>
-                  <option value="FIRST">第一次</option>
-                </select>
-              </div>
-              <DateRange
-                label=""
+                label="听过时间"
                 from={draft.listenedDateFrom}
                 to={draft.listenedDateTo}
                 onChange={(edge, value) =>
@@ -453,6 +469,42 @@ export function FilterDrawer({
                 />
               </div>
               <div className="filter-field-block">
+                <strong>动态封面</strong>
+                <TernaryChoices
+                  value={draft.motionArtworkState}
+                  onChange={(value) => update("motionArtworkState", value)}
+                  options={[
+                    ["ANY", "全部"],
+                    ["WITH_MOTION", "已有"],
+                    ["WITHOUT_MOTION", "没有"],
+                  ]}
+                />
+              </div>
+              <div className="filter-field-block">
+                <strong>专辑介绍</strong>
+                <TernaryChoices
+                  value={draft.albumIntroductionState}
+                  onChange={(value) => update("albumIntroductionState", value)}
+                  options={[
+                    ["ANY", "全部"],
+                    ["WITH_INTRO", "已有"],
+                    ["WITHOUT_INTRO", "没有"],
+                  ]}
+                />
+              </div>
+              <div className="filter-field-block">
+                <strong>聆听指南</strong>
+                <TernaryChoices
+                  value={draft.listeningGuideState}
+                  onChange={(value) => update("listeningGuideState", value)}
+                  options={[
+                    ["ANY", "全部"],
+                    ["WITH_GUIDE", "已有"],
+                    ["WITHOUT_GUIDE", "没有"],
+                  ]}
+                />
+              </div>
+              <div className="filter-field-block">
                 <strong>数据可信度</strong>
                 <FilterChoices
                   options={CONFIDENCE_OPTIONS}
@@ -463,39 +515,42 @@ export function FilterDrawer({
             </div>
           </details>
 
-          <details>
-            <summary>
-              <Sparkle aria-hidden="true" />
-              已核验的外部资料
-            </summary>
-            <div className="filter-section-body">
-              <p className="filter-evidence-note">
-                这里只使用已有精确信源或用户确认的数据。没有依据的字段保持为空，
-                不会从标题、标签或艺人国籍自动推断。
-              </p>
-              {FACET_CONFIGS.map(([field, label, description]) => (
-                <div className="filter-field-block" key={field}>
-                  <div className="filter-field-label">
-                    <span>
-                      <strong>{label}</strong>
-                      <small>{description}</small>
-                    </span>
-                    <em>{facetOptions[field].length || "暂无"}</em>
-                  </div>
-                  <FilterChoices
-                    options={facetOptions[field].map((option) => [
-                      option.value,
-                      option.value,
-                      option.count,
-                    ])}
-                    selected={draft[field]}
-                    onToggle={(value) => updateArray(field, value)}
-                    emptyText={`暂无已核验的${label}数据，不会自动猜测。`}
-                  />
-                </div>
-              ))}
-            </div>
-          </details>
+          {availableFacetConfigs.length ? (
+            <details>
+              <summary>
+                <Sparkle aria-hidden="true" />
+                已核验的外部资料
+              </summary>
+              <div className="filter-section-body">
+                <p className="filter-evidence-note">
+                  这里只使用已有精确信源或用户确认的数据。没有依据的字段保持为空，
+                  不会从标题、标签或艺人国籍自动推断。
+                </p>
+                {availableFacetConfigs.map(
+                  ([field, label, description]) => (
+                    <div className="filter-field-block" key={field}>
+                      <div className="filter-field-label">
+                        <span>
+                          <strong>{label}</strong>
+                          <small>{description}</small>
+                        </span>
+                        <em>{facetOptions[field].length}</em>
+                      </div>
+                      <FilterChoices
+                        options={facetOptions[field].map((option) => [
+                          option.value,
+                          option.value,
+                          option.count,
+                        ])}
+                        selected={draft[field]}
+                        onToggle={(value) => updateArray(field, value)}
+                      />
+                    </div>
+                  ),
+                )}
+              </div>
+            </details>
+          ) : null}
         </div>
 
         <footer className="filter-drawer-footer">
@@ -577,23 +632,6 @@ export function ActiveFilterChips({
       </FilterChip>,
     );
   }
-  if (filters.markedDateFrom || filters.markedDateTo) {
-    chips.push(
-      <FilterChip
-        key="marked-date"
-        onRemove={() => {
-          onChange({
-            ...filters,
-            markedDateFrom: "",
-            markedDateTo: "",
-          });
-        }}
-      >
-        标记：{filters.markedDateFrom || "最早"} →{" "}
-        {filters.markedDateTo || "现在"}
-      </FilterChip>,
-    );
-  }
   if (filters.listenedDateFrom || filters.listenedDateTo) {
     chips.push(
       <FilterChip
@@ -606,7 +644,7 @@ export function ActiveFilterChips({
           });
         }}
       >
-        {filters.listenedDateMode === "FIRST" ? "首次听过" : "最近听过"}
+        听过时间
       </FilterChip>,
     );
   }
@@ -681,6 +719,42 @@ export function ActiveFilterChips({
         onRemove={() => clearField("commentState")}
       >
         {filters.commentState === "WITH_COMMENT" ? "有评论" : "无评论"}
+      </FilterChip>,
+    );
+  }
+  if (filters.listeningGuideState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="listening-guide"
+        onRemove={() => clearField("listeningGuideState")}
+      >
+        {filters.listeningGuideState === "WITH_GUIDE"
+          ? "已有聆听指南"
+          : "没有聆听指南"}
+      </FilterChip>,
+    );
+  }
+  if (filters.motionArtworkState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="motion-artwork"
+        onRemove={() => clearField("motionArtworkState")}
+      >
+        {filters.motionArtworkState === "WITH_MOTION"
+          ? "已有动态封面"
+          : "没有动态封面"}
+      </FilterChip>,
+    );
+  }
+  if (filters.albumIntroductionState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="album-introduction"
+        onRemove={() => clearField("albumIntroductionState")}
+      >
+        {filters.albumIntroductionState === "WITH_INTRO"
+          ? "已有专辑介绍"
+          : "没有专辑介绍"}
       </FilterChip>,
     );
   }

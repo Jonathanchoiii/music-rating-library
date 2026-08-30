@@ -4,6 +4,7 @@ import {
   createArtistIdentity,
   groupReleasesByArtistIdentity,
   sanitizeArtistIdentityState,
+  cleanName,
 } from "./artists.js";
 import {
   normalizeText,
@@ -18,10 +19,6 @@ const toTraditionalChinese = OpenCCCnToTraditional.Converter({
   from: "cn",
   to: "tw",
 });
-
-function cleanName(value = "") {
-  return String(value).normalize("NFKC").replace(/\s+/g, " ").trim();
-}
 
 function containsHanCharacters(value = "") {
   return /\p{Script=Han}/u.test(value);
@@ -148,6 +145,7 @@ export function reconcileChineseArtistVariants(
     }
 
     for (const alias of [...identity.aliases]) {
+      if (alias.source === "MUSICBRAINZ") continue;
       for (const variant of getChineseNameVariants(alias.name)) {
         const result = addAliasIfAvailable(
           nextIdentity,

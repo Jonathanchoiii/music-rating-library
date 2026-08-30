@@ -5,6 +5,7 @@ import {
   ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
   ARTIST_IDENTITY_STORAGE_KEY,
   DEFAULT_ARTIST_IDENTITY_STATE,
+  ensureArtistIdentitiesForReleases,
   findArtistNameConflicts,
   findDuplicateArtistMbidGroups,
   getArtistAliasIndex,
@@ -14,6 +15,7 @@ import {
   mergePossibleDuplicateArtists,
   removeResolvedDuplicateArtistCandidates,
   releaseMatchesMappedArtistQuery,
+  sanitizeArtistIdentityState,
   saveArtistIdentityState,
   sortArtistGroups,
 } from "../src/lib/artists.js";
@@ -48,6 +50,26 @@ test("artist aliases resolve to one stable artist identity", () => {
   assert.equal(groups[0].artist, "魏如萱");
   assert.equal(groups[0].releases.length, 3);
   assert.deepEqual(releases[1].artists, ["魏如萱 Waa"]);
+});
+
+test("library releases automatically create durable artist-management identities", () => {
+  const first = ensureArtistIdentitiesForReleases(
+    { schemaVersion: 2, identities: [] },
+    [release("one", "Tyla / Tems"), release("two", "Tyla")],
+  );
+  assert.equal(first.created, 2);
+  assert.deepEqual(
+    first.state.identities.map((identity) => identity.canonicalName).sort(),
+    ["Tems", "Tyla"],
+  );
+  assert.equal(first.state.identities.every((identity) => identity.source === "RELEASE_CREDIT"), true);
+  assert.equal(first.state.identities.every((identity) => identity.musicBrainzMbid === ""), true);
+
+  const second = ensureArtistIdentitiesForReleases(first.state, [
+    release("three", "Tyla / Tems"),
+  ]);
+  assert.equal(second.created, 0);
+  assert.deepEqual(second.state, first.state);
 });
 
 test("an alias search matches releases credited with another alias", () => {
@@ -139,6 +161,40 @@ test("OpenCC creates deterministic simplified and traditional name variants", ()
     "张震岳",
     "張震嶽",
   ]);
+});
+
+test("OpenCC does not recursively expand MusicBrainz aliases on every load", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "artist-adele",
+        canonicalName: "Adele",
+        aliases: [
+          {
+            name: "Adele",
+            type: "PRIMARY",
+            source: "USER",
+          },
+          {
+            name: "阿黛尔",
+            type: "ARTIST_NAME",
+            source: "MUSICBRAINZ",
+          },
+        ],
+      },
+    ],
+  };
+
+  const first = reconcileChineseArtistVariants([], state);
+  const second = reconcileChineseArtistVariants([], first.state);
+
+  assert.equal(first.aliasesAdded, 0);
+  assert.equal(second.aliasesAdded, 0);
+  assert.deepEqual(
+    second.state.identities[0].aliases.map((alias) => alias.name),
+    ["Adele", "阿黛尔"],
+  );
 });
 
 test("script variants create one identity only when the same work is shared", () => {
@@ -394,6 +450,60 @@ test("confirmed duplicate merge blocks conflicting MusicBrainz identities", () =
   );
 });
 
+test("legacy Shift-JIS MusicBrainz search hints become readable aliases or are dropped", () => {
+  const state = sanitizeArtistIdentityState({
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "artist-utada",
+        canonicalName: "宇多田光",
+        aliases: [
+          { name: "宇多田ヒカル", source: "USER" },
+          { name: "‰F‘½“cƒqƒJƒ‹", type: "SEARCH_ALIAS", source: "MUSICBRAINZ" },
+          { name: "Cubic U", type: "SEARCH_ALIAS", source: "MUSICBRAINZ" },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    state.identities[0].aliases.map((alias) => alias.name),
+    ["宇多田光", "宇多田ヒカル", "Cubic U"],
+  );
+
+  const imported = applyMusicBrainzArtistAuditResults(
+    {
+      schemaVersion: 2,
+      identities: [
+        {
+          id: "artist-utada",
+          canonicalName: "宇多田光",
+          aliases: [{ name: "宇多田光", source: "USER" }],
+        },
+      ],
+    },
+    [
+      {
+        id: "artist-utada",
+        status: "VALID",
+        musicBrainzMbid: "b539e453-c4fe-47e3-8a07-8517eac74429",
+        checkedAt: "2026-08-17T00:00:00.000Z",
+        fingerprint: "utada",
+        aliases: [{ name: "‰F‘1⁄2“cƒqƒJƒ‹" }, { name: "Cubic U" }],
+      },
+    ],
+  );
+  assert.deepEqual(
+    imported.identities[0].aliases.map((alias) => alias.name),
+    ["宇多田光", "宇多田ヒカル", "Cubic U"],
+  );
+
+  const groups = groupReleasesByArtistIdentity(
+    [{ ...release("one-last-kiss", "宇多田光") }],
+    state,
+  );
+  assert.deepEqual(groups[0].aliases, ["宇多田ヒカル", "Cubic U"]);
+});
+
 test("MusicBrainz results write only exact work-evidenced matches", () => {
   const initial = {
     schemaVersion: 2,
@@ -541,4 +651,15 @@ test("artist identity edits persist with a rolling recovery snapshot", () => {
   assert.equal(backups.length, 2);
   storage.setItem(ARTIST_IDENTITY_STORAGE_KEY, "{broken");
   assert.equal(loadArtistIdentityState(storage).identities.length, 2);
+});
+
+test("sanitizing artist identities does not mint a new id on each pass", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [{ canonicalName: "No Id Yet", aliases: [] }],
+  };
+  const first = sanitizeArtistIdentityState(state);
+  const second = sanitizeArtistIdentityState(first);
+  assert.equal(first.identities[0].id, "");
+  assert.deepEqual(first, second);
 });

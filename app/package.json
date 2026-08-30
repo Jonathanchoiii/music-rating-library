@@ -1,7 +1,7 @@
 {
   "name": "app",
   "productName": "RecordShelf",
-  "version": "0.1.5",
+  "version": "0.1.27",
   "private": true,
   "type": "module",
   "main": "electron/main.mjs",
@@ -12,31 +12,44 @@
     "build:desktop": "npm run build:desktop:web && electron-builder --mac dmg --arm64",
     "open:desktop": "open desktop-release/mac-arm64/RecordShelf.app",
     "enrich:covers": "node scripts/enrich-cover-art.mjs",
+    "enrich:covers:remote-only": "node scripts/enrich-cover-art.mjs --no-cache-local",
     "enrich:titles": "node scripts/enrich-canonical-titles.mjs",
     "enrich:titles:promote-editions": "node scripts/enrich-canonical-titles.mjs --promote-stored-platform-titles",
     "enrich:types": "node scripts/enrich-release-types.mjs",
     "enrich:dates": "node scripts/enrich-release-dates.mjs",
+    "enrich:genres": "node scripts/enrich-genres.mjs --dry-run --limit=5",
+    "enrich:genres:apply": "node scripts/enrich-genres.mjs --confirm-external-id-lookup",
     "enrich:neodb-urls": "node scripts/enrich-neodb-canonical-urls.mjs",
     "import:neodb": "node scripts/import-neodb-csv.mjs",
+    "import:neodb:skip-covers": "node scripts/import-neodb-csv.mjs --skip-covers",
     "repair:neodb-identities": "node scripts/split-merged-neodb-identities.mjs",
+    "backfill:listening-guides": "node scripts/backfill-listening-guides.mjs",
+    "research:listening-guides:codex": "node scripts/research-listening-guides-with-codex.mjs",
     "preview": "vite preview",
-    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs",
+    "remote-preview:sync": "node scripts/sync-remote-preview.mjs",
+    "test": "node --test tests/music.test.mjs tests/artists.test.mjs tests/artist-profiles.test.mjs tests/artist-exploration.test.mjs tests/artist-catalog.test.mjs tests/roam.test.mjs tests/artist-research.test.mjs tests/artist-detail-contract.test.mjs tests/artist-hero-ink.test.mjs tests/filters.test.mjs tests/backupMerge.test.mjs tests/shared-state.test.mjs tests/shared-local-state-client.test.mjs tests/listening-guides.test.mjs tests/apple-music-notes.test.mjs tests/apple-artist-links.test.mjs tests/motion-artwork.test.mjs tests/external-ratings.test.mjs tests/tracklists.test.mjs tests/release-metadata-persist.test.mjs tests/release-detail-contract.test.mjs tests/remote-preview.test.mjs tests/cover-palette.test.mjs tests/cover-update.test.mjs tests/desktop-packaging.test.mjs",
     "test:build-privacy": "node scripts/verify-build-privacy.mjs",
+    "backfill:roam-countries": "node scripts/backfill-roam-countries.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
+    "@vercel/blob": "^2.8.0",
     "@vitejs/plugin-react": "5.0.4",
     "opencc-js": "^1.4.1",
     "papaparse": "^5.5.4",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-router-dom": "^7.18.1",
-    "vite": "6.4.2"
+    "three": "^0.180.0",
+    "topojson-client": "^3.1.0",
+    "vite": "6.4.2",
+    "world-atlas": "^2.0.2"
   },
   "devDependencies": {
     "electron": "^39.0.0",
-    "electron-builder": "^26.0.0"
+    "electron-builder": "^26.0.0",
+    "world-countries": "5.1.0"
   },
   "build": {
     "appId": "com.jonathanchoiii.recordshelf",
@@ -49,14 +62,45 @@
     "files": [
       "electron/**/*",
       "shared-state/**/*",
+      "listening-guides/**/*",
+      "apple-music-notes/**/*",
+      "artist-research/**/*",
+      "artist-catalog/**/*",
+      "roam-country-refresh/**/*",
+      "apple-artist-links/**/*",
+      "external-ratings/**/*",
+      "tracklists/**/*",
+      "prompts/**/*",
+      "scripts/apple-motion-artwork.mjs",
+      "scripts/private-covers-http.mjs",
+      "scripts/enrich-cover-art.mjs",
+      "scripts/http-json.mjs",
+      "remote-preview/**/*",
       "src/lib/sharedStorageKeys.js",
+      "src/lib/artistProfiles.js",
+      "src/lib/appleArtistLinkMatch.js",
+      "src/lib/appleMusicUrl.js",
+      "src/lib/artistExploration.js",
+      "src/lib/roam.js",
+      "src/lib/music.js",
+      "src/lib/releaseMetadataOverlay.js",
+      "src/lib/tracklist.js",
       "dist/desktop-client/**/*",
       "worker/index.js",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": ".private/covers",
+        "to": "covers",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "mac": {
       "category": "public.app-category.music",
-      "icon": "electron/assets/RecordShelf.svg.png",
+      "icon": "electron/assets/RecordShelf.png",
       "target": [
         {
           "target": "dmg",

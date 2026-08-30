@@ -1,7 +1,5 @@
 import {
   getCurrentRating,
-  getLatestListenedAt,
-  getLatestMarkedAt,
   normalizeText,
   splitArtistCredits,
 } from "./music.js";
@@ -10,17 +8,17 @@ import {
   resolveArtistCredit,
 } from "./artists.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
+import { LIBRARY_FILTER_STORAGE_KEY } from "./sharedStorageKeys.js";
+import { normalizeAlbumIntroduction } from "./appleMusicEditorial.js";
+import { hasLocalMotionArtwork } from "./motionArtwork.js";
 
-export const LIBRARY_FILTER_STORAGE_KEY = "recordshelf-library-filters-v1";
+export { LIBRARY_FILTER_STORAGE_KEY };
 
 export const EMPTY_LIBRARY_FILTERS = {
   releaseDateFrom: "",
   releaseDateTo: "",
-  markedDateFrom: "",
-  markedDateTo: "",
   listenedDateFrom: "",
   listenedDateTo: "",
-  listenedDateMode: "LATEST",
   artistIds: [],
   releaseTypes: [],
   ratingState: "ANY",
@@ -28,6 +26,9 @@ export const EMPTY_LIBRARY_FILTERS = {
   ratingMax: "",
   markStatuses: [],
   commentState: "ANY",
+  listeningGuideState: "ANY",
+  motionArtworkState: "ANY",
+  albumIntroductionState: "ANY",
   listenCount: "ANY",
   platforms: [],
   completeness: [],
@@ -85,10 +86,29 @@ function uniqueStrings(values = []) {
   ];
 }
 
+const TERNARY_FILTER_STATES = {
+  listeningGuideState: ["ANY", "WITH_GUIDE", "WITHOUT_GUIDE"],
+  motionArtworkState: ["ANY", "WITH_MOTION", "WITHOUT_MOTION"],
+  albumIntroductionState: ["ANY", "WITH_INTRO", "WITHOUT_INTRO"],
+};
+
 export function sanitizeLibraryFilters(filters = {}) {
-  const sanitized = { ...EMPTY_LIBRARY_FILTERS, ...filters };
+  const sanitized = Object.fromEntries(
+    Object.entries(EMPTY_LIBRARY_FILTERS).map(([field, defaultValue]) => [
+      field,
+      filters[field] ?? defaultValue,
+    ]),
+  );
   for (const field of ARRAY_FILTER_FIELDS) {
     sanitized[field] = uniqueStrings(filters[field] ?? []);
+  }
+  sanitized.completeness = sanitized.completeness.filter(
+    (value) => value !== "MISSING_LANGUAGE",
+  );
+  for (const [field, allowed] of Object.entries(TERNARY_FILTER_STATES)) {
+    if (!allowed.includes(sanitized[field])) {
+      sanitized[field] = "ANY";
+    }
   }
   return sanitized;
 }
@@ -109,10 +129,11 @@ export function saveLibraryFilters(
 ) {
   const sanitized = sanitizeLibraryFilters(filters);
   try {
-    storage?.setItem(
-      LIBRARY_FILTER_STORAGE_KEY,
-      JSON.stringify(sanitized),
-    );
+    const serialized = JSON.stringify(sanitized);
+    if (storage?.getItem(LIBRARY_FILTER_STORAGE_KEY) === serialized) {
+      return sanitized;
+    }
+    storage?.setItem(LIBRARY_FILTER_STORAGE_KEY, serialized);
     if (storage === globalThis.localStorage) {
       notifySharedLocalStateChanged();
     }
@@ -126,7 +147,6 @@ export function activeFilterCount(filters = {}) {
   const value = sanitizeLibraryFilters(filters);
   return [
     value.releaseDateFrom || value.releaseDateTo,
-    value.markedDateFrom || value.markedDateTo,
     value.listenedDateFrom || value.listenedDateTo,
     value.artistIds.length,
     value.releaseTypes.length,
@@ -135,6 +155,9 @@ export function activeFilterCount(filters = {}) {
       value.ratingMax !== "",
     value.markStatuses.length,
     value.commentState !== "ANY",
+    value.listeningGuideState !== "ANY",
+    value.motionArtworkState !== "ANY",
+    value.albumIntroductionState !== "ANY",
     value.listenCount !== "ANY",
     value.platforms.length,
     value.completeness.length,
@@ -165,14 +188,9 @@ function dateInRange(value, from, to) {
   return true;
 }
 
-function earliestListenedAt(entries = []) {
-  return (
-    entries
-      .map((entry) => entry.listenedAt)
-      .filter(Boolean)
-      .sort((dateA, dateB) => Date.parse(dateA) - Date.parse(dateB))[0] ??
-    null
-  );
+function hasListenedDateInRange(entries = [], from, to) {
+  if (!from && !to) return true;
+  return entries.some((entry) => dateInRange(entry.listenedAt, from, to));
 }
 
 export function getTrustedFacetValues(release, field) {
@@ -230,6 +248,18 @@ export function collectTrustedFacetOptions(releases = [], field) {
   );
 }
 
+export function collectVisibleTrustedFacetOptions(
+  releases = [],
+  fields = Object.keys(FACET_FIELD_CONFIG),
+) {
+  return Object.fromEntries(
+    fields.flatMap((field) => {
+      const options = collectTrustedFacetOptions(releases, field);
+      return options.length ? [[field, options]] : [];
+    }),
+  );
+}
+
 function releaseArtistIds(release, artistIdentityState) {
   const aliasIndex = getArtistAliasIndex(artistIdentityState);
   return new Set(
@@ -275,6 +305,16 @@ function matchesListenCount(release, listenCount) {
   return true;
 }
 
+function releaseHasAlbumIntroduction(release) {
+  return Boolean(normalizeAlbumIntroduction(release?.albumIntroduction));
+}
+
+function matchesTernaryState(hasValue, state, withValue, withoutValue) {
+  if (state === withValue) return hasValue;
+  if (state === withoutValue) return !hasValue;
+  return true;
+}
+
 function matchesCompleteness(release, value) {
   if (value === "MISSING_DATE") return !release.releaseDate;
   if (value === "MISSING_TYPE") return release.releaseType === "OTHER";
@@ -284,9 +324,6 @@ function matchesCompleteness(release, value) {
   }
   if (value === "MISSING_GENRE") {
     return getTrustedFacetValues(release, "genres").length === 0;
-  }
-  if (value === "MISSING_LANGUAGE") {
-    return getTrustedFacetValues(release, "catalogLanguages").length === 0;
   }
   return false;
 }
@@ -360,6 +397,7 @@ export function releaseMatchesLibraryFilters(
   release,
   rawFilters,
   artistIdentityState,
+  listeningGuideStatuses = {},
 ) {
   const filters = sanitizeLibraryFilters(rawFilters);
   if (
@@ -372,24 +410,9 @@ export function releaseMatchesLibraryFilters(
     return false;
   }
 
-  const latestMarkedAt = getLatestMarkedAt(release.listeningEntries);
   if (
-    !dateInRange(
-      latestMarkedAt,
-      filters.markedDateFrom,
-      filters.markedDateTo,
-    )
-  ) {
-    return false;
-  }
-
-  const listenedAt =
-    filters.listenedDateMode === "FIRST"
-      ? earliestListenedAt(release.listeningEntries)
-      : getLatestListenedAt(release.listeningEntries);
-  if (
-    !dateInRange(
-      listenedAt,
+    !hasListenedDateInRange(
+      release.listeningEntries,
       filters.listenedDateFrom,
       filters.listenedDateTo,
     )
@@ -453,6 +476,37 @@ export function releaseMatchesLibraryFilters(
   ) {
     return false;
   }
+  const hasListeningGuide = listeningGuideStatuses[release.id] === "READY";
+  if (
+    !matchesTernaryState(
+      hasListeningGuide,
+      filters.listeningGuideState,
+      "WITH_GUIDE",
+      "WITHOUT_GUIDE",
+    )
+  ) {
+    return false;
+  }
+  if (
+    !matchesTernaryState(
+      hasLocalMotionArtwork(release),
+      filters.motionArtworkState,
+      "WITH_MOTION",
+      "WITHOUT_MOTION",
+    )
+  ) {
+    return false;
+  }
+  if (
+    !matchesTernaryState(
+      releaseHasAlbumIntroduction(release),
+      filters.albumIntroductionState,
+      "WITH_INTRO",
+      "WITHOUT_INTRO",
+    )
+  ) {
+    return false;
+  }
   if (!matchesListenCount(release, filters.listenCount)) return false;
 
   if (
@@ -492,8 +546,14 @@ export function filterReleases(
   releases = [],
   filters,
   artistIdentityState,
+  listeningGuideStatuses = {},
 ) {
   return releases.filter((release) =>
-    releaseMatchesLibraryFilters(release, filters, artistIdentityState),
+    releaseMatchesLibraryFilters(
+      release,
+      filters,
+      artistIdentityState,
+      listeningGuideStatuses,
+    ),
   );
 }

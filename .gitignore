@@ -6,6 +6,10 @@ app/dist/
 app/desktop-release/
 app/.vite/
 app/electron/assets/*.iconset/
+app/design-qa.md
+app/design-qa-*.png
+app/implementation-*.png
+docs/assets/roam-figma-reference.png
 
 # Local personal library and recovery material
 app/.private/
@@ -14,6 +18,10 @@ backups/
 *music_mark*.csv
 *recordshelf-backup*.json
 
+# Vercel link metadata and remote-preview staging (never commit snapshots)
+.vercel
+app/.vercel
+
 # Credentials
 .env
 .env.*
@@ -21,6 +29,12 @@ app/.env
 app/.env.*
 !.env.example
 !app/.env.example
+openai-api-key
+gemini-api-key
+listening-guide-provider.json
+app/openai-api-key
+app/gemini-api-key
+app/listening-guide-provider.json
 
 # Logs and editor state
 *.log

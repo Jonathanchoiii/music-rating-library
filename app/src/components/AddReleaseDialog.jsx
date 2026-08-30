@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Plus, X } from "@phosphor-icons/react";
-import { getDatePrecision, normalizeReleaseType } from "../lib/music.js";
+import {
+  buildConfirmedExternalLinks,
+  getDatePrecision,
+  normalizeReleaseType,
+} from "../lib/music.js";
 import { RatingInput } from "./Rating.jsx";
 
 const blankForm = {
@@ -10,6 +14,9 @@ const blankForm = {
   releaseDate: "",
   genres: "",
   coverUrl: "",
+  neodbUrl: "",
+  spotifyUrl: "",
+  appleMusicUrl: "",
   listenedAt: new Date().toISOString().slice(0, 10),
   rating10: "",
   comment: "",
@@ -23,6 +30,7 @@ export function AddReleaseDialog({
   onSaveListening,
 }) {
   const [form, setForm] = useState(blankForm);
+  const [linkErrors, setLinkErrors] = useState({});
 
   useEffect(() => {
     if (mode === "listening") {
@@ -36,6 +44,13 @@ export function AddReleaseDialog({
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
+    if (linkErrors[field]) {
+      setLinkErrors((current) => {
+        const next = { ...current };
+        delete next[field];
+        return next;
+      });
+    }
   }
 
   function submit(event) {
@@ -57,6 +72,9 @@ export function AddReleaseDialog({
       onSaveListening(release.id, entry);
       return;
     }
+    const linkResult = buildConfirmedExternalLinks(form);
+    setLinkErrors(linkResult.errors);
+    if (Object.keys(linkResult.errors).length) return;
     onSaveRelease({
       id: `release-${crypto.randomUUID()}`,
       title: form.title.trim(),
@@ -76,7 +94,7 @@ export function AddReleaseDialog({
         : {}),
       coverUrl: form.coverUrl.trim() || null,
       isPrivate: false,
-      externalLinks: [],
+      externalLinks: linkResult.externalLinks,
       listeningEntries: [entry],
     });
   }
@@ -176,6 +194,93 @@ export function AddReleaseDialog({
                   placeholder="https://"
                 />
               </label>
+              <fieldset className="platform-link-fields">
+                <legend>平台链接（可选）</legend>
+                <p>
+                  填写精确条目或专辑地址，保存后会直接显示在发行详情页。
+                </p>
+                <label>
+                  NeoDB 链接
+                  <input
+                    type="url"
+                    inputMode="url"
+                    value={form.neodbUrl}
+                    onChange={(event) =>
+                      update("neodbUrl", event.target.value)
+                    }
+                    placeholder="https://neodb.social/album/…"
+                    aria-invalid={Boolean(linkErrors.neodbUrl)}
+                    aria-describedby={
+                      linkErrors.neodbUrl
+                        ? "add-neodb-link-error"
+                        : undefined
+                    }
+                  />
+                  {linkErrors.neodbUrl ? (
+                    <span
+                      className="form-field-error"
+                      id="add-neodb-link-error"
+                      role="alert"
+                    >
+                      {linkErrors.neodbUrl}
+                    </span>
+                  ) : null}
+                </label>
+                <label>
+                  Spotify 专辑链接
+                  <input
+                    type="url"
+                    inputMode="url"
+                    value={form.spotifyUrl}
+                    onChange={(event) =>
+                      update("spotifyUrl", event.target.value)
+                    }
+                    placeholder="https://open.spotify.com/album/…"
+                    aria-invalid={Boolean(linkErrors.spotifyUrl)}
+                    aria-describedby={
+                      linkErrors.spotifyUrl
+                        ? "add-spotify-link-error"
+                        : undefined
+                    }
+                  />
+                  {linkErrors.spotifyUrl ? (
+                    <span
+                      className="form-field-error"
+                      id="add-spotify-link-error"
+                      role="alert"
+                    >
+                      {linkErrors.spotifyUrl}
+                    </span>
+                  ) : null}
+                </label>
+                <label>
+                  Apple Music 专辑链接
+                  <input
+                    type="url"
+                    inputMode="url"
+                    value={form.appleMusicUrl}
+                    onChange={(event) =>
+                      update("appleMusicUrl", event.target.value)
+                    }
+                    placeholder="https://music.apple.com/…/album/…"
+                    aria-invalid={Boolean(linkErrors.appleMusicUrl)}
+                    aria-describedby={
+                      linkErrors.appleMusicUrl
+                        ? "add-apple-link-error"
+                        : undefined
+                    }
+                  />
+                  {linkErrors.appleMusicUrl ? (
+                    <span
+                      className="form-field-error"
+                      id="add-apple-link-error"
+                      role="alert"
+                    >
+                      {linkErrors.appleMusicUrl}
+                    </span>
+                  ) : null}
+                </label>
+              </fieldset>
             </>
           ) : null}
           <label>

@@ -25,6 +25,7 @@ import {
   verifyChangedReleaseTypes,
 } from "../lib/neodbSync.js";
 import { findExactNeoDbDuplicateGroups } from "../lib/music.js";
+import { backfillListeningGuideCache } from "../lib/listeningGuides.js";
 
 let callbackLoginPromise = null;
 
@@ -69,6 +70,7 @@ export function NeoDbSyncDialog({
     async (accessToken, { forceFull = false } = {}) => {
       setPhase("syncing");
       setError("");
+      let changesWritten = false;
       try {
         const currentState = loadNeoDbSyncState();
         const identityPool = [
@@ -94,8 +96,10 @@ export function NeoDbSyncDialog({
           },
         );
         const safePlan = { ...result.plan, removals: [] };
+        const deltaBaseReleases =
+          result.reconciledReleases ?? reconciledReleases;
         let nextReleases = applyNeoDbSyncPlan(
-          reconciledReleases,
+          deltaBaseReleases,
           safePlan,
         );
         const additionReleaseIds = result.plan.additions.map(
@@ -104,6 +108,7 @@ export function NeoDbSyncDialog({
         const typeRelevantReleaseIds = [
           ...new Set([
             ...additionReleaseIds,
+            ...(result.canonicalChangedReleaseIds ?? []),
             ...result.plan.updates
               .filter((item) => item.typeVerificationRelevant)
               .map((item) => item.releaseId),
@@ -112,6 +117,7 @@ export function NeoDbSyncDialog({
         const canonicalPriorityReleaseIds = [
           ...new Set([
             ...additionReleaseIds,
+            ...(result.canonicalChangedReleaseIds ?? []),
             ...result.plan.updates
               .filter((item) =>
                 item.changedMetadataFields.includes("externalLinks"),
@@ -134,7 +140,8 @@ export function NeoDbSyncDialog({
         };
         if (
           changeCount(result.plan) ||
-          knownCanonicalResult.changedReleaseIds.length
+          knownCanonicalResult.changedReleaseIds.length ||
+          result.canonicalChangedReleaseIds?.length
         ) {
           onApply(nextReleases);
         }
@@ -150,6 +157,7 @@ export function NeoDbSyncDialog({
           removalReviewCandidates: [],
           backgroundPending: true,
         });
+        changesWritten = true;
         setPhase("background");
         onToast(
           changeCount(result.plan)
@@ -157,22 +165,20 @@ export function NeoDbSyncDialog({
             : "已读取 NeoDB 最新变化；正在后台抽查地址与元数据",
         );
 
-        const [canonicalResult, snapshotResult] = await Promise.all([
-          refreshNeoDbCanonicalIdentity(
-            nextReleases,
-            [...identityPool, ...nextReleases],
-            {
-              auditCursor: currentState.canonicalAuditCursor ?? 0,
-              forceFull: forceFull || result.fullReconcile,
-              priorityReleaseIds: canonicalPriorityReleaseIds,
-            },
-          ),
-          saveNeoDbCsvSnapshot(nextReleases, {
-            syncedAt: result.nextState.lastSyncedAt,
-            previousSnapshot: currentState.lastCsvSnapshot ?? null,
-          }),
-        ]);
+        const canonicalResult = await refreshNeoDbCanonicalIdentity(
+          nextReleases,
+          [...identityPool, ...nextReleases],
+          {
+            auditCursor: currentState.canonicalAuditCursor ?? 0,
+            forceFull: forceFull || result.fullReconcile,
+            priorityReleaseIds: canonicalPriorityReleaseIds,
+          },
+        );
         nextReleases = canonicalResult.releases;
+        const snapshotResult = await saveNeoDbCsvSnapshot(nextReleases, {
+          syncedAt: result.nextState.lastSyncedAt,
+          previousSnapshot: currentState.lastCsvSnapshot ?? null,
+        });
         let typeVerification = {
           checked: 0,
           matched: 0,
@@ -223,6 +229,24 @@ export function NeoDbSyncDialog({
           onApply(nextReleases);
         }
 
+        const guideTargetIds = new Set([
+          ...additionReleaseIds,
+          ...result.plan.updates.map((item) => item.releaseId),
+          ...canonicalResult.changedReleaseIds,
+        ]);
+        let listeningGuideBackfill = null;
+        if (guideTargetIds.size) {
+          try {
+            listeningGuideBackfill = await backfillListeningGuideCache(
+              nextReleases.filter((release) => guideTargetIds.has(release.id)),
+            );
+          } catch (guideError) {
+            listeningGuideBackfill = {
+              error: guideError.message || "聆听指南缓存更新失败",
+            };
+          }
+        }
+
         const nextState = {
           ...quickState,
           pendingRemovals: removals,
@@ -254,9 +278,37 @@ export function NeoDbSyncDialog({
           typeVerification,
           snapshotResult,
           removalReviewCandidates,
+          listeningGuideBackfill,
           backgroundPending: false,
         });
         setPhase("done");
+
+        const coverTargetIds = [
+          ...new Set([
+            ...additionReleaseIds,
+            ...result.plan.updates.map((item) => item.releaseId),
+          ]),
+        ].filter((releaseId) => {
+          const release = nextReleases.find((item) => item.id === releaseId);
+          if (!release) return false;
+          return (
+            !release.coverUrl ||
+            /^https?:\/\//i.test(release.coverUrl)
+          );
+        });
+        if (coverTargetIds.length) {
+          fetch("/api/local-enrich-covers", {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              releaseIds: coverTargetIds,
+              cacheLocal: true,
+            }),
+          }).catch(() => {});
+        }
 
         const changed = changeCount(result.plan);
         const needsTypeReview =
@@ -283,6 +335,23 @@ export function NeoDbSyncDialog({
           );
         }
       } catch (syncError) {
+        if (changesWritten) {
+          console.warn("NeoDB background verification did not finish", syncError);
+          setError("");
+          setLastResult((currentResult) =>
+            currentResult
+              ? {
+                  ...currentResult,
+                  backgroundPending: false,
+                  backgroundWarning:
+                    "收藏变化已经成功写入；后台校验暂未完成，下次同步会继续。",
+                }
+              : currentResult,
+          );
+          setPhase("done");
+          onToast("NeoDB 同步完成；后台校验将在下次同步时继续");
+          return;
+        }
         if (syncError.code === "NEODB_AUTH") {
           clearNeoDbAccessToken();
           setToken(null);
@@ -473,7 +542,7 @@ export function NeoDbSyncDialog({
                   <strong>收藏变化已经写入</strong>
                   <span>
                     正在保存本地 CSV 快照、轮换抽查旧地址，并只核验
-                    类型相关的变化。
+                    类型相关的变化；新增唱片同时建立一次聆听指南缓存。
                   </span>
                 </div>
               </div>
@@ -487,14 +556,18 @@ export function NeoDbSyncDialog({
                     <strong>
                       {lastResult.backgroundPending
                         ? "NeoDB 增量对比完成"
-                        : "本轮同步与后台校验完成"}
+                        : "NeoDB 同步完成"}
                     </strong>
                     <span>
                       {lastResult.backgroundPending
                         ? "新增、评分、评论与时间变化已先写入"
                         : lastResult.fullReconcile
                         ? "已完整核对全部记录"
-                        : `本轮只读取 ${lastResult.fetchedPages.length} 个增量页面`}
+                        : `已批量核对 ${
+                            lastResult.knownAuditCount ?? 0
+                          } 条已知记录，并读取 ${
+                            lastResult.fetchedPages.length
+                          } 个发现页面`}
                     </span>
                   </div>
                 </div>
@@ -516,6 +589,11 @@ export function NeoDbSyncDialog({
                     <span>无变化</span>
                   </div>
                 </div>
+                {lastResult.backgroundWarning ? (
+                  <p className="sync-cache-summary">
+                    {lastResult.backgroundWarning}
+                  </p>
+                ) : null}
                 {lastResult.typeVerification &&
                 !lastResult.backgroundPending ? (
                   <p className="sync-cache-summary">
@@ -534,6 +612,14 @@ export function NeoDbSyncDialog({
                             : "已保存"
                         }：${lastResult.snapshotResult.fileName}`
                       : "当前环境不支持自动保存本地 CSV 快照；同步数据仍已正常写入。"}
+                  </p>
+                ) : null}
+                {lastResult.listeningGuideBackfill &&
+                !lastResult.backgroundPending ? (
+                  <p className="sync-cache-summary">
+                    {lastResult.listeningGuideBackfill.error
+                      ? `聆听指南缓存暂未更新：${lastResult.listeningGuideBackfill.error}`
+                      : `聆听指南缓存：新增 ${lastResult.listeningGuideBackfill.created} 张，身份更新 ${lastResult.listeningGuideBackfill.identityUpdated} 张，已有 ${lastResult.listeningGuideBackfill.existing} 张保持不变。`}
                   </p>
                 ) : null}
               </div>
@@ -659,11 +745,13 @@ export function NeoDbSyncDialog({
               </button>
             </div>
             <p className="sync-footnote">
-              快速同步只读取四个最新首页和一个轮换审计页，按 NeoDB ID
-              与内容指纹对账，并在本机保留最近 20 份去重 CSV 快照。
-              评分、评论或收听时间单独变化不会重查类型；标题、来源类型、
-              精确外链和规范地址未变时直接复用上次证据。完整核对仅在你
-              主动选择或远端总数减少时运行。
+              快速同步会读取四个最新首页和一个轮换发现页，同时通过 NeoDB
+              官方批量接口核对全部已知条目的内容指纹，因此旧唱片的评分、
+              评论、时间或资料变化也能在本轮发现。只有确有变化的条目才会
+              读取评论详情或重新写入；类型证据不受影响时继续复用缓存。
+              新增或公开身份变化的唱片会建立/更新一次指南档案，但已有指南
+              只有你主动点击更新时才会重新联网研究。
+              完整核对仅在你主动选择或远端总数减少时运行。
             </p>
           </>
         )}

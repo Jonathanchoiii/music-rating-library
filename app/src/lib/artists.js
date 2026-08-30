@@ -4,11 +4,15 @@ import {
   splitArtistCredits,
 } from "./music.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
+import {
+  ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
+  ARTIST_IDENTITY_STORAGE_KEY,
+} from "./sharedStorageKeys.js";
 
-export const ARTIST_IDENTITY_STORAGE_KEY =
-  "recordshelf-artist-identities-v1";
-export const ARTIST_IDENTITY_BACKUP_STORAGE_KEY =
-  "recordshelf-artist-identities-backups-v1";
+export {
+  ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
+  ARTIST_IDENTITY_STORAGE_KEY,
+};
 
 const MUSICBRAINZ_AUDIT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -52,12 +56,106 @@ function createLocalId(prefix = "artist") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function cleanName(value = "") {
+const WINDOWS_1252_UNICODE_TO_BYTE = new Map([
+  [0x20ac, 0x80],
+  [0x201a, 0x82],
+  [0x0192, 0x83],
+  [0x201e, 0x84],
+  [0x2026, 0x85],
+  [0x2020, 0x86],
+  [0x2021, 0x87],
+  [0x02c6, 0x88],
+  [0x2030, 0x89],
+  [0x0160, 0x8a],
+  [0x2039, 0x8b],
+  [0x0152, 0x8c],
+  [0x017d, 0x8e],
+  [0x2018, 0x91],
+  [0x2019, 0x92],
+  [0x201c, 0x93],
+  [0x201d, 0x94],
+  [0x2022, 0x95],
+  [0x2013, 0x96],
+  [0x2014, 0x97],
+  [0x02dc, 0x98],
+  [0x2122, 0x99],
+  [0x0161, 0x9a],
+  [0x203a, 0x9b],
+  [0x0153, 0x9c],
+  [0x017e, 0x9e],
+  [0x0178, 0x9f],
+]);
+
+export function cleanName(value = "") {
   return String(value).normalize("NFKC").replace(/\s+/g, " ").trim();
 }
 
+function looksLikeLegacyEncodingGarbage(name) {
+  if (
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+      name,
+    )
+  ) {
+    return false;
+  }
+  return /[‰ƒ‹›ŒœŠšŽžŸ†‡•ˆ˜‚„]|1⁄[24]/.test(name);
+}
+
+function encodeWindows1252Bytes(value) {
+  const bytes = [];
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint <= 0x7f || (codePoint >= 0xa0 && codePoint <= 0xff)) {
+      bytes.push(codePoint);
+      continue;
+    }
+    const mapped = WINDOWS_1252_UNICODE_TO_BYTE.get(codePoint);
+    if (mapped == null) return null;
+    bytes.push(mapped);
+  }
+  return Uint8Array.from(bytes);
+}
+
+function repairShiftJisWindows1252Mojibake(name) {
+  if (!looksLikeLegacyEncodingGarbage(name)) return "";
+  const restored = name
+    .replaceAll("1⁄4", "¼")
+    .replaceAll("1⁄2", "½")
+    .replaceAll("3⁄4", "¾");
+  const bytes = encodeWindows1252Bytes(restored);
+  if (!bytes?.length) return "";
+  try {
+    const decoded = cleanName(
+      new TextDecoder("shift_jis", { fatal: true }).decode(bytes),
+    );
+    if (
+      !decoded ||
+      decoded === name ||
+      !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+        decoded,
+      )
+    ) {
+      return "";
+    }
+    return decoded;
+  } catch {
+    return "";
+  }
+}
+
+function usableArtistAliasName(value) {
+  const name = cleanName(value);
+  if (!name) return "";
+  return (
+    repairShiftJisWindows1252Mojibake(name) ||
+    (looksLikeLegacyEncodingGarbage(name) ? "" : name)
+  );
+}
+
 function sanitizeAlias(alias) {
-  const name = cleanName(typeof alias === "string" ? alias : alias?.name);
+  const name = usableArtistAliasName(
+    typeof alias === "string" ? alias : alias?.name,
+  );
   if (!name) return null;
   return {
     name,
@@ -103,7 +201,7 @@ function sanitizeIdentity(identity) {
     })
     .slice(0, 12);
   return {
-    id: cleanName(identity?.id) || createLocalId(),
+    id: cleanName(identity?.id),
     canonicalName,
     sortName: cleanName(identity?.sortName) || canonicalName,
     musicBrainzMbid: cleanName(identity?.musicBrainzMbid),
@@ -160,6 +258,10 @@ export function saveArtistIdentityState(
   const sanitized = sanitizeArtistIdentityState(state);
   try {
     const serialized = JSON.stringify(sanitized);
+    const previousSerialized = storage?.getItem(ARTIST_IDENTITY_STORAGE_KEY);
+    if (previousSerialized === serialized) {
+      return sanitized;
+    }
     let backups = [];
     try {
       const storedBackups = JSON.parse(
@@ -174,6 +276,7 @@ export function saveArtistIdentityState(
           sanitizeArtistIdentityState(backups.at(-1).state),
         )
       : "";
+    let backupsChanged = false;
     if (serialized !== latestFingerprint) {
       backups.push({
         savedAt: new Date().toISOString(),
@@ -183,12 +286,16 @@ export function saveArtistIdentityState(
         ARTIST_IDENTITY_BACKUP_STORAGE_KEY,
         JSON.stringify(backups.slice(-10)),
       );
+      backupsChanged = true;
     }
-    storage?.setItem(
-      ARTIST_IDENTITY_STORAGE_KEY,
-      serialized,
-    );
-    if (storage === globalThis.localStorage) {
+    const identityChanged = serialized !== previousSerialized;
+    if (identityChanged) {
+      storage?.setItem(ARTIST_IDENTITY_STORAGE_KEY, serialized);
+    }
+    if (
+      (identityChanged || backupsChanged) &&
+      storage === globalThis.localStorage
+    ) {
       notifySharedLocalStateChanged();
     }
   } catch (error) {
@@ -206,6 +313,56 @@ export function createArtistIdentity(canonicalName) {
     source: "USER",
     aliases: [],
   });
+}
+
+function stableReleaseCreditArtistId(name) {
+  let hash = 0x811c9dc5;
+  for (const character of normalizeText(name)) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `artist-credit-${(hash >>> 0).toString(36)}`;
+}
+
+export function ensureArtistIdentitiesForReleases(identityState, releases = []) {
+  const state = sanitizeArtistIdentityState(identityState);
+  const aliasIndex = getArtistAliasIndex(state);
+  const identities = [...state.identities];
+  const identityIds = new Map(
+    identities.map((identity) => [identity.id, normalizeText(identity.canonicalName)]),
+  );
+  let created = 0;
+
+  for (const release of releases) {
+    for (const credit of splitArtistCredits(release?.artists ?? [])) {
+      const name = cleanName(credit);
+      const normalized = normalizeText(name);
+      if (!normalized || aliasIndex.has(normalized)) continue;
+      let id = stableReleaseCreditArtistId(name);
+      if (identityIds.has(id) && identityIds.get(id) !== normalized) {
+        id = createLocalId("artist-credit");
+      }
+      const identity = sanitizeIdentity({
+        id,
+        canonicalName: name,
+        sortName: name,
+        source: "RELEASE_CREDIT",
+        aliases: [],
+      });
+      if (!identity) continue;
+      identities.push(identity);
+      identityIds.set(identity.id, normalized);
+      aliasIndex.set(normalized, identity);
+      created += 1;
+    }
+  }
+
+  return {
+    state: created
+      ? sanitizeArtistIdentityState({ ...state, identities })
+      : state,
+    created,
+  };
 }
 
 export function findArtistNameConflicts(
@@ -465,7 +622,7 @@ export function getRawArtistCreditCounts(releases = []) {
 }
 
 function addAliasIfAvailable(identity, aliasName, source, aliasOwners) {
-  const name = cleanName(aliasName);
+  const name = usableArtistAliasName(aliasName);
   const normalized = normalizeText(name);
   if (!normalized) return { identity, added: false };
   const priorOwner = aliasOwners.get(normalized);

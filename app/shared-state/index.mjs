@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  ARTIST_PROFILE_STORAGE_KEY,
   SHARED_LOCAL_STORAGE_KEYS,
   SHARED_LOCAL_STORAGE_KEY_SET,
 } from "../src/lib/sharedStorageKeys.js";
+import { sanitizeArtistProfileState } from "../src/lib/artistProfiles.js";
+import { readJsonBody, sendJson } from "../scripts/http-json.mjs";
 
 const SCHEMA_VERSION = 1;
 const MAX_VALUE_BYTES = 16 * 1024 * 1024;
@@ -468,10 +471,16 @@ function coalesceEquivalentArtistIdentities(value) {
   };
 }
 
+function artistProfilesMap(value) {
+  return value !== MISSING && isPlainObject(value?.profiles)
+    ? value.profiles
+    : null;
+}
+
 function mergedStorageValue(key, base, current, incoming) {
-  const parsedBase = parseJsonValue(base);
-  const parsedCurrent = parseJsonValue(current);
-  const parsedIncoming = parseJsonValue(incoming);
+  let parsedBase = parseJsonValue(base);
+  let parsedCurrent = parseJsonValue(current);
+  let parsedIncoming = parseJsonValue(incoming);
   if (
     parsedCurrent === MISSING &&
     parsedIncoming === MISSING
@@ -490,17 +499,62 @@ function mergedStorageValue(key, base, current, incoming) {
   ) {
     return current ?? incoming;
   }
-  const merged = mergeThreeWay(
+  if (key === ARTIST_PROFILE_STORAGE_KEY) {
+    parsedBase =
+      parsedBase === MISSING ? MISSING : sanitizeArtistProfileState(parsedBase);
+    parsedCurrent =
+      parsedCurrent === MISSING
+        ? MISSING
+        : sanitizeArtistProfileState(parsedCurrent);
+    parsedIncoming =
+      parsedIncoming === MISSING
+        ? MISSING
+        : sanitizeArtistProfileState(parsedIncoming);
+    const incomingProfiles = artistProfilesMap(parsedIncoming);
+    const currentProfiles = artistProfilesMap(parsedCurrent);
+    if (
+      incomingProfiles &&
+      currentProfiles &&
+      Object.keys(incomingProfiles).length === 0 &&
+      Object.keys(currentProfiles).length > 0
+    ) {
+      parsedIncoming = {
+        ...parsedIncoming,
+        profiles: currentProfiles,
+      };
+    }
+  }
+  let merged = mergeThreeWay(
     parsedBase,
     parsedCurrent,
     parsedIncoming,
     [key],
   );
   if (merged === MISSING) return null;
+  if (key === ARTIST_PROFILE_STORAGE_KEY) {
+    merged = sanitizeArtistProfileState(merged);
+    const currentProfiles = artistProfilesMap(parsedCurrent);
+    if (currentProfiles) {
+      const mergedProfiles = { ...(merged.profiles ?? {}) };
+      for (const [artistId, profile] of Object.entries(currentProfiles)) {
+        if (!mergedProfiles[artistId]) mergedProfiles[artistId] = profile;
+      }
+      merged = { ...merged, profiles: mergedProfiles };
+    }
+  }
   const normalized =
     key === "recordshelf-artist-identities-v1"
       ? coalesceEquivalentArtistIdentities(merged)
       : merged;
+  if (current != null) {
+    try {
+      if (isDeepStrictEqual(JSON.parse(current), normalized)) {
+        return current;
+      }
+    } catch {
+      // The stored text is not JSON; keep the newly merged serialization.
+    }
+  }
   return JSON.stringify(normalized);
 }
 
@@ -561,6 +615,7 @@ export async function applySharedStateChanges(
   return enqueueWrite(statePath, async () => {
     const current = await readSharedState(statePath);
     const storage = { ...current.storage };
+    let storageChanged = false;
     for (const [key, value] of acceptedChanges) {
       const hasBase = Object.hasOwn(baseStorage, key);
       const currentValue = storage[key] ?? null;
@@ -573,10 +628,17 @@ export async function applySharedStateChanges(
               value,
             )
           : value;
-      if (nextValue === null) delete storage[key];
-      else storage[key] = nextValue;
+      if (nextValue === null) {
+        if (Object.hasOwn(storage, key)) {
+          delete storage[key];
+          storageChanged = true;
+        }
+      } else if (storage[key] !== nextValue) {
+        storage[key] = nextValue;
+        storageChanged = true;
+      }
     }
-    if (!acceptedChanges.length) return current;
+    if (!acceptedChanges.length || !storageChanged) return current;
     const next = {
       schemaVersion: SCHEMA_VERSION,
       revision: current.revision + 1,
@@ -590,31 +652,7 @@ export async function applySharedStateChanges(
 }
 
 async function readRequestJson(request) {
-  const chunks = [];
-  let byteLength = 0;
-  for await (const chunk of request) {
-    byteLength += chunk.length;
-    if (byteLength > MAX_BODY_BYTES) {
-      const error = new Error("PAYLOAD_TOO_LARGE");
-      error.statusCode = 413;
-      throw error;
-    }
-    chunks.push(chunk);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-  } catch {
-    const error = new Error("INVALID_JSON");
-    error.statusCode = 400;
-    throw error;
-  }
-}
-
-function sendJson(response, statusCode, payload) {
-  response.statusCode = statusCode;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(payload));
+  return readJsonBody(request, MAX_BODY_BYTES);
 }
 
 export function isAuthoritativeSharedStateRequest(request) {
