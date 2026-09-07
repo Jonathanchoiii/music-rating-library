@@ -5,6 +5,7 @@ import {
   CaretDown,
 } from "@phosphor-icons/react";
 import { displayDate } from "../lib/music.js";
+import { publicListeningGuideIdentity } from "../lib/listeningGuides.js";
 import { isReadOnlyMode } from "../lib/readonlyMode.js";
 
 function guideEndpoint(release) {

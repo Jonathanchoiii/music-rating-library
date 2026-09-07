@@ -377,6 +377,7 @@ POST /api/releases/:id/listening-guide/restore/:versionId
 - 任务可在详情页关闭后继续；
 - 任何响应不得返回 API key、OAuth token、完整搜索调试日志或不应公开的用户数据；
 - 前端不得直接持有搜索或模型服务密钥。
+- 详情刷新组件显式导入 `src/lib/listeningGuides.js` 的 `publicListeningGuideIdentity`，用公开字段白名单构造 `codex-refresh` 请求，避免点击后在请求发送前出现未定义函数错误。
 
 ## 12. 服务与密钥
 

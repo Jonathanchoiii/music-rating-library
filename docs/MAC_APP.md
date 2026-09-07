@@ -2,6 +2,8 @@
 
 2026-09-08 本机构建已加入唱片详情「编辑资料」入口，可修正专辑名、译名、艺人和发行时间；与 Web 共用共享用户增量，并保留人工字段优先级。升级不迁移或清空私人数据库。
 
+同日已重打包并安装聆听指南刷新修复：补齐公开身份函数导入，消除请求发送前的未定义错误。版本维持 0.1.27；旧应用及四份本地资料备份保存在 `Application Support/RecordShelf/update-backups/listening-guide-fix-20260908-003335/`，新安装已通过签名校验并正常启动。
+
 RecordShelf 的 macOS 包装版会把当前 `.private/neodb-library.local.json`
 作为本地初始资料构建进应用。公开 Web 构建与 GitHub 仓库仍不包含这份资料。
 
