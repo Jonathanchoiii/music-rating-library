@@ -48,6 +48,11 @@ export function collectPrivateMediaNames(values) {
         MOTION_ROUTE,
       );
       if (artistMotion) motion.add(artistMotion);
+      const artistImage = safePrivateFileName(
+        record.localImageUrl,
+        MOTION_ROUTE,
+      );
+      if (artistImage) motion.add(artistImage);
     });
   }
   return { covers, motion };

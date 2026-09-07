@@ -38,6 +38,7 @@ import {
   getNextVisibleLimit,
   upsertConfirmedExternalLink,
   clearConfirmedExternalLink,
+  preserveUserConfirmedReleaseMetadata,
 } from "./lib/music.js";
 import {
   ArtistGroups,
@@ -104,11 +105,12 @@ import {
   decodeArtistProfileId,
   getArtistProfile,
   loadArtistProfileState,
+  mergeArtistProfilesForIdentities,
   saveArtistProfileState,
   updateArtistProfile,
 } from "./lib/artistProfiles.js";
 import { notifySharedLocalStateChanged } from "./lib/sharedLocalState.js";
-import { persistReleaseOverlay } from "./lib/releaseMetadataPersist.js";
+import { persistReleaseOverlay, persistReleaseDetails } from "./lib/releaseMetadataPersist.js";
 import { normalizeAlbumIntroduction } from "./lib/appleMusicEditorial.js";
 import {
   getBaseRelease,
@@ -124,7 +126,9 @@ import { getLocalAuthoringHref, isReadOnlyMode } from "./lib/readonlyMode.js";
 import { getRemotePreviewMeta } from "./lib/remotePreview.js";
 import {
   buildRoamModel,
+  getRoamCountryAuditFingerprint,
   getRoamCountryRefreshCandidates,
+  ROAM_COUNTRY_REFRESH_BATCH_SIZE,
 } from "./lib/roam.js";
 
 const RoamPage = lazy(() =>
@@ -176,6 +180,7 @@ function LibraryApp() {
   const [optimisticDetailId, setOptimisticDetailId] = useState(null);
   const loadMoreSentinelRef = useRef(null);
   const libraryWorkspaceReturnRef = useRef(null);
+  const artistIndexReturnRef = useRef(null);
   const skipInitialUserStatePersistRef = useRef(true);
   const skipInitialArtistProfilePersistRef = useRef(true);
   const roamRefreshAutoStartRef = useRef(false);
@@ -389,11 +394,13 @@ function LibraryApp() {
         search,
         filters,
         artistIdentityState,
+        artistProfileState,
         listeningGuideStatuses,
         sort,
       }),
     [
       artistIdentityState,
+      artistProfileState,
       filters,
       listeningGuideStatuses,
       releases,
@@ -538,6 +545,29 @@ function LibraryApp() {
   }, [location.pathname]);
 
   useEffect(() => {
+    if (!isArtistRoute) {
+      artistIndexReturnRef.current = null;
+      return undefined;
+    }
+    if (selectedArtistId) return undefined;
+    const snapshot = artistIndexReturnRef.current;
+    if (!snapshot) return undefined;
+
+    setVisibleLimit((current) => Math.max(current, snapshot.visibleLimit));
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        window.scrollTo({ top: snapshot.scrollY, behavior: "auto" });
+        artistIndexReturnRef.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [isArtistRoute, selectedArtistId]);
+
+  useEffect(() => {
     if (
       libraryWorkspaceReturnRef.current?.pathname === location.pathname
     ) {
@@ -550,7 +580,6 @@ function LibraryApp() {
     sort,
     artistSort,
     isArtistRoute,
-    selectedArtistId,
     view,
   ]);
 
@@ -637,6 +666,7 @@ function LibraryApp() {
     }
     if (from === "roam" && selectedRoamCountry) {
       params.set("country", selectedRoamCountry);
+      if (selectedArtistId) params.set("artist", selectedArtistId);
     }
     navigate(`/releases/${encodeURIComponent(id)}?${params.toString()}`, {
       preventScrollReset: true,
@@ -646,18 +676,45 @@ function LibraryApp() {
   function selectArtist(artistId) {
     const params = new URLSearchParams(location.search);
     params.set("artist", artistId);
+    if (isRoamRoute) {
+      navigate(`${location.pathname}?${params.toString()}`, {
+        preventScrollReset: true,
+      });
+      return;
+    }
+    if (isArtistRoute && !selectedArtistId && !artistIndexReturnRef.current) {
+      artistIndexReturnRef.current = {
+        scrollY: window.scrollY,
+        visibleLimit,
+      };
+    }
     params.set("view", view);
-    navigate(`/artists?${params.toString()}`);
+    navigate(`/artists?${params.toString()}`, {
+      preventScrollReset: true,
+    });
   }
 
   function clearSelectedArtist() {
     const params = new URLSearchParams(location.search);
     params.delete("artist");
+    if (isRoamRoute) {
+      navigate(
+        `${location.pathname}${params.size ? `?${params.toString()}` : ""}`,
+        { preventScrollReset: true },
+      );
+      return;
+    }
     params.set("view", view);
-    navigate(`/artists?${params.toString()}`);
+    navigate(`/artists?${params.toString()}`, {
+      preventScrollReset: true,
+    });
   }
 
   function closeArtistDetail() {
+    if (isRoamRoute) {
+      clearSelectedArtist();
+      return;
+    }
     const workspace = libraryWorkspaceReturnRef.current;
     if (workspace) {
       navigate(workspace.url, { preventScrollReset: true });
@@ -674,17 +731,26 @@ function LibraryApp() {
     }
     const delay = (milliseconds) =>
       new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    const totalPending = roamCountryRefreshCandidates.length;
+    const batch = roamCountryRefreshCandidates.slice(
+      0,
+      ROAM_COUNTRY_REFRESH_BATCH_SIZE,
+    );
     setRoamCountriesRefreshing(true);
-    setToast(`准备核验 ${roamCountryRefreshCandidates.length} 位艺人的国家资料`);
+    setToast(`准备核验本批 ${batch.length} 位艺人（共 ${totalPending} 位待处理）`);
     try {
       const response = await fetch("/api/roam/countries/refresh", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ candidates: roamCountryRefreshCandidates }),
+        body: JSON.stringify({ candidates: batch }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.job?.jobId) {
-        throw new Error("未能开始国家资料核验。");
+        throw new Error(
+          body.error === "PAYLOAD_TOO_LARGE"
+            ? "本批核验资料仍然过多，请稍后重试。"
+            : "未能开始国家资料核验。",
+        );
       }
       let job = body.job;
       const deadline = Date.now() + 15 * 60 * 1000;
@@ -720,10 +786,17 @@ function LibraryApp() {
           ),
         );
       }
+      const remaining = Math.max(
+        0,
+        totalPending - job.checked + job.failed,
+      );
+      const batchResult = job.updated
+        ? `本批已核验 ${job.checked} 位，新增确认 ${job.updated} 位`
+        : `本批已核验 ${job.checked} 位，暂未发现可确认的新地区`;
       setToast(
-        job.updated
-          ? `已补充 ${job.updated} 位艺人的国家资料`
-          : `已核验 ${job.checked} 位艺人，暂未发现可确认的新地区`,
+        remaining
+          ? `${batchResult}；仍待处理 ${remaining} 位`
+          : `${batchResult}；已无待核验艺人`,
       );
     } catch (error) {
       setToast(error instanceof Error ? error.message : "国家资料核验失败");
@@ -858,6 +931,24 @@ function LibraryApp() {
     setToast("艺人主页链接已保存");
   }
 
+  function saveSelectedArtistCountry(region) {
+    if (!selectedArtistGroup || readOnly || !region?.code || !region?.name) return;
+    persistArtistProfilePatch(selectedArtistGroup.id, {
+      publicFacts: { country: region.name },
+      roamCountryAudit: {
+        status: "CONFIRMED",
+        checkedAt: new Date().toISOString(),
+        identityFingerprint: getRoamCountryAuditFingerprint({
+          name: selectedArtistGroup.artist,
+          aliases: selectedArtistGroup.aliases,
+          musicBrainzId: selectedArtistGroup.musicBrainzMbid,
+        }),
+        evidence: "USER_CONFIRMED",
+      },
+    });
+    setToast(`${selectedArtistGroup.artist} 的地区已更新为${region.name}，漫游已同步`);
+  }
+
   async function requestSelectedArtistMedia() {
     if (!selectedArtistGroup || readOnly) return;
     const artistId = selectedArtistGroup.id;
@@ -986,7 +1077,17 @@ function LibraryApp() {
   }, []);
 
   function openArtistFromDetail(artistId) {
-    const from = new URLSearchParams(location.search).get("from");
+    const sourceParams = new URLSearchParams(location.search);
+    const from = sourceParams.get("from");
+    const roamCountry = sourceParams.get("country");
+    if (from === "roam" && roamCountry) {
+      const params = new URLSearchParams({ artist: artistId });
+      navigate(
+        `/roam/${roamCountry.toLowerCase()}?${params.toString()}`,
+        { preventScrollReset: true },
+      );
+      return;
+    }
     if (!from || from === "library") {
       libraryWorkspaceReturnRef.current = {
         pathname: location.pathname,
@@ -1064,6 +1165,28 @@ function LibraryApp() {
         releaseType === "OTHER" ? "未分类" : releaseType
       }`,
     );
+  }
+
+  async function saveReleaseDetails(releaseId, patch) {
+    if (readOnly) throw new Error("当前页面只可浏览");
+    await persistReleaseDetails(releaseId, patch);
+    setReleases((current) => current.map((release) =>
+      release.id === releaseId ? { ...release, ...patch } : release,
+    ));
+    setToast("资料已保存");
+  }
+
+  function applySyncedLibrary(nextReleases) {
+    // Sync may finish after the user saved a correction in another open panel.
+    setReleases((current) => {
+      const byId = new Map(current.map((release) => [release.id, release]));
+      return nextReleases.map((release) => {
+        const latest = byId.get(release.id);
+        return latest
+          ? { ...latest, ...preserveUserConfirmedReleaseMetadata(latest, release) }
+          : release;
+      });
+    });
   }
 
   function updateReleasePlatformLink(releaseId, provider, url) {
@@ -1903,10 +2026,14 @@ function LibraryApp() {
               preventScrollReset: true,
             });
           } else if (detailReturnTarget === "roam") {
+            const params = new URLSearchParams();
+            if (detailReturnArtistId) {
+              params.set("artist", detailReturnArtistId);
+            }
             navigate(
-              detailReturnCountryCode
+              `${detailReturnCountryCode
                 ? `/roam/${detailReturnCountryCode.toLowerCase()}`
-                : "/roam",
+                : "/roam"}${params.size ? `?${params.toString()}` : ""}`,
               { preventScrollReset: true },
             );
           } else {
@@ -1922,6 +2049,7 @@ function LibraryApp() {
         onUpdatePlatformLink={readOnly ? undefined : updateReleasePlatformLink}
         onClearPlatformLink={readOnly ? undefined : clearReleasePlatformLink}
         onSaveAlbumIntroduction={readOnly ? undefined : updateAlbumIntroduction}
+        onSaveDetails={readOnly ? undefined : saveReleaseDetails}
         onFindMergeCandidate={readOnly ? undefined : findMergeCandidate}
         onMergeRelease={readOnly ? undefined : mergeReleaseSelection}
         onOpenArtist={openArtistFromDetail}
@@ -1931,7 +2059,7 @@ function LibraryApp() {
         onApplyCoverUpdates={readOnly ? undefined : applyCoverUpdates}
         onToast={setToast}
       />
-      {isArtistRoute ? (
+      {isArtistRoute || (isRoamRoute && selectedArtistId) ? (
         <ArtistDetail
           artist={selectedArtistGroup}
           profile={selectedArtistProfile}
@@ -1962,6 +2090,7 @@ function LibraryApp() {
             );
           }}
           onRequestIntroduction={requestArtistIntroduction}
+          onSaveCountry={readOnly ? undefined : saveSelectedArtistCountry}
           onRequestExplorationCatalog={requestSelectedArtistCatalog}
           onSavePlatformLinks={readOnly ? undefined : saveSelectedArtistPlatformLinks}
           onRequestMedia={readOnly ? undefined : requestSelectedArtistMedia}
@@ -1999,7 +2128,7 @@ function LibraryApp() {
           releases={releases}
           identityReleases={seedReleases}
           onClose={() => navigate(`/settings?view=${view}`)}
-          onApply={setReleases}
+          onApply={applySyncedLibrary}
           onReviewDuplicates={() =>
             navigate(`/settings/duplicates?view=${view}`)
           }
@@ -2012,6 +2141,16 @@ function LibraryApp() {
           releases={releases}
           identityState={artistIdentityState}
           onChangeIdentityState={setArtistIdentityState}
+          onMergeArtistProfiles={(identityIds, selectedIdentityId, nameHints) =>
+            setArtistProfileState((current) =>
+              mergeArtistProfilesForIdentities(
+                current,
+                identityIds,
+                selectedIdentityId,
+                nameHints,
+              ),
+            )
+          }
           onOpenArtistManager={() =>
             navigate(`/settings/artists?view=${view}`)
           }
@@ -2037,6 +2176,7 @@ function LibraryApp() {
         releases={releases}
         filters={filters}
         artistIdentityState={artistIdentityState}
+        artistProfileState={artistProfileState}
         listeningGuideStatuses={listeningGuideStatuses}
         onApply={(nextFilters) => {
           setFilters(nextFilters);

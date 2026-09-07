@@ -14,12 +14,18 @@ const componentPath = path.join(
 );
 const appPath = path.join(directory, "..", "src", "App.jsx");
 
-test("artist detail closes only when the backdrop itself is clicked", async () => {
+test("artist detail closes immediately on a primary backdrop press", async () => {
   const source = await fs.readFile(componentPath, "utf8");
+  assert.match(source, /onPointerDown=\{\(event\) => \{/);
   assert.match(
     source,
-    /event\.target === event\.currentTarget\) onClose\?\.\(\)/,
+    /event\.target !== event\.currentTarget\) return;/,
   );
+  assert.match(
+    source,
+    /event\.pointerType === "mouse" && event\.button !== 0\) return;/,
+  );
+  assert.match(source, /event\.preventDefault\(\);\s+onClose\?\.\(\);/);
 });
 
 test("artist detail removes the redundant raw-artist eyebrow", async () => {
@@ -36,7 +42,7 @@ test("artist detail has no generic topbar title and bleeds the verified hero pho
   assert.match(source, /data-close-on-photo/);
 });
 
-test("artist photo hero is 1:1 with an in-frame veil to the drawer surface", async () => {
+test("desktop artist photo hero is 1:1 with an in-frame veil to the drawer surface", async () => {
   const css = await fs.readFile(
     path.join(directory, "..", "src", "styles.css"),
     "utf8",
@@ -67,10 +73,10 @@ test("artist photo hero is 1:1 with an in-frame veil to the drawer surface", asy
   assert.match(veilBlock, /--artist-hero-fade-mid/);
   assert.match(veilBlock, /--artist-hero-fade-opaque/);
   assert.match(css, /--artist-hero-veil-height:\s*36%/);
-  assert.match(css, /--artist-hero-fade-start:\s*20%/);
-  assert.match(css, /--artist-hero-fade-mid:\s*40%/);
-  assert.match(css, /--artist-hero-fade-strong:\s*67%/);
-  assert.match(css, /--artist-hero-fade-opaque:\s*94%/);
+  assert.match(css, /--artist-hero-fade-start:\s*14%/);
+  assert.match(css, /--artist-hero-fade-mid:\s*30%/);
+  assert.match(css, /--artist-hero-fade-strong:\s*50%/);
+  assert.match(css, /--artist-hero-fade-opaque:\s*72%/);
   assert.match(css, /--artist-hero-blur-height:\s*30%/);
   assert.equal(css.includes("artist-hero-veil-tuner"), false);
   assert.equal(veilBlock.includes("-30px"), false);
@@ -78,6 +84,39 @@ test("artist photo hero is 1:1 with an in-frame veil to the drawer surface", asy
   assert.match(blurBlock, /height:\s*var\(--artist-hero-blur-height/);
   assert.match(identityBlock, /position:\s*absolute/);
   assert.match(identityBlock, /bottom:\s*0/);
+});
+
+test("mobile artist photo hero moves the identity and veil down by 30px", async () => {
+  const css = await fs.readFile(
+    path.join(directory, "..", "src", "styles.css"),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 750px\)[\s\S]*?\.artist-detail-drawer\.has-hero-photo \.artist-detail-visual \{[^}]*aspect-ratio:\s*auto;[^}]*height:\s*calc\(min\(100vw, 690px\) \+ 30px\);[^}]*\}/,
+  );
+});
+
+test("photo hero separates the artist title and aliases while muting aliases", async () => {
+  const css = await fs.readFile(
+    path.join(directory, "..", "src", "styles.css"),
+    "utf8",
+  );
+  const titleBlock =
+    css.match(
+      /\.artist-detail-drawer\.has-hero-photo \.artist-detail-identity h2 \{[^}]+\}/,
+    )?.[0] ?? "";
+  const aliasesBlock =
+    css.match(
+      /\.artist-detail-drawer\.has-hero-photo \.artist-detail-aliases \{[^}]+\}/,
+    )?.[0] ?? "";
+  const mediaMessageBlock =
+    css.match(/^\.artist-media-message \{[^}]+\}/m)?.[0] ?? "";
+
+  assert.match(titleBlock, /margin-bottom:\s*0/);
+  assert.match(aliasesBlock, /margin-top:\s*12px/);
+  assert.match(aliasesBlock, /opacity:\s*0\.5/);
+  assert.match(mediaMessageBlock, /opacity:\s*0\.5/);
 });
 
 test("photo hero has no tuner and samples overlay title contrast", async () => {
@@ -101,7 +140,8 @@ test("photo hero has no tuner and samples overlay title contrast", async () => {
     css.match(
       /\.artist-detail-drawer\.has-hero-photo \.artist-detail-aliases,\s*\.artist-detail-drawer\.has-hero-photo \.artist-detail-summary,\s*\.artist-detail-drawer\.has-hero-photo \.artist-media-message \{[^}]+\}/,
     )?.[0] ?? "";
-  assert.match(mutedOverlayBlock, /color:\s*var\(--muted-dark\)/);
+  assert.match(mutedOverlayBlock, /color:\s*#3f3f3c/);
+  assert.match(mutedOverlayBlock, /font-weight:\s*500/);
   assert.equal(/\[data-hero-ink="light"\][^{]*artist-detail-summary/.test(css), false);
   assert.equal(/\[data-hero-ink="light"\][^{]*artist-detail-aliases/.test(css), false);
   assert.match(source, /onToggleMotion/);
@@ -166,7 +206,14 @@ test("artist detail exposes one manual public-research action", async () => {
   assert.match(source, /nominated:\s*"提名"/);
   assert.match(source, /longlisted:\s*"长名单"/);
   assert.match(source, /artist-research-notice/);
-  assert.match(source, /<ArtistPublicFacts facts=\{profile\?\.publicFacts\} \/>/);
+  assert.match(source, /countryVerified=\{hasVerifiedArtistCountry\(profile\)\}/);
+  assert.match(source, /const country = countryVerified \?/);
+  assert.match(source, /onSaveCountry=\{onSaveCountry\}/);
+  assert.match(source, /aria-label="编辑国家或地区"/);
+  assert.match(source, /role="radiogroup" aria-label="国家或地区"/);
+  assert.match(source, /type="radio"/);
+  assert.match(source, /ROAM_REGIONS\.filter/);
+  assert.match(source, /音乐漫游会立即同步/);
 });
 
 test("artist public genres reuse listening-guide suggested-listen chips", async () => {
@@ -301,6 +348,10 @@ test("artist detail exposes compact artist platform links and one manual media r
   assert.match(source, /artist-platform-tools/);
   assert.match(source, /artist-identity-actions/);
   assert.match(source, /artist-detail-media/);
+  assert.match(
+    source,
+    /profile\?\.media\?\.localImageUrl \|\| profile\?\.media\?\.imageUrl/,
+  );
   assert.match(source, /is-motion-video/);
   assert.match(source, /<video/);
   assert.match(source, /artist-detail-collage/);
@@ -365,6 +416,28 @@ test("artist route plus-encoded IDs open the spaced raw credit", async () => {
   assert.equal(spaced.selectedArtistId, "raw-doja cat");
   assert.equal(encoded.selectedArtistId, "raw-doja cat");
   assert.equal(plus.isArtistIndex, false);
+});
+
+test("artist detail returns to the exact artist-index scroll position", async () => {
+  const source = await fs.readFile(appPath, "utf8");
+
+  assert.match(source, /const artistIndexReturnRef = useRef\(null\)/);
+  assert.match(
+    source,
+    /artistIndexReturnRef\.current = \{\s+scrollY: window\.scrollY,\s+visibleLimit,/,
+  );
+  assert.match(
+    source,
+    /setVisibleLimit\(\(current\) => Math\.max\(current, snapshot\.visibleLimit\)\)/,
+  );
+  assert.match(
+    source,
+    /window\.scrollTo\(\{ top: snapshot\.scrollY, behavior: "auto" \}\)/,
+  );
+  assert.match(
+    source,
+    /navigate\(`\/artists\?\$\{params\.toString\(\)\}`, \{\s+preventScrollReset: true,/,
+  );
 });
 
 test("artist introduction client maps Codex codes instead of a generic failure", async () => {

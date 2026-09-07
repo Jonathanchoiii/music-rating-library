@@ -4,8 +4,11 @@ import {
   artistResearchFailureMessage,
   artistResearchJobPatch,
   getArtistProfile,
+  hasUserConfirmedArtistCountry,
   hasUsefulArtistPublicFacts,
+  hasVerifiedArtistCountry,
   loadArtistProfileState,
+  mergeArtistProfilesForIdentities,
   normalizeArtistPlatformUrl,
   saveArtistProfileState,
   sanitizeArtistProfileState,
@@ -59,6 +62,7 @@ test("artist profiles keep only safe shared fields", () => {
     media: {
       status: "EMPTY",
       imageUrl: "",
+      localImageUrl: "",
       localMotionUrl: "",
       sourceVideoUrl: "",
       motionEnabled: true,
@@ -79,11 +83,123 @@ test("artist profiles keep only safe shared fields", () => {
       releases: [],
       error: "",
     },
+    roamCountryAudit: {
+      status: "EMPTY",
+      checkedAt: "",
+      identityFingerprint: "",
+      evidence: "",
+    },
     sources: [],
     researchError: "",
     researchMessage: "",
     updatedAt: "",
   });
+});
+
+test("artist profiles preserve only valid roam country audit markers", () => {
+  const state = sanitizeArtistProfileState({
+    profiles: {
+      "artist-1": {
+        roamCountryAudit: {
+          status: "NO_COUNTRY",
+          checkedAt: "2026-08-27T08:00:00.000Z",
+          identityFingerprint: "v1:1234567890abcdef",
+          evidence: "EXACT_RELEASE_GROUP",
+          privatePrompt: "discard me",
+        },
+      },
+      "artist-2": {
+        roamCountryAudit: {
+          status: "NETWORK_FAILED",
+          identityFingerprint: "unsafe",
+        },
+      },
+    },
+  });
+  assert.deepEqual(state.profiles["artist-1"].roamCountryAudit, {
+    status: "NO_COUNTRY",
+    checkedAt: "2026-08-27T08:00:00.000Z",
+    identityFingerprint: "v1:1234567890abcdef",
+    evidence: "EXACT_RELEASE_GROUP",
+  });
+  assert.equal(state.profiles["artist-2"].roamCountryAudit.status, "EMPTY");
+  assert.equal(state.profiles["artist-2"].roamCountryAudit.identityFingerprint, "");
+  assert.equal(state.profiles["artist-2"].roamCountryAudit.evidence, "");
+});
+
+test("a user-confirmed country is verified and survives stale research patches", () => {
+  const manualAudit = {
+    status: "CONFIRMED",
+    checkedAt: "2026-08-30T10:00:00.000Z",
+    identityFingerprint: "v1:1234567890abcdef",
+    evidence: "USER_CONFIRMED",
+  };
+  const original = {
+    version: 4,
+    profiles: {
+      "artist-hk": {
+        introduction: "Keep this carefully entered introduction.",
+        introductionStatus: "READY",
+        publicFacts: { country: "香港", birthDate: "1998-10-22" },
+        roamCountryAudit: manualAudit,
+      },
+    },
+  };
+
+  const staleCountryOnly = updateArtistProfile(original, "artist-hk", {
+    publicFacts: { country: "中国", artistType: "个人" },
+  });
+  assert.equal(staleCountryOnly.profiles["artist-hk"].publicFacts.country, "香港");
+  assert.equal(staleCountryOnly.profiles["artist-hk"].publicFacts.artistType, "个人");
+  assert.equal(
+    staleCountryOnly.profiles["artist-hk"].introduction,
+    "Keep this carefully entered introduction.",
+  );
+
+  const staleAuditedPatch = updateArtistProfile(staleCountryOnly, "artist-hk", {
+    publicFacts: { country: "中国" },
+    roamCountryAudit: {
+      status: "CONFIRMED",
+      checkedAt: "2026-08-30T10:01:00.000Z",
+      identityFingerprint: "v1:1234567890abcdef",
+      evidence: "WIKIDATA_COUNTRY",
+    },
+  });
+  const profile = staleAuditedPatch.profiles["artist-hk"];
+  assert.equal(profile.publicFacts.country, "香港");
+  assert.deepEqual(profile.roamCountryAudit, manualAudit);
+  assert.equal(hasUserConfirmedArtistCountry(profile), true);
+  assert.equal(hasVerifiedArtistCountry(profile), true);
+});
+
+test("a newer user country choice may replace an earlier user choice", () => {
+  const next = updateArtistProfile(
+    {
+      version: 4,
+      profiles: {
+        "artist-hk": {
+          publicFacts: { country: "香港" },
+          roamCountryAudit: {
+            status: "CONFIRMED",
+            checkedAt: "2026-08-30T10:00:00.000Z",
+            identityFingerprint: "v1:1234567890abcdef",
+            evidence: "USER_CONFIRMED",
+          },
+        },
+      },
+    },
+    "artist-hk",
+    {
+      publicFacts: { country: "澳门" },
+      roamCountryAudit: {
+        status: "CONFIRMED",
+        checkedAt: "2026-08-30T10:02:00.000Z",
+        identityFingerprint: "v1:1234567890abcdef",
+        evidence: "USER_CONFIRMED",
+      },
+    },
+  );
+  assert.equal(next.profiles["artist-hk"].publicFacts.country, "澳门");
 });
 
 test("artist platform links only accept exact HTTPS artist pages", () => {
@@ -122,6 +238,7 @@ test("artist profile sanitizes platform links and private motion paths", () => {
         media: {
           status: "READY",
           imageUrl: "https://is1-ssl.mzstatic.com/image/thumb/example.jpg",
+          localImageUrl: "/private-motion-artwork/artist-1-still.jpg",
           localMotionUrl: "/private-motion-artwork/artist-1-123.webp",
         },
       },
@@ -133,8 +250,132 @@ test("artist profile sanitizes platform links and private motion paths", () => {
   );
   assert.equal(state.profiles["artist-1"].platformLinks.spotify, "");
   assert.equal(
+    state.profiles["artist-1"].media.localImageUrl,
+    "/private-motion-artwork/artist-1-still.jpg",
+  );
+  assert.equal(
     state.profiles["artist-1"].media.localMotionUrl,
     "/private-motion-artwork/artist-1-123.webp",
+  );
+});
+
+test("artist profile updates cannot clear a user-requested local image", () => {
+  const next = updateArtistProfile(
+    {
+      version: 4,
+      profiles: {
+        "artist-1": {
+          media: {
+            status: "IMAGE_ONLY",
+            imageUrl: "https://is1-ssl.mzstatic.com/image/thumb/old.jpg",
+            localImageUrl:
+              "/private-motion-artwork/artist-artist-1-still-old.jpg",
+            motionEnabled: false,
+          },
+        },
+      },
+    },
+    "artist-1",
+    { media: { imageUrl: "", localImageUrl: "" } },
+  );
+  assert.equal(
+    next.profiles["artist-1"].media.localImageUrl,
+    "/private-motion-artwork/artist-artist-1-still-old.jpg",
+  );
+  assert.equal(next.profiles["artist-1"].media.motionEnabled, false);
+});
+
+test("artist identity merges preserve profiles, local media, and user choices", () => {
+  const next = mergeArtistProfilesForIdentities(
+    {
+      version: 4,
+      profiles: {
+        rescene: {
+          introduction: "Keep the selected introduction",
+          media: { motionEnabled: false },
+        },
+        "rescene-ko": {
+          platformLinks: {
+            appleMusic:
+              "https://music.apple.com/kr/artist/rescene/1732515905",
+          },
+          media: {
+            status: "IMAGE_ONLY",
+            imageUrl: "https://is1-ssl.mzstatic.com/image/thumb/rescene.jpg",
+            localImageUrl:
+              "/private-motion-artwork/artist-rescene-ko-still.jpg",
+          },
+        },
+        "raw-리센느": {
+          platformLinks: {
+            spotify: "https://open.spotify.com/artist/04R4xYa3ZqRzFhuZQGQLCC",
+          },
+        },
+      },
+    },
+    ["rescene", "rescene-ko"],
+    "rescene",
+    ["RESCENE", "리센느"],
+  );
+
+  assert.equal(next.profiles["rescene-ko"], undefined);
+  assert.equal(next.profiles["raw-리센느"], undefined);
+  assert.equal(
+    next.profiles.rescene.introduction,
+    "Keep the selected introduction",
+  );
+  assert.equal(next.profiles.rescene.media.motionEnabled, false);
+  assert.equal(
+    next.profiles.rescene.media.localImageUrl,
+    "/private-motion-artwork/artist-rescene-ko-still.jpg",
+  );
+  assert.equal(
+    next.profiles.rescene.platformLinks.appleMusic,
+    "https://music.apple.com/kr/artist/rescene/1732515905",
+  );
+  assert.equal(
+    next.profiles.rescene.platformLinks.spotify,
+    "https://open.spotify.com/artist/04R4xYa3ZqRzFhuZQGQLCC",
+  );
+});
+
+test("artist identity merges keep a user-confirmed country above automatic evidence", () => {
+  const next = mergeArtistProfilesForIdentities(
+    {
+      version: 4,
+      profiles: {
+        "artist-selected": {
+          introduction: "Keep the selected artist introduction.",
+          publicFacts: { country: "中国" },
+          roamCountryAudit: {
+            status: "CONFIRMED",
+            checkedAt: "2026-08-30T09:00:00.000Z",
+            identityFingerprint: "v1:1111111111111111",
+            evidence: "WIKIDATA_COUNTRY",
+          },
+        },
+        "artist-merged": {
+          publicFacts: { country: "香港" },
+          roamCountryAudit: {
+            status: "CONFIRMED",
+            checkedAt: "2026-08-30T10:00:00.000Z",
+            identityFingerprint: "v1:2222222222222222",
+            evidence: "USER_CONFIRMED",
+          },
+        },
+      },
+    },
+    ["artist-selected", "artist-merged"],
+    "artist-selected",
+  );
+  assert.equal(next.profiles["artist-selected"].publicFacts.country, "香港");
+  assert.equal(
+    next.profiles["artist-selected"].roamCountryAudit.evidence,
+    "USER_CONFIRMED",
+  );
+  assert.equal(
+    next.profiles["artist-selected"].introduction,
+    "Keep the selected artist introduction.",
   );
 });
 

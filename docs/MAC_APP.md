@@ -1,5 +1,7 @@
 # RecordShelf macOS 本地应用
 
+2026-09-08 本机构建已加入唱片详情「编辑资料」入口，可修正专辑名、译名、艺人和发行时间；与 Web 共用共享用户增量，并保留人工字段优先级。升级不迁移或清空私人数据库。
+
 RecordShelf 的 macOS 包装版会把当前 `.private/neodb-library.local.json`
 作为本地初始资料构建进应用。公开 Web 构建与 GitHub 仓库仍不包含这份资料。
 
@@ -29,6 +31,12 @@ npm run build:desktop
   `~/Library/Application Support/RecordShelf/shared-local-state.json`。
   删除、手动合并、疑似重复条目取舍、艺人映射、筛选和安全的同步状态都会
   在两端恢复；NeoDB 登录 token 不会写入该文件。
+- 艺人资料同时生成
+  `artist-profiles-master.json` 与 `artist-profiles-master.csv` 总表，集中备份
+  主显示名、别名、MBID、地区、介绍、素材路径和 Apple Music / Spotify /
+  YouTube Music 艺人主页；变化前的 JSON 总表在
+  `artist-profiles-master.backups/` 滚动保留最近 20 份。总表只留在本机，
+  主共享文件缺字段时可增量恢复，但不会覆盖较新的主动清空。
 - 手机在 Mac 关机后浏览需要只读网站快照，见
   [手机只读预览](PHONE_PREVIEW.md)。iCloud Drive 只作文件备份。
 - 两端修改按稳定 ID 三方合并；同一字段冲突时保留共享文件里更新更晚的值，
@@ -41,7 +49,7 @@ npm run build:desktop
 - 发行详情的平台图标由前端组件局部接管右键菜单，用于添加、修改或清除链接。Electron 主进程不得全局禁用 `context-menu`，否则会让该编辑入口以及未来其他右键操作一起失效。
 - 客户端持有 Electron 单实例锁；重复打开同一当前版本时只恢复并聚焦原窗口，不会重复占用 `4173`。若端口由不支持单实例锁的历史 RecordShelf 进程占用，则不得静默复用旧页面；应提示用户完全退出旧客户端后重开，避免代码已更新但界面仍表现为旧版本。尤其注意从废纸篓启动的 `.app` 也可能继续占用端口。
 - 更新代码或基础数据库后，重新执行 `npm run build:desktop` 生成新版应用。
-- 升级前建议先在“设置”中使用“备份音乐库”下载完整 JSON，并备份上述共享状态文件。
+- 升级前建议先在“设置”中使用“备份音乐库”下载完整 JSON，并备份上述共享状态文件与艺人资料总表。
 
 每次发布的用户可见变化、数据影响与验证结果见
 [版本变更记录](CHANGELOG.md)。

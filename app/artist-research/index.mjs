@@ -18,6 +18,7 @@ import {
 } from "../src/lib/artistProfiles.js";
 import {
   cacheArtistMotionArtwork,
+  cacheArtistStaticArtwork,
   lookupAppleArtistMedia,
   playableAppleHlsUrl,
 } from "../scripts/apple-motion-artwork.mjs";
@@ -287,6 +288,50 @@ export function selectExactMusicBrainzCandidate(candidates, names) {
   return exact.length === 1 ? exact[0] : null;
 }
 
+function releaseEvidenceTitles(releaseHints) {
+  return uniqueText(
+    (Array.isArray(releaseHints) ? releaseHints : []).flatMap((release) => [
+      release?.title,
+      release?.translatedTitle,
+      ...(Array.isArray(release?.titleAliases) ? release.titleAliases : []),
+    ]),
+    40,
+  );
+}
+
+function normalizedReleaseEvidenceTitle(value) {
+  return normalizedName(
+    cleanText(value).replace(
+      /\s*(?:[-–—]|\()\s*(?:single|ep)\)?\s*$/iu,
+      "",
+    ),
+  );
+}
+
+async function hasExactMusicBrainzReleaseEvidence(
+  artistId,
+  releaseHints,
+  fetchImpl,
+  delayImpl,
+) {
+  const expectedTitles = new Set(
+    releaseEvidenceTitles(releaseHints)
+      .map(normalizedReleaseEvidenceTitle)
+      .filter(Boolean),
+  );
+  if (!expectedTitles.size) return false;
+  await delayImpl(MUSICBRAINZ_REQUEST_INTERVAL_MS);
+  const url = new URL("/ws/2/release-group", MUSICBRAINZ_ORIGIN);
+  url.searchParams.set("artist", artistId);
+  url.searchParams.set("release-group-status", "website-default");
+  url.searchParams.set("fmt", "json");
+  url.searchParams.set("limit", "100");
+  const payload = await fetchJson(url, fetchImpl, { delayImpl });
+  return (payload?.["release-groups"] ?? []).some((releaseGroup) =>
+    expectedTitles.has(normalizedReleaseEvidenceTitle(releaseGroup?.title)),
+  );
+}
+
 function uniqueText(values, limit = 12) {
   return [...new Set(values.map((value) => cleanText(value, 120)).filter(Boolean))].slice(0, limit);
 }
@@ -323,6 +368,27 @@ function wikipediaUrlFromWikidata(entityId, entityData) {
     (sitelink) => sitelink?.url,
   );
   return cleanText(preferred?.url, 1_000);
+}
+
+function wikidataClaimEntityIds(entity, property) {
+  return uniqueText(
+    (entity?.claims?.[property] ?? []).map(
+      (claim) => claim?.mainsnak?.datavalue?.value?.id,
+    ),
+    12,
+  ).filter((value) => /^Q\d+$/i.test(value));
+}
+
+function wikidataIsoCountryCode(entity) {
+  const codes = uniqueText(
+    (entity?.claims?.P297 ?? []).map(
+      (claim) => claim?.mainsnak?.datavalue?.value,
+    ),
+    4,
+  )
+    .map((value) => value.toUpperCase())
+    .filter((value) => /^[A-Z]{2}$/.test(value));
+  return codes.length === 1 ? codes[0] : "";
 }
 
 function memberRelations(details) {
@@ -551,12 +617,21 @@ async function persistBaselineFallback(
   return true;
 }
 
-export function musicBrainzDetailsToProfile(details, introduction = "", wikipediaUrl = "") {
+export function musicBrainzDetailsToProfile(
+  details,
+  introduction = "",
+  wikipediaUrl = "",
+  options = {},
+) {
   const type = cleanText(details?.type, 80);
   const isGroup = /group|orchestra|choir/i.test(type);
   const begin = cleanText(details?.["life-span"]?.begin, 30);
-  const rawCountry = cleanText(details?.country, 20);
-  const country = translatedCountry(rawCountry);
+  const countryEvidence = options?.countryEvidence ?? null;
+  const countryCode = cleanText(countryEvidence?.countryCode, 2).toUpperCase();
+  const country = /^[A-Z]{2}$/.test(countryCode)
+    ? translatedCountry(countryCode)
+    : "";
+  const beginArea = cleanText(details?.["begin-area"]?.name, 180);
   const sources = [
     details?.id
       ? {
@@ -566,7 +641,18 @@ export function musicBrainzDetailsToProfile(details, introduction = "", wikipedi
           url: `${MUSICBRAINZ_ORIGIN}/artist/${details.id}`,
           publishedAt: "",
           sourceType: "platform",
-          supports: ["艺人身份、类型、地区、成员与标签"],
+          supports: ["艺人身份、类型、活动时期、成员与标签"],
+        }
+      : null,
+    countryEvidence?.sourceUrl
+      ? {
+          sourceId: "WD1",
+          title: cleanText(details?.name, 180) || "Wikidata artist",
+          publisher: "Wikidata",
+          url: cleanText(countryEvidence.sourceUrl, 1_000),
+          publishedAt: "",
+          sourceType: "publication",
+          supports: [isGroup ? "国家或地区（起源地）" : "国家或地区（国籍）"],
         }
       : null,
     wikipediaUrl
@@ -596,19 +682,17 @@ export function musicBrainzDetailsToProfile(details, introduction = "", wikipedi
       activeFrom: isGroup ? begin : "",
       endedAt: cleanText(details?.["life-span"]?.end, 30),
       birthPlace: localizedPlace(
-        cleanText(details?.["begin-area"]?.name, 180),
-        country || rawCountry,
+        beginArea,
+        country,
       ),
-      origin: localizedPlace(
-        cleanText(details?.area?.name, 180),
-        country || rawCountry,
-      ),
+      origin: isGroup ? localizedPlace(beginArea, country) : country,
       country,
       musicBrainzId: cleanText(details?.id, 80),
       genres: uniqueText(tags),
       members: isGroup ? memberRelations(details) : [],
     },
     sources,
+    countryEvidence,
     researchError: "",
   };
 }
@@ -641,6 +725,49 @@ async function fetchJson(url, fetchImpl, options = {}) {
   }
 }
 
+async function resolveWikidataCountryEvidence(
+  entityId,
+  entityData,
+  artistType,
+  fetchImpl,
+  delayImpl,
+) {
+  const entity = entityData?.entities?.[entityId];
+  if (!entity) return null;
+  const isGroup = /group|orchestra|choir/i.test(cleanText(artistType, 80));
+  const property = isGroup ? "P495" : "P27";
+  const countryEntityIds = wikidataClaimEntityIds(entity, property);
+  if (!countryEntityIds.length) return null;
+  const countryCodes = [];
+  for (const countryEntityId of countryEntityIds) {
+    try {
+      const countryData = await fetchJson(
+        `https://www.wikidata.org/wiki/Special:EntityData/${countryEntityId}.json`,
+        fetchImpl,
+        { delayImpl },
+      );
+      const code = wikidataIsoCountryCode(
+        countryData?.entities?.[countryEntityId],
+      );
+      if (code) countryCodes.push(code);
+    } catch {
+      return null;
+    }
+  }
+  const uniqueCodes = [...new Set(countryCodes)];
+  if (uniqueCodes.length !== 1 || countryCodes.length !== countryEntityIds.length) {
+    return null;
+  }
+  return {
+    status: "CONFIRMED",
+    kind: isGroup
+      ? "WIKIDATA_COUNTRY_OF_ORIGIN"
+      : "WIKIDATA_CITIZENSHIP",
+    countryCode: uniqueCodes[0],
+    sourceUrl: `https://www.wikidata.org/wiki/${entityId}`,
+  };
+}
+
 async function resolveMusicBrainzId(payload, fetchImpl, delayImpl) {
   const provided = cleanText(payload.musicBrainzId, 80);
   if (MBID_PATTERN.test(provided)) return { id: provided, searched: false };
@@ -658,6 +785,20 @@ async function resolveMusicBrainzId(payload, fetchImpl, delayImpl) {
       "ARTIST_IDENTITY_AMBIGUOUS",
       409,
       "没有找到唯一的精确艺人身份；如存在同名艺人，请先在艺人管理中绑定 MusicBrainz ID。",
+    );
+  }
+  if (
+    !(await hasExactMusicBrainzReleaseEvidence(
+      candidate.id,
+      payload.releaseHints,
+      fetchImpl,
+      delayImpl,
+    ))
+  ) {
+    throw requestError(
+      "ARTIST_IDENTITY_AMBIGUOUS",
+      409,
+      "同名艺人没有本地唱片证据；请先在艺人管理中确认身份。",
     );
   }
   return { id: candidate.id, searched: true };
@@ -683,24 +824,32 @@ export async function researchArtist(payload, options = {}) {
     (relation) => /wikipedia/i.test(cleanText(relation?.type)) && wikipediaRestUrl(relationUrl(relation)),
   );
   let wikipediaUrl = relationUrl(wikipediaRelation);
-  if (!wikipediaUrl) {
-    const wikidataRelation = (details?.relations ?? []).find(
-      (relation) =>
-        /wikidata/i.test(cleanText(relation?.type)) &&
-        wikidataEntityId(relationUrl(relation)),
-    );
-    const entityId = wikidataEntityId(relationUrl(wikidataRelation));
-    if (entityId) {
-      try {
-        const entityData = await fetchJson(
-          `https://www.wikidata.org/wiki/Special:EntityData/${entityId}.json`,
-          fetchImpl,
-          { delayImpl },
-        );
+  const wikidataRelation = (details?.relations ?? []).find(
+    (relation) =>
+      /wikidata/i.test(cleanText(relation?.type)) &&
+      wikidataEntityId(relationUrl(relation)),
+  );
+  const entityId = wikidataEntityId(relationUrl(wikidataRelation));
+  let countryEvidence = null;
+  if (entityId) {
+    try {
+      const entityData = await fetchJson(
+        `https://www.wikidata.org/wiki/Special:EntityData/${entityId}.json`,
+        fetchImpl,
+        { delayImpl },
+      );
+      if (!wikipediaUrl) {
         wikipediaUrl = wikipediaUrlFromWikidata(entityId, entityData);
-      } catch {
-        // MusicBrainz facts remain useful when Wikidata is temporarily unavailable.
       }
+      countryEvidence = await resolveWikidataCountryEvidence(
+        entityId,
+        entityData,
+        details?.type,
+        fetchImpl,
+        delayImpl,
+      );
+    } catch {
+      // Identity facts remain useful, but country stays blank without semantic evidence.
     }
   }
   let introduction = "";
@@ -716,7 +865,9 @@ export async function researchArtist(payload, options = {}) {
       // Structured MusicBrainz facts remain useful when the optional summary is unavailable.
     }
   }
-  return musicBrainzDetailsToProfile(details, introduction, wikipediaUrl);
+  return musicBrainzDetailsToProfile(details, introduction, wikipediaUrl, {
+    countryEvidence,
+  });
 }
 
 function snakeList(value, mapper, limit = 40) {
@@ -1176,6 +1327,10 @@ export async function persistResearchedArtistProfile(
                 ...profile.media,
                 imageUrl:
                   profile.media?.imageUrl || previousProfile.media?.imageUrl || "",
+                localImageUrl:
+                  profile.media?.localImageUrl ||
+                  previousProfile.media?.localImageUrl ||
+                  "",
                 localMotionUrl:
                   profile.media?.localMotionUrl ||
                   previousProfile.media?.localMotionUrl ||
@@ -1402,6 +1557,14 @@ function playableArtistMotionUrl(value) {
     : "";
 }
 
+function playableArtistImageUrl(value) {
+  return /^\/private-motion-artwork\/[a-zA-Z0-9._-]+\.(?:webp|png|jpe?g)$/.test(
+    cleanText(value, 400),
+  )
+    ? cleanText(value, 400)
+    : "";
+}
+
 function artistMotionTruncationNotice(durationSeconds) {
   return `动态视频已截短至 ${durationSeconds} 秒，以控制在 8 MB 以内。`;
 }
@@ -1517,6 +1680,22 @@ export async function requestArtistMedia(payload, options = {}) {
   const imageUrl =
     cleanText(catalog.imageUrl, 2_000) ||
     cleanText(previousMedia.imageUrl, 2_000);
+  let localImageUrl = cleanText(previousMedia.localImageUrl, 2_000);
+  const catalogImageUrl = cleanText(catalog.imageUrl, 2_000);
+  if (catalogImageUrl) {
+    try {
+      const cacheArtistStaticArtworkImpl =
+        options.cacheArtistStaticArtworkImpl ?? cacheArtistStaticArtwork;
+      const cached = await cacheArtistStaticArtworkImpl(
+        artistId,
+        catalogImageUrl,
+        options.fetchImpl ?? fetch,
+      );
+      localImageUrl = playableArtistImageUrl(cached.localUrl);
+    } catch {
+      // A failed refresh must never erase the last user-requested local image.
+    }
+  }
   const media = {
     status: localMotionUrl
       ? "READY"
@@ -1524,6 +1703,7 @@ export async function requestArtistMedia(payload, options = {}) {
         ? "IMAGE_ONLY"
         : "UNAVAILABLE",
     imageUrl,
+    localImageUrl,
     localMotionUrl,
     sourceVideoUrl:
       sourceVideoUrl || playableAppleHlsUrl(previousMedia.sourceVideoUrl) || "",

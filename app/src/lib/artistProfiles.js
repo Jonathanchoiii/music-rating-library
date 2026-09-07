@@ -9,6 +9,82 @@ function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+const ROAM_COUNTRY_AUDIT_STATUSES = new Set([
+  "CONFIRMED",
+  "NO_COUNTRY",
+  "AMBIGUOUS",
+]);
+
+const ROAM_COUNTRY_AUDIT_EVIDENCE = new Set([
+  "CONFIRMED_MBID",
+  "EXACT_RELEASE_GROUP",
+  "WIKIDATA_COUNTRY",
+  "USER_CONFIRMED_APPLE",
+  "USER_CONFIRMED",
+]);
+
+const USER_CONFIRMED_ROAM_COUNTRY_EVIDENCE = new Set([
+  "USER_CONFIRMED_APPLE",
+  "USER_CONFIRMED",
+]);
+
+const VERIFIED_ROAM_COUNTRY_EVIDENCE = new Set([
+  "WIKIDATA_COUNTRY",
+  "USER_CONFIRMED_APPLE",
+  "USER_CONFIRMED",
+]);
+
+function isUserConfirmedCountryAudit(audit) {
+  return Boolean(
+    audit?.status === "CONFIRMED" &&
+      USER_CONFIRMED_ROAM_COUNTRY_EVIDENCE.has(audit?.evidence),
+  );
+}
+
+export function hasUserConfirmedArtistCountry(profile) {
+  return Boolean(
+    cleanText(profile?.publicFacts?.country) &&
+      isUserConfirmedCountryAudit(profile?.roamCountryAudit),
+  );
+}
+
+export function hasVerifiedArtistCountry(profile) {
+  return Boolean(
+      cleanText(profile?.publicFacts?.country) &&
+      profile?.roamCountryAudit?.status === "CONFIRMED" &&
+      VERIFIED_ROAM_COUNTRY_EVIDENCE.has(profile?.roamCountryAudit?.evidence),
+  );
+}
+
+function sanitizeRoamCountryAudit(value) {
+  const audit = value && typeof value === "object" ? value : {};
+  const status = ROAM_COUNTRY_AUDIT_STATUSES.has(audit.status)
+    ? audit.status
+    : "EMPTY";
+  const checkedAt = cleanText(audit.checkedAt);
+  const identityFingerprint = cleanText(audit.identityFingerprint).toLowerCase();
+  if (
+    status === "EMPTY" ||
+    !Number.isFinite(Date.parse(checkedAt)) ||
+    !/^v1:[0-9a-f]{16}$/.test(identityFingerprint)
+  ) {
+    return {
+      status: "EMPTY",
+      checkedAt: "",
+      identityFingerprint: "",
+      evidence: "",
+    };
+  }
+  return {
+    status,
+    checkedAt,
+    identityFingerprint,
+    evidence: ROAM_COUNTRY_AUDIT_EVIDENCE.has(audit.evidence)
+      ? audit.evidence
+      : "",
+  };
+}
+
 function normalizedArtistNameHint(value) {
   return cleanText(value)
     .normalize("NFKC")
@@ -66,14 +142,11 @@ function preferPlatformLinks(primary, fallback) {
 function preferMedia(primary, fallback) {
   const left = sanitizeMedia(primary);
   const right = sanitizeMedia(fallback);
-  const leftHasCache = Boolean(left.imageUrl || left.localMotionUrl);
-  const rightHasCache = Boolean(right.imageUrl || right.localMotionUrl);
-  if (leftHasCache && !rightHasCache) return left;
-  if (rightHasCache && !leftHasCache) return right;
   return {
     ...right,
     ...left,
     imageUrl: preferText(left.imageUrl, right.imageUrl),
+    localImageUrl: preferText(left.localImageUrl, right.localImageUrl),
     localMotionUrl: preferText(left.localMotionUrl, right.localMotionUrl),
     sourceVideoUrl: preferText(left.sourceVideoUrl, right.sourceVideoUrl),
     source: preferText(left.source, right.source),
@@ -81,7 +154,7 @@ function preferMedia(primary, fallback) {
     notice: preferText(left.notice, right.notice),
     error: left.error || right.error,
     status: left.status !== "EMPTY" ? left.status : right.status,
-    motionEnabled: left.motionEnabled !== false,
+    motionEnabled: left.motionEnabled,
     truncated: left.truncated === true || right.truncated === true,
   };
 }
@@ -94,9 +167,27 @@ function preferExplorationCatalog(primary, fallback) {
   return left.checkedAt || left.status !== "EMPTY" ? left : right;
 }
 
+function preferRoamCountryAudit(primary, fallback) {
+  const left = sanitizeRoamCountryAudit(primary);
+  const right = sanitizeRoamCountryAudit(fallback);
+  if (isUserConfirmedCountryAudit(left)) return left;
+  if (isUserConfirmedCountryAudit(right)) return right;
+  return left.status !== "EMPTY" ? left : right;
+}
+
 function mergePreferredArtistProfile(primary, fallback) {
   const left = sanitizeArtistProfile(primary);
   const right = sanitizeArtistProfile(fallback);
+  const roamCountryAudit = preferRoamCountryAudit(
+    left.roamCountryAudit,
+    right.roamCountryAudit,
+  );
+  const publicFacts = mergePublicFacts(right.publicFacts, left.publicFacts);
+  if (hasUserConfirmedArtistCountry(left)) {
+    publicFacts.country = left.publicFacts.country;
+  } else if (hasUserConfirmedArtistCountry(right)) {
+    publicFacts.country = right.publicFacts.country;
+  }
   return sanitizeArtistProfile({
     ...right,
     ...left,
@@ -107,7 +198,8 @@ function mergePreferredArtistProfile(primary, fallback) {
       left.explorationCatalog,
       right.explorationCatalog,
     ),
-    publicFacts: mergePublicFacts(right.publicFacts, left.publicFacts),
+    roamCountryAudit,
+    publicFacts,
     sources: left.sources.length ? left.sources : right.sources,
     updatedAt: preferText(left.updatedAt, right.updatedAt),
   });
@@ -204,6 +296,14 @@ function privateArtistMotionUrl(value) {
     : "";
 }
 
+function privateArtistImageUrl(value) {
+  return /^\/private-motion-artwork\/[a-zA-Z0-9._-]+\.(?:webp|png|jpe?g)$/.test(
+    cleanText(value),
+  )
+    ? cleanText(value)
+    : "";
+}
+
 export function visibleArtistMediaMessage(media) {
   const notice = cleanText(media?.notice);
   const error = cleanText(media?.error);
@@ -235,6 +335,7 @@ function sanitizeMedia(value) {
       ? media.status
       : "EMPTY",
     imageUrl: cleanText(media.imageUrl),
+    localImageUrl: privateArtistImageUrl(media.localImageUrl),
     localMotionUrl,
     sourceVideoUrl: cleanText(media.sourceVideoUrl),
     motionEnabled: media.motionEnabled !== false,
@@ -673,6 +774,7 @@ function sanitizeArtistProfile(profile) {
     platformLinks: sanitizePlatformLinks(value.platformLinks),
     media: sanitizeMedia(value.media),
     explorationCatalog: sanitizeExplorationCatalog(value.explorationCatalog),
+    roamCountryAudit: sanitizeRoamCountryAudit(value.roamCountryAudit),
     sources: sanitizeSources(value.sources),
     researchMessage: cleanText(value.researchMessage),
     researchError: cleanText(value.researchError),
@@ -723,6 +825,61 @@ export function sanitizeArtistProfileState(value) {
   return { version: 4, profiles: coalesceArtistProfileIds(profiles) };
 }
 
+export function mergeArtistProfileStatesPreferPrimary(primary, fallback) {
+  const preferred = sanitizeArtistProfileState(primary);
+  const backup = sanitizeArtistProfileState(fallback);
+  const profiles = { ...backup.profiles };
+  for (const [artistId, profile] of Object.entries(preferred.profiles)) {
+    profiles[artistId] = profiles[artistId]
+      ? mergePreferredArtistProfile(profile, profiles[artistId])
+      : profile;
+  }
+  return sanitizeArtistProfileState({ version: 4, profiles });
+}
+
+export function mergeArtistProfilesForIdentities(
+  state,
+  identityIds,
+  selectedIdentityId,
+  nameHints = [],
+) {
+  const current = sanitizeArtistProfileState(state);
+  const targetId =
+    decodeArtistProfileId(selectedIdentityId) || cleanText(selectedIdentityId);
+  if (!targetId) return current;
+
+  const keys = new Set([targetId]);
+  const ids = Array.isArray(identityIds) ? identityIds : [identityIds];
+  for (const identityId of ids) {
+    for (const key of artistProfileLookupKeys(identityId)) {
+      if (key) keys.add(key);
+      const decoded = decodeArtistProfileId(key);
+      if (decoded) keys.add(decoded);
+    }
+  }
+  for (const hint of nameHints) {
+    for (const key of artistProfileLookupKeys("", [hint])) {
+      if (key) keys.add(key);
+      const decoded = decodeArtistProfileId(key);
+      if (decoded) keys.add(decoded);
+    }
+  }
+
+  const profiles = { ...current.profiles };
+  let merged = null;
+  const orderedKeys = [targetId, ...[...keys].filter((key) => key !== targetId)];
+  for (const key of orderedKeys) {
+    const profile = profiles[key];
+    if (!profile) continue;
+    merged = merged
+      ? mergePreferredArtistProfile(merged, profile)
+      : sanitizeArtistProfile(profile);
+    if (key !== targetId) delete profiles[key];
+  }
+  if (merged) profiles[targetId] = merged;
+  return sanitizeArtistProfileState({ ...current, profiles });
+}
+
 export function loadArtistProfileState(storage = window.localStorage) {
   try {
     const raw = storage.getItem(ARTIST_PROFILE_STORAGE_KEY);
@@ -764,6 +921,23 @@ export function updateArtistProfile(state, artistId, patch, nameHints = []) {
   );
   const canonicalId = decodeArtistProfileId(artistId) || artistId;
   const previous = current.profiles[canonicalId] ?? EMPTY_ARTIST_PROFILE;
+  const hasPublicFactsPatch = Object.prototype.hasOwnProperty.call(
+    patch,
+    "publicFacts",
+  );
+  const hasCountryAuditPatch = Object.prototype.hasOwnProperty.call(
+    patch,
+    "roamCountryAudit",
+  );
+  const incomingAudit = hasCountryAuditPatch
+    ? sanitizeRoamCountryAudit(patch.roamCountryAudit)
+    : previous.roamCountryAudit;
+  const keepPreviousUserCountry =
+    isUserConfirmedCountryAudit(previous.roamCountryAudit) &&
+    (!hasCountryAuditPatch || !isUserConfirmedCountryAudit(incomingAudit));
+  const mergedPublicFacts = hasPublicFactsPatch
+    ? mergePublicFacts(previous.publicFacts, patch.publicFacts)
+    : previous.publicFacts;
   return sanitizeArtistProfileState({
     ...current,
     profiles: {
@@ -771,9 +945,12 @@ export function updateArtistProfile(state, artistId, patch, nameHints = []) {
       [canonicalId]: {
         ...previous,
         ...patch,
-        publicFacts: Object.prototype.hasOwnProperty.call(patch, "publicFacts")
-          ? mergePublicFacts(previous.publicFacts, patch.publicFacts)
-          : previous.publicFacts,
+        publicFacts: keepPreviousUserCountry
+          ? { ...mergedPublicFacts, country: previous.publicFacts.country }
+          : mergedPublicFacts,
+        roamCountryAudit: keepPreviousUserCountry
+          ? previous.roamCountryAudit
+          : incomingAudit,
         introduction: Object.prototype.hasOwnProperty.call(patch, "introduction")
           ? cleanText(patch.introduction) || previous.introduction
           : previous.introduction,
@@ -788,6 +965,8 @@ export function updateArtistProfile(state, artistId, patch, nameHints = []) {
               ...previous.media,
               ...patch.media,
               imageUrl: patch.media?.imageUrl || previous.media?.imageUrl,
+              localImageUrl:
+                patch.media?.localImageUrl || previous.media?.localImageUrl,
               localMotionUrl:
                 patch.media?.localMotionUrl || previous.media?.localMotionUrl,
               sourceVideoUrl:

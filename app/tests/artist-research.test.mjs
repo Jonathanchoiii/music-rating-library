@@ -41,22 +41,34 @@ test("artist research accepts only one high-confidence exact identity", () => {
 });
 
 test("artist research preserves structured life and group member facts", () => {
-  const profile = musicBrainzDetailsToProfile({
-    id: "group-id",
-    name: "Example Group",
-    type: "Group",
-    country: "GB",
-    area: { name: "London" },
-    "life-span": { begin: "2001", end: null },
-    genres: [{ name: "art pop", count: 4 }],
-    relations: [
-      {
-        type: "member of band",
-        artist: { id: "member-id", name: "Member One" },
-        attributes: ["vocals"],
+  const profile = musicBrainzDetailsToProfile(
+    {
+      id: "group-id",
+      name: "Example Group",
+      type: "Group",
+      country: "GB",
+      "begin-area": { name: "London" },
+      "life-span": { begin: "2001", end: null },
+      genres: [{ name: "art pop", count: 4 }],
+      relations: [
+        {
+          type: "member of band",
+          artist: { id: "member-id", name: "Member One" },
+          attributes: ["vocals"],
+        },
+      ],
+    },
+    "",
+    "",
+    {
+      countryEvidence: {
+        status: "CONFIRMED",
+        kind: "WIKIDATA_COUNTRY_OF_ORIGIN",
+        countryCode: "GB",
+        sourceUrl: "https://www.wikidata.org/wiki/Q1",
       },
-    ],
-  });
+    },
+  );
   assert.equal(profile.publicFacts.activeFrom, "2001");
   assert.equal(profile.publicFacts.artistType, "团体");
   assert.equal(profile.publicFacts.origin, "英国 · 伦敦");
@@ -84,6 +96,14 @@ test("artist research resolves an exact name, respects the provider interval, an
         { status: 200 },
       );
     }
+    if (String(url).includes("/ws/2/release-group?")) {
+      return new Response(
+        JSON.stringify({
+          "release-groups": [{ title: "Planet Her" }],
+        }),
+        { status: 200 },
+      );
+    }
     return new Response(
       JSON.stringify({
         id: "5df62a88-cac9-490a-b62c-c7c88f4020f4",
@@ -102,20 +122,171 @@ test("artist research resolves an exact name, respects the provider interval, an
   };
 
   const profile = await researchArtist(
-    { name: "Doja Cat", aliases: [] },
+    {
+      name: "Doja Cat",
+      aliases: [],
+      releaseHints: [{ title: "Planet Her" }],
+    },
     {
       fetchImpl,
       delayImpl: async (ms) => delays.push(ms),
     },
   );
 
-  assert.equal(calls.length, 2);
-  assert.deepEqual(delays, [1_100]);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(delays, [1_100, 1_100]);
   assert.equal(profile.publicFacts.birthDate, "1995-10-21");
   assert.equal(profile.publicFacts.artistType, "个人");
-  assert.equal(profile.publicFacts.birthPlace, "美国 · 塔扎纳");
-  assert.equal(profile.publicFacts.country, "美国");
+  assert.equal(profile.publicFacts.birthPlace, "塔扎纳");
+  assert.equal(profile.publicFacts.country, "");
   assert.deepEqual(profile.publicFacts.genres, ["pop"]);
+});
+
+test("artist research ignores MusicBrainz Area and uses Wikidata citizenship for Penny Tai", async () => {
+  const musicBrainzId = "ef7870d0-1c7e-4327-a989-1f92b4dd35f5";
+  const fetchImpl = async (input) => {
+    const url = String(input);
+    if (url.includes(`/ws/2/artist/${musicBrainzId}`)) {
+      return Response.json({
+        id: musicBrainzId,
+        name: "戴佩妮",
+        type: "Person",
+        country: "TW",
+        area: { name: "Taiwan" },
+        "begin-area": { name: "Segamat" },
+        relations: [{
+          type: "wikidata",
+          url: { resource: "https://www.wikidata.org/wiki/Q714501" },
+        }],
+      });
+    }
+    if (url.includes("Special:EntityData/Q714501.json")) {
+      return Response.json({
+        entities: {
+          Q714501: {
+            claims: {
+              P27: [{
+                mainsnak: { datavalue: { value: { id: "Q833" } } },
+              }],
+            },
+          },
+        },
+      });
+    }
+    if (url.includes("Special:EntityData/Q833.json")) {
+      return Response.json({
+        entities: {
+          Q833: {
+            claims: {
+              P297: [{
+                mainsnak: { datavalue: { value: "MY" } },
+              }],
+            },
+          },
+        },
+      });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+
+  const profile = await researchArtist(
+    { name: "戴佩妮", musicBrainzId },
+    { fetchImpl, delayImpl: async () => {} },
+  );
+
+  assert.equal(profile.publicFacts.country, "马来西亚");
+  assert.equal(profile.publicFacts.birthPlace, "马来西亚");
+  assert.equal(profile.publicFacts.origin, "马来西亚");
+  assert.deepEqual(profile.countryEvidence, {
+    status: "CONFIRMED",
+    kind: "WIKIDATA_CITIZENSHIP",
+    countryCode: "MY",
+    sourceUrl: "https://www.wikidata.org/wiki/Q714501",
+  });
+  assert.equal(profile.sources.some((source) => source.publisher === "Wikidata"), true);
+});
+
+test("artist research leaves country blank when Wikidata citizenship conflicts", async () => {
+  const musicBrainzId = "12345678-1234-4123-8123-123456789abc";
+  const fetchImpl = async (input) => {
+    const url = String(input);
+    if (url.includes(`/ws/2/artist/${musicBrainzId}`)) {
+      return Response.json({
+        id: musicBrainzId,
+        name: "Multiple Citizenship",
+        type: "Person",
+        country: "TW",
+        relations: [{
+          type: "wikidata",
+          url: { resource: "https://www.wikidata.org/wiki/Q100" },
+        }],
+      });
+    }
+    if (url.includes("Special:EntityData/Q100.json")) {
+      return Response.json({
+        entities: {
+          Q100: {
+            claims: {
+              P27: ["Q833", "Q865"].map((id) => ({
+                mainsnak: { datavalue: { value: { id } } },
+              })),
+            },
+          },
+        },
+      });
+    }
+    const match = url.match(/Special:EntityData\/(Q833|Q865)\.json/);
+    if (match) {
+      const code = match[1] === "Q833" ? "MY" : "TW";
+      return Response.json({
+        entities: {
+          [match[1]]: {
+            claims: {
+              P297: [{ mainsnak: { datavalue: { value: code } } }],
+            },
+          },
+        },
+      });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+
+  const profile = await researchArtist(
+    { name: "Multiple Citizenship", musicBrainzId },
+    { fetchImpl, delayImpl: async () => {} },
+  );
+  assert.equal(profile.publicFacts.country, "");
+  assert.equal(profile.countryEvidence, null);
+  assert.equal(profile.sources.some((source) => source.publisher === "Wikidata"), false);
+});
+
+test("name-only artist research rejects a same-name result without exact release evidence", async () => {
+  const artistId = "84268f02-6aee-4136-ba22-50a24c359ff1";
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/ws/2/artist") {
+      return Response.json({
+        artists: [{ id: artistId, name: "Constance", score: 100 }],
+      });
+    }
+    if (url.pathname === "/ws/2/release-group") {
+      return Response.json({
+        "release-groups": [{ title: "My Name Is Constance" }],
+      });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  await assert.rejects(
+    researchArtist(
+      {
+        name: "CONSTANCE",
+        aliases: [],
+        releaseHints: [{ title: "doll - Single" }],
+      },
+      { fetchImpl, delayImpl: async () => {} },
+    ),
+    (error) => error?.code === "ARTIST_IDENTITY_AMBIGUOUS",
+  );
 });
 
 test("artist research persists public facts without losing local display preferences", async () => {
@@ -435,10 +606,18 @@ test("artist media request caches one exact Apple Music artist and persists its 
         cacheArtistMotionArtworkImpl: async () => ({
           localUrl: "/private-motion-artwork/artist-raw-kiiikiii.mp4",
         }),
+        cacheArtistStaticArtworkImpl: async () => ({
+          localUrl:
+            "/private-motion-artwork/artist-raw-kiiikiii-still-avatar.jpg",
+        }),
       },
     );
 
     assert.equal(result.media.status, "READY");
+    assert.equal(
+      result.media.localImageUrl,
+      "/private-motion-artwork/artist-raw-kiiikiii-still-avatar.jpg",
+    );
     assert.equal(
       result.media.localMotionUrl,
       "/private-motion-artwork/artist-raw-kiiikiii.mp4",
@@ -470,6 +649,11 @@ test("artist research follows a Wikidata relation to a verifiable Wikipedia intr
         }),
         { status: 200 },
       );
+    }
+    if (value.includes("/ws/2/release-group?")) {
+      return Response.json({
+        "release-groups": [{ title: "Example Album" }],
+      });
     }
     if (value.includes("/ws/2/artist/artist-id")) {
       return new Response(
@@ -508,7 +692,11 @@ test("artist research follows a Wikidata relation to a verifiable Wikipedia intr
   };
 
   const profile = await researchArtist(
-    { name: "Example Artist", aliases: [] },
+    {
+      name: "Example Artist",
+      aliases: [],
+      releaseHints: [{ title: "Example Album" }],
+    },
     { fetchImpl, delayImpl: async () => {} },
   );
 
@@ -572,7 +760,10 @@ test("artist media preserves the last playable motion file when ffmpeg fails", a
         media: {
           status: "READY",
           imageUrl: "https://is1-ssl.mzstatic.com/image/thumb/old.jpg",
+          localImageUrl:
+            "/private-motion-artwork/artist-raw-kiiikiii-still-old.jpg",
           localMotionUrl: "/private-motion-artwork/artist-raw-kiiikiii-old.mp4",
+          motionEnabled: false,
         },
       },
       statePath,
@@ -593,6 +784,9 @@ test("artist media preserves the last playable motion file when ffmpeg fails", a
         cacheArtistMotionArtworkImpl: async () => {
           throw new Error("FFMPEG_FAILED:libx264");
         },
+        cacheArtistStaticArtworkImpl: async () => {
+          throw new Error("ARTIST_STATIC_HTTP_503");
+        },
       },
     );
 
@@ -601,6 +795,11 @@ test("artist media preserves the last playable motion file when ffmpeg fails", a
       result.media.localMotionUrl,
       "/private-motion-artwork/artist-raw-kiiikiii-old.mp4",
     );
+    assert.equal(
+      result.media.localImageUrl,
+      "/private-motion-artwork/artist-raw-kiiikiii-still-old.jpg",
+    );
+    assert.equal(result.media.motionEnabled, false);
     assert.match(result.media.error, /动态视频转码失败/);
     assert.match(result.media.error, /已保留上次成功的动态视频/);
   } finally {
@@ -813,4 +1012,3 @@ if (fail) {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
-

@@ -148,6 +148,7 @@ export function FilterDrawer({
   releases,
   filters,
   artistIdentityState,
+  artistProfileState,
   listeningGuideStatuses,
   onApply,
   onClose,
@@ -222,8 +223,15 @@ export function FilterDrawer({
         draft,
         artistIdentityState,
         listeningGuideStatuses,
+        artistProfileState,
       ).length,
-    [artistIdentityState, draft, listeningGuideStatuses, releases],
+    [
+      artistIdentityState,
+      artistProfileState,
+      draft,
+      listeningGuideStatuses,
+      releases,
+    ],
   );
 
   if (!open) return null;
@@ -485,6 +493,32 @@ export function FilterDrawer({
                 <TernaryChoices
                   value={draft.albumIntroductionState}
                   onChange={(value) => update("albumIntroductionState", value)}
+                  options={[
+                    ["ANY", "全部"],
+                    ["WITH_INTRO", "已有"],
+                    ["WITHOUT_INTRO", "没有"],
+                  ]}
+                />
+              </div>
+              <div className="filter-field-block">
+                <strong>歌手封面</strong>
+                <TernaryChoices
+                  value={draft.artistCoverState}
+                  onChange={(value) => update("artistCoverState", value)}
+                  options={[
+                    ["ANY", "全部"],
+                    ["WITH_COVER", "已有"],
+                    ["WITHOUT_COVER", "没有"],
+                  ]}
+                />
+              </div>
+              <div className="filter-field-block">
+                <strong>艺人介绍</strong>
+                <TernaryChoices
+                  value={draft.artistIntroductionState}
+                  onChange={(value) =>
+                    update("artistIntroductionState", value)
+                  }
                   options={[
                     ["ANY", "全部"],
                     ["WITH_INTRO", "已有"],
@@ -755,6 +789,30 @@ export function ActiveFilterChips({
         {filters.albumIntroductionState === "WITH_INTRO"
           ? "已有专辑介绍"
           : "没有专辑介绍"}
+      </FilterChip>,
+    );
+  }
+  if (filters.artistCoverState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="artist-cover"
+        onRemove={() => clearField("artistCoverState")}
+      >
+        {filters.artistCoverState === "WITH_COVER"
+          ? "已有歌手封面"
+          : "没有歌手封面"}
+      </FilterChip>,
+    );
+  }
+  if (filters.artistIntroductionState !== "ANY") {
+    chips.push(
+      <FilterChip
+        key="artist-introduction"
+        onRemove={() => clearField("artistIntroductionState")}
+      >
+        {filters.artistIntroductionState === "WITH_INTRO"
+          ? "已有艺人介绍"
+          : "没有艺人介绍"}
       </FilterChip>,
     );
   }

@@ -5,6 +5,7 @@ import {
   CalendarBlank,
   ClockCounterClockwise,
   LinkSimple,
+  PencilSimple,
   Plus,
   SpotifyLogo,
   SpinnerGap,
@@ -14,7 +15,6 @@ import {
   displayDate,
   getCurrentRating,
   getLatestListenedAt,
-  getLatestMarkedAt,
   getReleaseKindLabel,
   sortListeningEntriesNewestFirst,
 } from "../lib/music.js";
@@ -30,6 +30,7 @@ import { AppleMusicEditorialNotes } from "./AppleMusicEditorialNotes.jsx";
 import { ReleaseArtwork } from "./ReleaseArtwork.jsx";
 import { ExternalRatings } from "./ExternalRatings.jsx";
 import { Tracklist } from "./Tracklist.jsx";
+import { ReleaseDetailsEditor } from "./ReleaseDetailsEditor.jsx";
 import {
   MOTION_ARTWORK_SLOT,
   PlatformLinkMenu,
@@ -81,6 +82,7 @@ export function ReleaseDetail({
   onMergeRelease,
   onOpenArtist,
   onSaveAlbumIntroduction,
+  onSaveDetails,
   onApplyMotionArtworkUpdates,
   onApplyExternalRatings,
   onApplyTracklist,
@@ -88,6 +90,7 @@ export function ReleaseDetail({
   onToast,
 }) {
   const [editingProvider, setEditingProvider] = useState(null);
+  const [editingDetails, setEditingDetails] = useState(false);
   const [draftUrl, setDraftUrl] = useState("");
   const [linkError, setLinkError] = useState("");
   const [coverLoadFailed, setCoverLoadFailed] = useState(false);
@@ -101,6 +104,7 @@ export function ReleaseDetail({
   const platformLinkMenu = usePlatformLinkMenu();
 
   useLayoutEffect(() => {
+    setEditingDetails(false);
     setEditingProvider(null);
     setDraftUrl("");
     setLinkError("");
@@ -115,7 +119,6 @@ export function ReleaseDetail({
   if (!release) return null;
   const rating = getCurrentRating(release.listeningEntries);
   const latest = getLatestListenedAt(release.listeningEntries);
-  const latestMarkedAt = getLatestMarkedAt(release.listeningEntries);
   const entries = sortListeningEntriesNewestFirst(release.listeningEntries);
   const confirmedLinks = new Map(
     (release.externalLinks ?? [])
@@ -462,7 +465,7 @@ export function ReleaseDetail({
                     release.releaseDate,
                     release.releaseDatePrecision,
                   )
-                : displayDate(latestMarkedAt)}
+                : "发行时间未知"}
             </span>
             <h2>{release.title}</h2>
             {titleAliases.length ? (
@@ -497,7 +500,17 @@ export function ReleaseDetail({
                 {release.listeningEntries.length} 次记录
               </span>
             </div>
+            {onSaveDetails && !isReadOnlyMode() ? (
+              <button type="button" className="detail-edit-metadata" aria-expanded={editingDetails}
+                aria-controls="release-details-editor" onClick={() => setEditingDetails((value) => !value)}>
+                <PencilSimple aria-hidden="true" />编辑资料
+              </button>
+            ) : null}
           </div>
+          {editingDetails && onSaveDetails && !isReadOnlyMode() ? (
+            <ReleaseDetailsEditor key={release.id} release={release} onSave={onSaveDetails}
+              onCancel={() => setEditingDetails(false)} />
+          ) : null}
           <div className="detail-type-editor">
             <span className="detail-tool-caption">发行类型</span>
             <div className="detail-release-tools">

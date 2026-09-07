@@ -69,6 +69,66 @@ function evidenceSetsOverlap(left = new Set(), right = new Set()) {
   return [...left].some((key) => right.has(key));
 }
 
+function artistWritingSystems(value = "") {
+  const name = cleanName(value);
+  const systems = new Set();
+  if (/\p{Script=Latin}/u.test(name)) systems.add("LATIN");
+  if (/\p{Script=Han}/u.test(name)) systems.add("HAN");
+  if (/\p{Script=Hangul}/u.test(name)) systems.add("HANGUL");
+  if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(name)) {
+    systems.add("JAPANESE");
+  }
+  if (/\p{Script=Cyrillic}/u.test(name)) systems.add("CYRILLIC");
+  if (/\p{Script=Arabic}/u.test(name)) systems.add("ARABIC");
+  if (/\p{Script=Hebrew}/u.test(name)) systems.add("HEBREW");
+  if (/\p{Script=Thai}/u.test(name)) systems.add("THAI");
+  return systems;
+}
+
+function isCrossWritingSystemPair(left, right) {
+  const leftSystems = artistWritingSystems(left);
+  const rightSystems = artistWritingSystems(right);
+  if (!leftSystems.size || !rightSystems.size) return false;
+  return ![...leftSystems].some((system) => rightSystems.has(system));
+}
+
+function multilingualCreditPairKeysByName(releases = []) {
+  const keysByName = new Map();
+  const add = (name, key) => {
+    const normalized = normalizeText(name);
+    if (!normalized) return;
+    const keys = keysByName.get(normalized) ?? new Set();
+    keys.add(key);
+    keysByName.set(normalized, keys);
+  };
+
+  for (const release of releases) {
+    const rawCredits = Array.isArray(release?.artists)
+      ? release.artists
+      : [release?.artists];
+    for (const rawCredit of rawCredits) {
+      const value = cleanName(rawCredit);
+      if (!value || !/[\/、]/u.test(value)) continue;
+      const parts = value
+        .split(/\s*(?:\/|、)\s*/u)
+        .map(cleanName)
+        .filter(Boolean);
+      if (
+        parts.length !== 2 ||
+        !isCrossWritingSystemPair(parts[0], parts[1])
+      ) {
+        continue;
+      }
+      const pairKey = `multilingual:${parts
+        .map(normalizeText)
+        .sort()
+        .join("::")}`;
+      parts.forEach((part) => add(part, pairKey));
+    }
+  }
+  return keysByName;
+}
+
 function creditEvidenceByName(releases = []) {
   const result = new Map();
   for (const release of releases) {
@@ -327,6 +387,7 @@ function levenshteinDistance(left = "", right = "") {
 
 function candidateEntities(releases = [], rawState) {
   const state = sanitizeArtistIdentityState(rawState);
+  const multilingualPairKeys = multilingualCreditPairKeysByName(releases);
   const identityById = new Map(
     state.identities.map((identity) => [identity.id, identity]),
   );
@@ -360,6 +421,11 @@ function candidateEntities(releases = [], rawState) {
           ...releaseEvidenceKeys(release),
         ]),
       ),
+      multilingualCreditKeys: new Set(
+        names.flatMap((name) => [
+          ...(multilingualPairKeys.get(normalizeText(name)) ?? []),
+        ]),
+      ),
     };
   });
   const includedIds = new Set(entities.map((entity) => entity.identityId));
@@ -384,6 +450,7 @@ function candidateEntities(releases = [], rawState) {
       mapped: true,
       releaseCount: 0,
       releaseEvidence: new Set(),
+      multilingualCreditKeys: new Set(),
     });
   }
   return entities;
@@ -405,6 +472,18 @@ function evidenceForEntityPair(left, right) {
       label: "MusicBrainz ID 相同",
     });
     confidence = 100;
+  }
+  if (
+    evidenceSetsOverlap(
+      left.multilingualCreditKeys,
+      right.multilingualCreditKeys,
+    )
+  ) {
+    evidence.set("MULTILINGUAL_SOURCE_CREDIT", {
+      type: "MULTILINGUAL_SOURCE_CREDIT",
+      label: "同一原始署名中的跨语言名称（需确认）",
+    });
+    confidence = Math.max(confidence, 72);
   }
 
   for (const leftName of left.names) {
@@ -507,6 +586,9 @@ export function findPossibleDuplicateArtistGroups(
   for (const entity of entities) {
     const mbid = normalizeText(entity.musicBrainzMbid);
     if (mbid) addToBucket(`mbid:${mbid}`, entity.id);
+    for (const key of entity.multilingualCreditKeys ?? []) {
+      addToBucket(key, entity.id);
+    }
     for (const name of entity.names) {
       const comparable = comparableArtistName(name);
       if (!comparable) continue;

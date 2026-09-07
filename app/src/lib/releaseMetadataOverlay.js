@@ -2,6 +2,12 @@ export const PERSISTED_RELEASE_METADATA_FIELDS = Object.freeze([
   "albumIntroduction",
   "tracklist",
   "motionArtwork",
+  "title", "translatedTitle", "titleAliases", "artists",
+  "titleUserConfirmed", "translatedTitleUserConfirmed", "artistsUserConfirmed",
+  "titleSource", "titleMatchedFrom", "titleMatchedAt",
+  "releaseDate", "releaseDatePrecision", "releaseDateUserConfirmed",
+  "releaseDateSource", "releaseDateMatchedFrom", "releaseDateEvidence",
+  "releaseDateConflict", "releaseDateCheckedAt", "releaseDateMatchedAt",
 ]);
 
 function hasReleaseShape(value) {
@@ -12,7 +18,7 @@ function applyFieldsToRelease(previous, patch) {
   const next = { ...previous };
   for (const [field, value] of Object.entries(patch)) {
     if (
-      value == null ||
+      (value == null && !["translatedTitle", "releaseDate"].includes(field)) ||
       (field === "albumIntroduction" && String(value).trim() === "")
     ) {
       delete next[field];

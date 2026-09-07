@@ -255,7 +255,6 @@ test("手动豆瓣链接按需取分，并优先于 NeoDB 外链", async () => {
     { fetchImpl },
   );
   assert.deepEqual(requested, [
-    "https://neodb.social/api/album/abc123",
     "https://music.douban.com/subject/25709562/",
   ]);
   assert.equal(result.sources.length, 1);
@@ -263,6 +262,134 @@ test("手动豆瓣链接按需取分，并优先于 NeoDB 外链", async () => {
   assert.equal(result.sources[0].score, 8.9);
   assert.equal(result.sources[0].matchedVia, "USER_CONFIRMED_LINK");
   assert.equal(result.links[0].status, "SCORE_UPDATED");
+});
+
+test("已保存的 NeoDB 豆瓣评分来源后续直接刷新豆瓣，不再依赖 NeoDB", async () => {
+  const requested = [];
+  const result = await refreshExternalRatings(
+    {
+      id: "release-neodb-douban-cache",
+      title: "A*POP",
+      artists: ["Ayumu Imazu"],
+      externalLinks: [
+        {
+          provider: "NEODB",
+          status: "CONFIRMED",
+          url: "https://neodb.social/album/abc123",
+        },
+      ],
+      externalRatings: {
+        sources: [
+          {
+            provider: "DOUBAN",
+            providerLabel: "豆瓣",
+            score: 6.1,
+            scale: 10,
+            ratingCount: 554,
+            url: "https://music.douban.com/subject/25709562/",
+            checkedAt: "2026-08-16T01:51:42.576Z",
+            matchedVia: "NEODB_EXTERNAL_RESOURCE",
+          },
+        ],
+        links: [],
+      },
+    },
+    {
+      fetchImpl: async (url) => {
+        requested.push(String(url));
+        return Object.defineProperty(
+          new Response(DOUBAN_HTML, { status: 200 }),
+          "url",
+          { value: "https://music.douban.com/subject/25709562/" },
+        );
+      },
+    },
+  );
+
+  assert.deepEqual(requested, [
+    "https://music.douban.com/subject/25709562/",
+  ]);
+  assert.equal(result.status, "SUCCESS");
+  assert.equal(result.sources[0].provider, "DOUBAN");
+  assert.equal(result.sources[0].score, 8.9);
+  assert.equal(result.sources[0].matchedVia, "NEODB_EXTERNAL_RESOURCE");
+  assert.equal(result.links[0].status, "SCORE_UPDATED");
+});
+
+test("已保存豆瓣来源暂时不可用时保留旧分并报告豆瓣，而不是 NeoDB", async () => {
+  const result = await refreshExternalRatings(
+    {
+      id: "release-douban-temporary-failure",
+      title: "A*POP",
+      artists: ["Ayumu Imazu"],
+      externalLinks: [
+        {
+          provider: "NEODB",
+          status: "CONFIRMED",
+          url: "https://neodb.social/album/abc123",
+        },
+      ],
+      externalRatings: {
+        sources: [
+          {
+            provider: "DOUBAN",
+            providerLabel: "豆瓣",
+            score: 6.1,
+            scale: 10,
+            ratingCount: 554,
+            url: "https://music.douban.com/subject/25709562/",
+            checkedAt: "2026-08-16T01:51:42.576Z",
+            matchedVia: "NEODB_EXTERNAL_RESOURCE",
+          },
+        ],
+      },
+    },
+    {
+      fetchImpl: async () => {
+        throw new Error("network unavailable");
+      },
+    },
+  );
+
+  assert.equal(result.status, "SUCCESS");
+  assert.deepEqual(result.blockedProviders, []);
+  assert.deepEqual(result.unavailableProviders, ["DOUBAN"]);
+  assert.equal(result.sources[0].score, 6.1);
+  assert.equal(result.links[0].status, "SCORE_RETAINED");
+});
+
+test("发行已有豆瓣外链时可直接取分，无需 NeoDB 链接", async () => {
+  const requested = [];
+  const result = await refreshExternalRatings(
+    {
+      id: "release-external-douban-link",
+      title: "安和桥北",
+      artists: ["宋冬野"],
+      externalLinks: [
+        {
+          provider: "DOUBAN",
+          status: "CONFIRMED",
+          url: "https://music.douban.com/subject/25709562/",
+        },
+      ],
+    },
+    {
+      fetchImpl: async (url) => {
+        requested.push(String(url));
+        return Object.defineProperty(
+          new Response(DOUBAN_HTML, { status: 200 }),
+          "url",
+          { value: "https://music.douban.com/subject/25709562/" },
+        );
+      },
+    },
+  );
+
+  assert.deepEqual(requested, [
+    "https://music.douban.com/subject/25709562/",
+  ]);
+  assert.equal(result.status, "SUCCESS");
+  assert.equal(result.sources[0].score, 8.9);
 });
 
 test("仅手动豆瓣链接、无 NeoDB 时也能取分", async () => {

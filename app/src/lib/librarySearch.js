@@ -37,6 +37,7 @@ export function getLibrarySearchResults({
   search,
   filters,
   artistIdentityState,
+  artistProfileState,
   listeningGuideStatuses,
   sort,
 }) {
@@ -47,6 +48,7 @@ export function getLibrarySearchResults({
       filters,
       artistIdentityState,
       listeningGuideStatuses,
+      artistProfileState,
     ),
   );
   const sortReleases = (releaseA, releaseB) =>

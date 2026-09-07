@@ -4,6 +4,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import worldAtlas from "world-atlas/countries-110m.json";
 import { mesh } from "topojson-client";
 import { COUNTRY_COORDINATES } from "../data/countryCoordinates.js";
+import { CountryFlag } from "./CountryFlag.jsx";
 
 const GLOBE_RADIUS = 1.34;
 const MARKER_RADIUS = 1.39;
@@ -276,7 +277,7 @@ export function RoamGlobe({ countries = [], onSelectCountry, compact = false }) 
             className="roam-globe-label"
             onClick={() => onSelectCountry?.(country.code)}
           >
-            <span>{country.code}</span>
+            <CountryFlag code={country.code} name={country.name} variant="label" />
             <strong>{country.name}</strong>
             <small>{country.artists?.length ?? 0} 位艺人</small>
           </button>

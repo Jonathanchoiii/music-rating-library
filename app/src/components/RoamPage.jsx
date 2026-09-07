@@ -13,6 +13,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ROAM_REGIONS, getRoamRegionsByContinent } from "../lib/roam.js";
 import { Cover } from "./ReleaseViews.jsx";
 import { Rating } from "./Rating.jsx";
+import { CountryFlag } from "./CountryFlag.jsx";
 import { RoamGlobe } from "./RoamGlobe.jsx";
 
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -32,29 +33,6 @@ function RoamStat({ value, label }) {
       <strong>{value}</strong>
       <span>{label}</span>
     </div>
-  );
-}
-
-function CountryFlag({ code, name }) {
-  const [failed, setFailed] = useState(false);
-  const normalizedCode = String(code || "").trim().toLowerCase();
-
-  return (
-    <span className={`roam-country-flag${failed ? " is-fallback" : ""}`} aria-hidden="true">
-      {failed || !normalizedCode ? (
-        <span>{code}</span>
-      ) : (
-        <img
-          src={`https://flagcdn.io/flags/4x3/${normalizedCode}.svg`}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          title={`${name}国旗`}
-          onError={() => setFailed(true)}
-        />
-      )}
-    </span>
   );
 }
 
@@ -128,7 +106,7 @@ function RoamIndex({ model, onSelectCountry, onRefreshCountries, refreshHref, re
       <section className="roam-intro">
         <div className="roam-intro-copy">
           <p className="roam-kicker"><Compass weight="fill" /> 你的听歌护照</p>
-          <h1>漫游</h1>
+          <h1>音乐漫游</h1>
           <p>一张由真实聆听记录点亮的世界地图。只有资料来源明确、国家或地区能够唯一确认的艺人才会被计入。</p>
           <div className="roam-intro-stats">
             <RoamStat value={model.stats.countryCount} label="已点亮地区" />

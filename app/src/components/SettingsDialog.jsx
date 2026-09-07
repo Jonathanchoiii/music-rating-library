@@ -6,6 +6,7 @@ export function SettingsDialog({
   releases,
   identityState,
   onChangeIdentityState,
+  onMergeArtistProfiles,
   onOpenArtistManager,
   duplicateGroupCount,
   duplicateReleaseCount,
@@ -41,6 +42,7 @@ export function SettingsDialog({
             releases={releases}
             identityState={identityState}
             onChange={onChangeIdentityState}
+            onMergeProfiles={onMergeArtistProfiles}
             onBack={onBack}
             onClose={onClose}
             onToast={onToast}

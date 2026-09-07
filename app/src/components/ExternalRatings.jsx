@@ -57,6 +57,7 @@ function refreshResultMessage(payload, options = {}) {
   const savedLinks = ratings?.links ?? [];
   const sources = ratings?.sources ?? [];
   const blocked = ratings?.blockedProviders ?? [];
+  const unavailable = ratings?.unavailableProviders ?? [];
   const addedProvider = options.addingProvider ?? null;
   const addedLink = addedProvider
     ? savedLinks.find((link) => link.provider === addedProvider)
@@ -72,6 +73,14 @@ function refreshResultMessage(payload, options = {}) {
     return sources.length
       ? `${labels} 暂时无法读取（可能被站点拦截），已保留上次分数`
       : `${labels} 暂时无法读取（可能被站点拦截），请稍后重试或在浏览器打开链接查看`;
+  }
+  if (unavailable.length) {
+    const labels = unavailable
+      .map((provider) => PROVIDER_LABELS[provider] ?? provider)
+      .join("、");
+    return sources.length
+      ? `${labels} 暂时无法读取，已保留上次分数`
+      : `${labels} 暂时无法读取，请稍后重试或在浏览器打开链接查看`;
   }
   if (addedLink?.status === "LINK_SAVED") {
     return "链接已保存；该平台目前没有可供本地应用自动取分的公开接口";
@@ -293,6 +302,8 @@ export function ExternalRatings({ release, onApply }) {
                   ? "未读取到评分"
                   : link.status === "SCORE_BLOCKED"
                     ? "读取被拦截"
+                    : link.status === "SCORE_UNAVAILABLE"
+                      ? "暂时无法读取"
                     : "已保存链接"}
               </small>
               <ArrowSquareOut aria-hidden="true" />

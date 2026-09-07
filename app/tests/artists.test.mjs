@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   applyMusicBrainzArtistAuditResults,
@@ -12,11 +13,13 @@ import {
   getReleaseArtistTargets,
   groupReleasesByArtistIdentity,
   loadArtistIdentityState,
+  mergeArtistIdentities,
   mergePossibleDuplicateArtists,
   removeResolvedDuplicateArtistCandidates,
   releaseMatchesMappedArtistQuery,
   sanitizeArtistIdentityState,
   saveArtistIdentityState,
+  searchArtistCreditAssignments,
   sortArtistGroups,
 } from "../src/lib/artists.js";
 import {
@@ -371,6 +374,254 @@ test("confirmed duplicate artists merge into the selected identity", () => {
   assert.equal(
     merged.identities[0].musicBrainzMbid,
     "00000000-0000-0000-0000-000000000001",
+  );
+});
+
+test("a cross-language pair from one source credit becomes a review candidate", () => {
+  const releases = [release("pretty-girl", "RESCENE/리센느")];
+  const state = ensureArtistIdentitiesForReleases(
+    { schemaVersion: 2, identities: [] },
+    releases,
+  ).state;
+
+  const candidates = findPossibleDuplicateArtistGroups(releases, state);
+
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(
+    candidates[0].members.map((member) => member.canonicalName).sort(),
+    ["RESCENE", "리센느"].sort(),
+  );
+  assert.equal(
+    candidates[0].evidence.some(
+      (evidence) => evidence.type === "MULTILINGUAL_SOURCE_CREDIT",
+    ),
+    true,
+  );
+  assert.equal(candidates[0].hasMbidConflict, false);
+});
+
+test("same-writing-system collaborations are not multilingual duplicate candidates", () => {
+  const releases = [release("collaboration", "Tyla/Tems")];
+  const state = ensureArtistIdentitiesForReleases(
+    { schemaVersion: 2, identities: [] },
+    releases,
+  ).state;
+
+  assert.deepEqual(
+    findPossibleDuplicateArtistGroups(releases, state),
+    [],
+  );
+});
+
+test("manual identity merge keeps the selected display name and all language aliases", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "rescene",
+        canonicalName: "RESCENE",
+        aliases: [],
+      },
+      {
+        id: "rescene-ko",
+        canonicalName: "리센느",
+        aliases: [],
+      },
+    ],
+  };
+
+  const merged = mergeArtistIdentities(
+    state,
+    ["rescene", "rescene-ko"],
+    "rescene",
+  );
+
+  assert.equal(merged.identities.length, 1);
+  assert.equal(merged.identities[0].canonicalName, "RESCENE");
+  assert.equal(
+    merged.identities[0].aliases.some((alias) => alias.name === "리센느"),
+    true,
+  );
+});
+
+test("artist credit management search includes mapped names and exposes their owner", () => {
+  const releases = [
+    release("rescene-en", "RESCENE"),
+    release("rescene-ko", "리센느"),
+    release("unmapped", "New Artist"),
+  ];
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "rescene",
+        canonicalName: "RESCENE",
+        aliases: [],
+      },
+      {
+        id: "rescene-ko",
+        canonicalName: "리센느",
+        aliases: [{ name: "Rescene Korea", source: "USER" }],
+      },
+    ],
+  };
+
+  const initial = searchArtistCreditAssignments(
+    releases,
+    state,
+    "",
+    "rescene",
+  );
+  assert.deepEqual(initial.map((result) => result.name), ["New Artist"]);
+  assert.equal(initial[0].kind, "UNMAPPED");
+
+  const mapped = searchArtistCreditAssignments(
+    releases,
+    state,
+    "리센",
+    "rescene",
+  );
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0].kind, "MAPPED");
+  assert.equal(mapped[0].identityId, "rescene-ko");
+  assert.equal(mapped[0].ownerName, "리센느");
+  assert.equal(mapped[0].count, 1);
+
+  const current = searchArtistCreditAssignments(
+    releases,
+    state,
+    "RESCENE",
+    "rescene",
+  );
+  assert.equal(current.some((result) => result.kind === "CURRENT"), true);
+  assert.equal(
+    current.some(
+      (result) =>
+        result.kind === "MAPPED" && result.name === "Rescene Korea",
+    ),
+    true,
+  );
+});
+
+test("artist credit search returns one understandable row per artist identity", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "hyukoh-main",
+        canonicalName: "HYUKOH",
+        aliases: [
+          { name: "혁오", source: "USER" },
+          { name: "혁오 (Hyukoh)", source: "USER" },
+        ],
+      },
+      { id: "hyukoh-ko", canonicalName: "혁오", aliases: [] },
+    ],
+  };
+  const results = searchArtistCreditAssignments(
+    [release("one", "혁오"), release("two", "혁오 (Hyukoh)")],
+    state,
+    "혁오",
+    "hyukoh-main",
+  );
+  assert.deepEqual(results.map((result) => result.identityId), [
+    "hyukoh-ko",
+    "hyukoh-main",
+  ]);
+  assert.equal(results.filter((result) => result.identityId === "hyukoh-main").length, 1);
+});
+
+test("duplicate stable artist ids are coalesced before a direct merge", () => {
+  const state = {
+    schemaVersion: 2,
+    identities: [
+      {
+        id: "hyukoh-ko",
+        canonicalName: "혁오",
+        aliases: [{ name: "혁오", source: "RELEASE_CREDIT" }],
+        musicBrainzStatus: "UNRESOLVED",
+        musicBrainzCheckedAt: "2026-08-27T13:27:19.078Z",
+      },
+      {
+        id: "hyukoh-ko",
+        canonicalName: "혁오",
+        aliases: [],
+      },
+      {
+        id: "hyukoh-main",
+        canonicalName: "HYUKOH",
+        aliases: [{ name: "혁오 (Hyukoh)", source: "USER" }],
+        musicBrainzMbid: "8b64a68f-eb63-48dd-80d9-1c2abcdf1970",
+      },
+    ],
+  };
+  const sanitized = sanitizeArtistIdentityState(state);
+  assert.equal(sanitized.identities.length, 2);
+  assert.equal(
+    sanitized.identities.find((identity) => identity.id === "hyukoh-ko")
+      ?.musicBrainzStatus,
+    "UNRESOLVED",
+  );
+  const merged = mergeArtistIdentities(
+    state,
+    ["hyukoh-main", "hyukoh-ko"],
+    "hyukoh-main",
+  );
+  assert.equal(merged.identities.length, 1);
+  assert.equal(merged.identities[0].canonicalName, "HYUKOH");
+  assert.equal(
+    merged.identities[0].aliases.some((alias) => alias.name === "혁오"),
+    true,
+  );
+});
+
+test("artist manager explains the direct merge target in plain language", async () => {
+  const source = await readFile(
+    new URL("../src/components/ArtistManager.jsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /<h4>查找相同艺人<\/h4>/);
+  assert.match(source, /合并到当前艺人/);
+  assert.match(source, /归入当前艺人/);
+  assert.match(source, /另一个艺人身份 · 主名称/);
+  assert.doesNotMatch(source, /<h4>原始署名与已归类署名<\/h4>/);
+});
+
+test("duplicate scan merge button is the final confirmation", async () => {
+  const source = await readFile(
+    new URL("../src/components/ArtistManager.jsx", import.meta.url),
+    "utf8",
+  );
+  const mergeHandler =
+    source.match(
+      /function mergeDuplicateCandidate\(candidate\) \{[\s\S]*?\n  function updateIdentity/,
+    )?.[0] ?? "";
+
+  assert.match(mergeHandler, /mergePossibleDuplicateArtists\(/);
+  assert.doesNotMatch(mergeHandler, /window\.confirm\(/);
+});
+
+test("mobile artist index preserves readable names and a complete sort control", async () => {
+  const css = await readFile(
+    new URL("../src/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    css,
+    /@media \(max-width: 760px\)[\s\S]*?\.toolbar-right \{[^}]*width:\s*100%;[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*\}/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 760px\)[\s\S]*?\.sort-select select \{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*\}/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 680px\)[\s\S]*?\.artist-index \{[^}]*grid-template-columns:\s*1fr;[^}]*\}/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 680px\)[\s\S]*?\.artist-index-card \.artist-index-copy strong \{[^}]*white-space:\s*normal;[^}]*\}/,
   );
 });
 

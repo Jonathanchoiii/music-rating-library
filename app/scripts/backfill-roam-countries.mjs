@@ -11,10 +11,15 @@ import {
 } from "../src/lib/artists.js";
 import {
   artistProfileLookupKeys,
+  hasVerifiedArtistCountry,
   sanitizeArtistProfileState,
 } from "../src/lib/artistProfiles.js";
 import { getCurrentRating } from "../src/lib/music.js";
-import { resolveRoamCountry } from "../src/lib/roam.js";
+import {
+  getRoamCountryAuditFingerprint,
+  isRoamCountryAuditCurrent,
+  resolveRoamCountry,
+} from "../src/lib/roam.js";
 import {
   ARTIST_IDENTITY_STORAGE_KEY,
   ARTIST_PROFILE_STORAGE_KEY,
@@ -83,7 +88,8 @@ function isRoamReady(profile) {
   return Boolean(
     profile?.introductionStatus === "READY" &&
       profile?.sources?.length &&
-      resolveRoamCountry(profile?.publicFacts?.country),
+      resolveRoamCountry(profile?.publicFacts?.country) &&
+      hasVerifiedArtistCountry(profile),
   );
 }
 
@@ -94,6 +100,45 @@ function mergeSources(previous = [], incoming = []) {
     if (key) sources.set(key, source);
   }
   return [...sources.values()];
+}
+
+function verifiedMusicBrainzIdentity(identity, result) {
+  const resultId = String(result?.publicFacts?.musicBrainzId ?? "").trim();
+  if (!MBID_PATTERN.test(resultId)) return "";
+  const expectedId = String(identity?.musicBrainzMbid ?? "").trim();
+  if (
+    MBID_PATTERN.test(expectedId) &&
+    expectedId.toLowerCase() !== resultId.toLowerCase()
+  ) return "";
+  const hasExactSource = (result?.sources ?? []).some((source) => {
+    try {
+      const url = new URL(String(source?.url ?? "").trim());
+      return (
+        url.hostname.toLowerCase() === "musicbrainz.org" &&
+        url.pathname.toLowerCase() === `/artist/${resultId.toLowerCase()}`
+      );
+    } catch {
+      return false;
+    }
+  });
+  return hasExactSource ? resultId : "";
+}
+
+function hasVerifiedCountryEvidence(result, region) {
+  const evidence = result?.countryEvidence;
+  const countryCode = String(evidence?.countryCode ?? "").trim().toUpperCase();
+  const sourceUrl = String(evidence?.sourceUrl ?? "").trim();
+  if (
+    evidence?.status !== "CONFIRMED" ||
+    !["WIKIDATA_CITIZENSHIP", "WIKIDATA_COUNTRY_OF_ORIGIN"].includes(
+      evidence?.kind,
+    ) ||
+    countryCode !== region?.code ||
+    !sourceUrl
+  ) return false;
+  return (result?.sources ?? []).some(
+    (source) => String(source?.url ?? "").trim() === sourceUrl,
+  );
 }
 
 function delay(milliseconds) {
@@ -123,13 +168,16 @@ const eligible = identityState.identities.filter((identity) =>
   hasRatedRelease(groupById.get(identity.id) ?? {}),
 );
 const pending = eligible.filter(
-  (identity) => force || !isRoamReady(storedProfile(profileState, identity.id)),
+  (identity) => {
+    const profile = storedProfile(profileState, identity.id);
+    return force || (!isRoamReady(profile) && !isRoamCountryAuditCurrent(profile, identity));
+  },
 );
 
 console.log(
   `漫游国家扫描：${eligible.length} 位已听艺人已有稳定身份，${
     eligible.length - pending.length
-  } 位已可点亮，${pending.length} 位待核验。`,
+  } 位已核验或可点亮，${pending.length} 位待核验。`,
 );
 
 if (!write) {
@@ -150,6 +198,7 @@ for (const [index, identity] of pending.entries()) {
   const aliases = (identity.aliases ?? [])
     .map((alias) => alias.name)
     .filter(Boolean);
+  const identityFingerprint = getRoamCountryAuditFingerprint(identity);
   const prefix = `[${index + 1}/${pending.length}] ${identity.canonicalName}`;
   try {
     const result = await researchArtist({
@@ -159,12 +208,52 @@ for (const [index, identity] of pending.entries()) {
       musicBrainzId: MBID_PATTERN.test(identity.musicBrainzMbid ?? "")
         ? identity.musicBrainzMbid
         : "",
+      releaseHints: (groupById.get(identity.id)?.releases ?? [])
+        .slice(0, 12)
+        .map((release) => ({
+          title: release.title,
+          translatedTitle: release.translatedTitle,
+          titleAliases: release.titleAliases,
+          releaseType: release.releaseType,
+          releaseDate: release.releaseDate,
+          artists: release.artists,
+        })),
     });
     summary.checked += 1;
     const region = resolveRoamCountry(result.publicFacts?.country);
-    if (!region || !result.sources?.length) {
+    const verifiedMusicBrainzId = verifiedMusicBrainzIdentity(identity, result);
+    if (!verifiedMusicBrainzId) {
+      await persistResearchedArtistProfile(
+        identity.id,
+        {
+          roamCountryAudit: {
+            status: "AMBIGUOUS",
+            checkedAt: new Date().toISOString(),
+            identityFingerprint,
+          },
+        },
+        statePath,
+      );
+      summary.ambiguous += 1;
+      console.log(`${prefix}：艺人身份未完全确认，地区保持空白`);
+    } else if (
+      !region ||
+      !result.sources?.length ||
+      !hasVerifiedCountryEvidence(result, region)
+    ) {
+      await persistResearchedArtistProfile(
+        identity.id,
+        {
+          roamCountryAudit: {
+            status: "NO_COUNTRY",
+            checkedAt: new Date().toISOString(),
+            identityFingerprint,
+          },
+        },
+        statePath,
+      );
       summary.noCountry += 1;
-      console.log(`${prefix}：来源未返回可映射国家，跳过`);
+      console.log(`${prefix}：来源未返回可映射国家，已记录核验结果`);
     } else {
       await persistResearchedArtistProfile(
         identity.id,
@@ -173,6 +262,12 @@ for (const [index, identity] of pending.entries()) {
           publicFacts: result.publicFacts,
           sources: mergeSources(previous.sources, result.sources),
           researchError: "",
+          roamCountryAudit: {
+            status: "CONFIRMED",
+            checkedAt: new Date().toISOString(),
+            identityFingerprint,
+            evidence: "WIKIDATA_COUNTRY",
+          },
         },
         statePath,
       );
@@ -188,8 +283,19 @@ for (const [index, identity] of pending.entries()) {
     }
   } catch (error) {
     if (error?.code === "ARTIST_IDENTITY_AMBIGUOUS") {
+      await persistResearchedArtistProfile(
+        identity.id,
+        {
+          roamCountryAudit: {
+            status: "AMBIGUOUS",
+            checkedAt: new Date().toISOString(),
+            identityFingerprint,
+          },
+        },
+        statePath,
+      );
       summary.ambiguous += 1;
-      console.log(`${prefix}：同名身份无法唯一确认，跳过`);
+      console.log(`${prefix}：同名身份无法唯一确认，已记录核验结果`);
     } else {
       summary.failed += 1;
       console.log(`${prefix}：核验失败（${error?.code || error?.message || "UNKNOWN"}）`);

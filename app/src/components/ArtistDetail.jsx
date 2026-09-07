@@ -17,7 +17,11 @@ import {
   X,
   YoutubeLogo,
 } from "@phosphor-icons/react";
-import { normalizeArtistPlatformUrl, visibleArtistMediaMessage } from "../lib/artistProfiles.js";
+import {
+  hasVerifiedArtistCountry,
+  normalizeArtistPlatformUrl,
+  visibleArtistMediaMessage,
+} from "../lib/artistProfiles.js";
 import {
   buildArtistExplorationModel,
   groupExplorationReleases,
@@ -32,6 +36,7 @@ import {
 import { Cover } from "./ReleaseViews.jsx";
 import { Rating } from "./Rating.jsx";
 import { formatTrackDuration } from "../lib/tracklist.js";
+import { ROAM_REGIONS, resolveRoamCountry } from "../lib/roam.js";
 
 const TYPE_FILTERS = [
   ["ALL", "全部"],
@@ -71,6 +76,7 @@ export function ArtistDetail({
   onRequestExplorationCatalog,
   onChangeReleaseView,
   onRequestIntroduction,
+  onSaveCountry,
   onSavePlatformLinks,
   onRequestMedia,
   onToggleMotion,
@@ -104,7 +110,8 @@ export function ArtistDetail({
   const visualRef = useRef(null);
   const heroMediaRef = useRef(null);
   const localMotionUrl = profile?.media?.localMotionUrl || "";
-  const staticImageUrl = profile?.media?.imageUrl || "";
+  const staticImageUrl =
+    profile?.media?.localImageUrl || profile?.media?.imageUrl || "";
   const mediaMessage = visibleArtistMediaMessage(profile?.media);
   const motionEnabled = profile?.media?.motionEnabled !== false;
   const motionAvailable = Boolean(localMotionUrl) && !motionFailed;
@@ -287,8 +294,11 @@ export function ArtistDetail({
     <div
       className="drawer-backdrop artist-detail-backdrop"
       role="presentation"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose?.();
+      onPointerDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        event.preventDefault();
+        onClose?.();
       }}
     >
       <aside
@@ -901,7 +911,11 @@ export function ArtistDetail({
               <ArrowClockwise aria-hidden="true" />
             </button>
           </header>
-          <ArtistPublicFacts facts={profile?.publicFacts} />
+          <ArtistPublicFacts
+            facts={profile?.publicFacts}
+            countryVerified={hasVerifiedArtistCountry(profile)}
+            onSaveCountry={onSaveCountry}
+          />
           {researchActive ? (
             <div className="artist-research-status" role="status">
               <ArrowClockwise aria-hidden="true" />
@@ -1012,7 +1026,17 @@ function publicMemberLabel(member) {
   return role ? `${name} · ${role}` : name;
 }
 
-function ArtistPublicFacts({ facts }) {
+function ArtistPublicFacts({
+  facts,
+  countryVerified = false,
+  onSaveCountry,
+}) {
+  const currentRegion = resolveRoamCountry(facts?.country);
+  const [editingCountry, setEditingCountry] = useState(false);
+  const [countryQuery, setCountryQuery] = useState("");
+  const [selectedCountryCode, setSelectedCountryCode] = useState(
+    currentRegion?.code ?? "",
+  );
   const artistType = String(facts?.artistType ?? "").trim();
   const isGroup = /group|团体|orchestra|choir|管弦|合唱/i.test(artistType);
   const members = [...new Set(
@@ -1020,24 +1044,138 @@ function ArtistPublicFacts({ facts }) {
       .map((member) => publicMemberLabel({ ...member, role: "" }))
       .filter(Boolean),
   )];
-  const from = String(
-    isGroup
-      ? facts?.origin || facts?.birthPlace || ""
-      : facts?.birthPlace || facts?.origin || "",
-  ).trim();
-  const country = String(facts?.country ?? "").trim();
-  const rows = [
+  const from = countryVerified
+    ? String(
+        isGroup
+          ? facts?.origin || facts?.birthPlace || ""
+          : facts?.birthPlace || facts?.origin || "",
+      ).trim()
+    : "";
+  const country = countryVerified ? String(facts?.country ?? "").trim() : "";
+  const countryOptions = useMemo(() => {
+    const normalizedQuery = countryQuery.trim().toLocaleLowerCase();
+    if (!normalizedQuery) return ROAM_REGIONS;
+    return ROAM_REGIONS.filter((region) =>
+      [region.name, region.englishName, region.code].some((value) =>
+        value.toLocaleLowerCase().includes(normalizedQuery),
+      ),
+    );
+  }, [countryQuery]);
+  useEffect(() => {
+    setSelectedCountryCode(currentRegion?.code ?? "");
+  }, [currentRegion?.code]);
+  const rowsBeforeCountry = [
     [isGroup ? "成立" : "出生", facts?.birthDate || facts?.activeFrom],
     ["来自", from && from !== country ? from : ""],
-    ["地区", country],
-    ["类型", artistType],
   ].filter(([, value]) => value);
-  const hasFacts = rows.length || facts?.genres?.length || members.length;
+  const rowsAfterCountry = [["类型", artistType]].filter(([, value]) => value);
+  const hasFacts =
+    rowsBeforeCountry.length ||
+    rowsAfterCountry.length ||
+    country ||
+    onSaveCountry ||
+    facts?.genres?.length ||
+    members.length;
   if (!hasFacts) return null;
+  const selectedRegion = ROAM_REGIONS.find(
+    (region) => region.code === selectedCountryCode,
+  );
   return (
     <div className="artist-public-profile">
       <dl className="artist-public-facts">
-        {rows.map(([label, value]) => (
+        {rowsBeforeCountry.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+        {country || onSaveCountry ? (
+          <div className="artist-public-country-fact">
+            <dt>
+              <span>地区</span>
+              {onSaveCountry ? (
+                <button
+                  type="button"
+                  className="artist-country-edit"
+                  aria-label="编辑国家或地区"
+                  aria-expanded={editingCountry}
+                  title="编辑国家或地区"
+                  onClick={() => {
+                    setCountryQuery("");
+                    setSelectedCountryCode(currentRegion?.code ?? "");
+                    setEditingCountry((value) => !value);
+                  }}
+                >
+                  <PencilSimple aria-hidden="true" />
+                </button>
+              ) : null}
+            </dt>
+            <dd>{country || "未设置"}</dd>
+          </div>
+        ) : null}
+        {editingCountry && onSaveCountry ? (
+          <div className="artist-country-editor">
+            <div className="artist-country-editor-heading">
+              <div>
+                <strong>选择国家或地区</strong>
+                <small>单选后保存，音乐漫游会立即同步</small>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭国家或地区选择"
+                onClick={() => setEditingCountry(false)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </div>
+            <input
+              type="search"
+              value={countryQuery}
+              placeholder="搜索中文名、英文名或地区代码"
+              aria-label="搜索国家或地区"
+              onChange={(event) => setCountryQuery(event.target.value)}
+            />
+            <div className="artist-country-options" role="radiogroup" aria-label="国家或地区">
+              {countryOptions.map((region) => (
+                <label key={region.code}>
+                  <input
+                    type="radio"
+                    name="artist-country"
+                    value={region.code}
+                    checked={selectedCountryCode === region.code}
+                    onChange={() => setSelectedCountryCode(region.code)}
+                  />
+                  <span>
+                    <strong>{region.name}</strong>
+                    <small>{region.englishName}</small>
+                  </span>
+                  <em>{region.code}</em>
+                </label>
+              ))}
+              {!countryOptions.length ? (
+                <p>没有找到匹配的国家或地区</p>
+              ) : null}
+            </div>
+            <div className="artist-country-editor-actions">
+              <button type="button" onClick={() => setEditingCountry(false)}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="is-primary"
+                disabled={!selectedRegion}
+                onClick={() => {
+                  if (!selectedRegion) return;
+                  onSaveCountry(selectedRegion);
+                  setEditingCountry(false);
+                }}
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {rowsAfterCountry.map(([label, value]) => (
           <div key={label}>
             <dt>{label}</dt>
             <dd>{value}</dd>

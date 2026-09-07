@@ -1,5 +1,11 @@
-import { getArtistProfile } from "./artistProfiles.js";
+import {
+  getArtistProfile,
+  hasUserConfirmedArtistCountry,
+  hasVerifiedArtistCountry,
+} from "./artistProfiles.js";
 import { getCurrentRating } from "./music.js";
+
+export const ROAM_COUNTRY_REFRESH_BATCH_SIZE = 100;
 
 export const ROAM_CONTINENTS = Object.freeze([
   { id: "AS", name: "亚洲", englishName: "Asia" },
@@ -119,11 +125,63 @@ function getListeningDate(release) {
   return timestamps.length ? new Date(Math.min(...timestamps)).toISOString() : "";
 }
 
+function isUnverifiedConfirmedCountry(profile) {
+  return Boolean(
+    profile?.roamCountryAudit?.status === "CONFIRMED" &&
+      !hasVerifiedArtistCountry(profile),
+  );
+}
+
 export function isRoamReadyProfile(profile) {
   return (
     profile?.introductionStatus === "READY" &&
-    profile?.sources?.length > 0 &&
-    Boolean(resolveRoamCountry(profile?.publicFacts?.country))
+    (profile?.sources?.length > 0 || hasUserConfirmedArtistCountry(profile)) &&
+    Boolean(resolveRoamCountry(profile?.publicFacts?.country)) &&
+    hasVerifiedArtistCountry(profile)
+  );
+}
+
+const ROAM_COUNTRY_AUDIT_TERMINAL_STATUSES = new Set([
+  "CONFIRMED",
+  "NO_COUNTRY",
+  "AMBIGUOUS",
+]);
+
+function normalizeArtistIdentityPart(value = "") {
+  return String(value)
+    .normalize("NFKC")
+    .toLocaleLowerCase("en")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function getRoamCountryAuditFingerprint(identity = {}) {
+  const aliases = (identity.aliases ?? [])
+    .map((alias) => (typeof alias === "string" ? alias : alias?.name))
+    .map(normalizeArtistIdentityPart)
+    .filter(Boolean)
+    .sort();
+  const identityKey = [
+    normalizeArtistIdentityPart(identity.canonicalName ?? identity.name),
+    ...new Set(aliases),
+    normalizeArtistIdentityPart(
+      identity.musicBrainzMbid ?? identity.musicBrainzId,
+    ),
+  ].join("\u001f");
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < identityKey.length; index += 1) {
+    hash ^= BigInt(identityKey.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return `v1:${hash.toString(16).padStart(16, "0")}`;
+}
+
+export function isRoamCountryAuditCurrent(profile, identity) {
+  const audit = profile?.roamCountryAudit;
+  return Boolean(
+    ROAM_COUNTRY_AUDIT_TERMINAL_STATUSES.has(audit?.status) &&
+      !isUnverifiedConfirmedCountry(profile) &&
+      audit?.identityFingerprint === getRoamCountryAuditFingerprint(identity),
   );
 }
 
@@ -149,12 +207,24 @@ export function getRoamCountryRefreshCandidates({
       identity.canonicalName,
       ...aliases,
     ]);
-    if (isRoamReadyProfile(profile)) return [];
+    if (
+      isRoamReadyProfile(profile) ||
+      isRoamCountryAuditCurrent(profile, identity)
+    ) return [];
     return [{
       artistId: identity.id,
       name: identity.canonicalName,
       aliases,
       musicBrainzId: identity.musicBrainzMbid ?? "",
+      releaseHints: (group.releases ?? []).slice(0, 12).map((release) => ({
+        title: release.title,
+        translatedTitle: release.translatedTitle,
+        titleAliases: release.titleAliases,
+        releaseType: release.releaseType,
+        releaseDate: release.releaseDate,
+        artists: release.artists,
+      })),
+      identityFingerprint: getRoamCountryAuditFingerprint(identity),
     }];
   });
 }
@@ -183,7 +253,8 @@ export function buildRoamModel({ artistGroups = [], artistProfileState } = {}) {
     const artist = {
       id: group.id,
       name: group.artist,
-      imageUrl: profile.media?.imageUrl ?? "",
+      imageUrl:
+        profile.media?.localImageUrl || profile.media?.imageUrl || "",
       releases: scoredReleases,
       average:
         scoredReleases.reduce((sum, item) => sum + item.rating, 0) /

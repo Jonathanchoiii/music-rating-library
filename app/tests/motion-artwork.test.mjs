@@ -184,6 +184,85 @@ test("artist stills prefer square Apple identity artwork over a wide editorial h
   );
 });
 
+test("artist media prefers the exact Apple search avatar over an editorial hero", async () => {
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const guestToken = `${encode({ alg: "none" })}.${encode({
+    iss: "AMPWebPlay",
+  })}.signature`;
+  const requested = [];
+  const fetchImpl = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url === "https://music.apple.com/gb/artist/1033827208") {
+      return new Response('<script src="/assets/index~artist.js"></script>');
+    }
+    if (url === "https://music.apple.com/assets/index~artist.js") {
+      return new Response(guestToken);
+    }
+    if (url.includes("/v1/catalog/gb/artists/1033827208?")) {
+      return Response.json({
+        data: [{
+          attributes: {
+            name: "Wolf Alice",
+            editorialArtwork: {
+              subscriptionHero: {
+                width: 4320,
+                height: 1080,
+                url: "https://is1-ssl.mzstatic.com/image/thumb/wolf-hero/{w}x{h}sr.{f}",
+              },
+            },
+            editorialVideo: {},
+          },
+        }],
+      });
+    }
+    if (url.includes("/v1/catalog/gb/search?")) {
+      return Response.json({
+        results: {
+          artists: {
+            data: [
+              {
+                id: "another-artist",
+                attributes: {
+                  artwork: {
+                    width: 1000,
+                    height: 1000,
+                    url: "https://is1-ssl.mzstatic.com/image/thumb/wrong/{w}x{h}bb.{f}",
+                  },
+                },
+              },
+              {
+                id: "1033827208",
+                attributes: {
+                  artwork: {
+                    width: 1000,
+                    height: 1000,
+                    url: "https://is1-ssl.mzstatic.com/image/thumb/wolf-search/{w}x{h}bb.{f}",
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const result = await __test.lookupAppleArtistMedia(
+    "https://music.apple.com/gb/artist/wolf-alice/1033827208",
+    fetchImpl,
+  );
+  assert.equal(
+    result.imageUrl,
+    "https://is1-ssl.mzstatic.com/image/thumb/wolf-search/1400x1400bb.jpg",
+  );
+  assert.equal(result.sourceVideoUrl, "");
+  assert.ok(requested.some((url) => url.includes("/v1/catalog/gb/search?")));
+  assert.equal(requested.some((url) => url.includes("itunes.apple.com/lookup")), false);
+});
+
 test("artist media uses editorial stills plus highest-quality Apple animated artwork", async () => {
   const encode = (value) =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -864,4 +943,47 @@ test("artist motion cache slugs spaced raw artist ids instead of rejecting the H
     /^\/private-motion-artwork\/artist-raw-doja-cat-[a-f0-9]{10}-\d+\.mp4$/,
   );
   assert.equal(result.motionArtwork.format, "MP4");
+});
+
+test("user-requested Apple artist stills are cached as private local images", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "recordshelf-artist-still-"),
+  );
+  const previousArtworkDirectory = process.env.RECORDSHELF_MOTION_ARTWORK_DIR;
+  process.env.RECORDSHELF_MOTION_ARTWORK_DIR = directory;
+  context.after(async () => {
+    if (previousArtworkDirectory === undefined) {
+      delete process.env.RECORDSHELF_MOTION_ARTWORK_DIR;
+    } else {
+      process.env.RECORDSHELF_MOTION_ARTWORK_DIR = previousArtworkDirectory;
+    }
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const bytes = Buffer.from("artist-avatar");
+  const result = await __test.cacheArtistStaticArtwork(
+    "raw-wolf alice",
+    "https://is1-ssl.mzstatic.com/image/thumb/wolf-alice.jpg",
+    async () =>
+      new Response(bytes, {
+        headers: { "content-type": "image/jpeg" },
+      }),
+  );
+
+  assert.match(
+    result.localUrl,
+    /^\/private-motion-artwork\/artist-raw-wolf-alice-[a-f0-9]{10}-still-[a-f0-9]{10}\.jpg$/,
+  );
+  assert.deepEqual(
+    await fs.readFile(path.join(directory, path.basename(result.localUrl))),
+    bytes,
+  );
+  await assert.rejects(
+    __test.cacheArtistStaticArtwork(
+      "raw-wolf alice",
+      "https://example.com/not-apple.jpg",
+      async () => new Response(bytes, { headers: { "content-type": "image/jpeg" } }),
+    ),
+    /INVALID_ARTIST_STATIC_SOURCE/,
+  );
 });

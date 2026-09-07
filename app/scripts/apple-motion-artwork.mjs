@@ -33,8 +33,15 @@ const MOTION_ARTWORK_PROFILE_VERSION = 2;
 const ARTIST_MOTION_MP4_PROFILE_VERSION = 2;
 const ARTIST_MOTION_CROP_Y_BIAS = 0.5;
 const ARTIST_MOTION_MAX_BYTES = 8 * 1024 * 1024;
+const ARTIST_STATIC_MAX_BYTES = 15 * 1024 * 1024;
 const ARTIST_MOTION_MAX_DURATION_SECONDS = 8;
 const ARTIST_MOTION_MIN_DURATION_SECONDS = 1;
+const APPLE_STATIC_ARTWORK_HOST_RE = /(^|\.)mzstatic\.com$/i;
+const ARTIST_STATIC_MIME_TYPES = Object.freeze({
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+});
 const ARTIST_MOTION_DURATION_STEPS = Object.freeze([8, 6, 5, 4, 3, 2, 1]);
 const ARTIST_MOTION_MP4_PROFILES = Object.freeze([
   {
@@ -371,11 +378,22 @@ function itunesScaledArtworkUrl(value, size = ARTIST_FALLBACK_STATIC_SIZE) {
   );
 }
 
-function firstArtistArtworkUrl(attributes) {
+function firstArtistIdentityArtworkUrl(attributes) {
   const editorial = attributes?.editorialArtwork ?? {};
   const candidates = [
-    editorial.staticDetailSquare,
     attributes?.artwork,
+    editorial.staticDetailSquare,
+  ];
+  for (const artwork of candidates) {
+    const url = resolvedArtistArtworkUrl(artwork);
+    if (url) return url;
+  }
+  return "";
+}
+
+function firstArtistEditorialArtworkUrl(attributes) {
+  const editorial = attributes?.editorialArtwork ?? {};
+  const candidates = [
     editorial.staticDetailTall,
     editorial.centeredFullscreenBackground,
     editorial.subscriptionHero,
@@ -388,6 +406,13 @@ function firstArtistArtworkUrl(attributes) {
     if (url) return url;
   }
   return "";
+}
+
+function firstArtistArtworkUrl(attributes) {
+  return (
+    firstArtistIdentityArtworkUrl(attributes) ||
+    firstArtistEditorialArtworkUrl(attributes)
+  );
 }
 
 function findMotionVideo(value) {
@@ -442,6 +467,44 @@ async function lookupItunesArtistArtwork(identity, fetchImpl = fetch) {
   }
 }
 
+async function lookupAppleArtistSearchArtwork(
+  identity,
+  artistName,
+  token,
+  fetchImpl = fetch,
+) {
+  const name = String(artistName ?? "").trim();
+  if (!name || !token) return "";
+  const searchUrl = new URL(
+    `/v1/catalog/${identity.storefront}/search`,
+    APPLE_CATALOG_ORIGIN,
+  );
+  searchUrl.searchParams.set("term", name);
+  searchUrl.searchParams.set("types", "artists");
+  searchUrl.searchParams.set("limit", "10");
+  searchUrl.searchParams.set("platform", "web");
+  try {
+    const response = await fetchImpl(searchUrl, {
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${token}`,
+        origin: APPLE_WEB_ORIGIN,
+        referer: `${APPLE_WEB_ORIGIN}/`,
+        "user-agent": APPLE_WEB_USER_AGENT,
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) return "";
+    const artists = (await response.json())?.results?.artists?.data;
+    const exactArtist = Array.isArray(artists)
+      ? artists.find((artist) => String(artist?.id ?? "") === identity.artistId)
+      : null;
+    return firstArtistIdentityArtworkUrl(exactArtist?.attributes);
+  } catch {
+    return "";
+  }
+}
+
 export async function lookupAppleArtistMedia(appleMusicUrl, fetchImpl = fetch) {
   const identity = appleArtistIdentity(appleMusicUrl);
   if (!identity) throw new Error("INVALID_APPLE_MUSIC_ARTIST_URL");
@@ -484,9 +547,23 @@ export async function lookupAppleArtistMedia(appleMusicUrl, fetchImpl = fetch) {
   });
   if (!catalogResponse.ok) throw new Error(`APPLE_CATALOG_HTTP_${catalogResponse.status}`);
   const attributes = (await catalogResponse.json())?.data?.[0]?.attributes ?? {};
+  const identityArtworkUrl = firstArtistIdentityArtworkUrl(attributes);
+  const searchArtworkUrl = identityArtworkUrl
+    ? ""
+    : await lookupAppleArtistSearchArtwork(
+      identity,
+      attributes.name,
+      token,
+      fetchImpl,
+    );
+  const lookupArtworkUrl = identityArtworkUrl || searchArtworkUrl
+    ? ""
+    : await lookupItunesArtistArtwork(identity, fetchImpl);
   const imageUrl =
-    firstArtistArtworkUrl(attributes) ||
-    (await lookupItunesArtistArtwork(identity, fetchImpl));
+    identityArtworkUrl ||
+    searchArtworkUrl ||
+    lookupArtworkUrl ||
+    firstArtistEditorialArtworkUrl(attributes);
   return {
     imageUrl,
     sourceVideoUrl: findArtistMotionVideo(attributes.editorialVideo) ?? "",
@@ -1360,6 +1437,77 @@ export async function cacheArtistMotionArtwork(
   return cacheArtistMotionMp4File(safeId, safeSource, fetchImpl, options);
 }
 
+function safeArtistStaticArtworkUrl(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      !APPLE_STATIC_ARTWORK_HOST_RE.test(url.hostname)
+    ) {
+      return "";
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+export async function cacheArtistStaticArtwork(
+  artistId,
+  sourceUrl,
+  fetchImpl = fetch,
+) {
+  const safeId = safeArtistMotionId(artistId);
+  const safeSource = safeArtistStaticArtworkUrl(sourceUrl);
+  if (!safeId) throw new Error("INVALID_ARTIST_STATIC_ID");
+  if (!safeSource) throw new Error("INVALID_ARTIST_STATIC_SOURCE");
+
+  const response = await fetchImpl(safeSource, {
+    headers: {
+      accept: "image/webp,image/png,image/jpeg,*/*;q=0.5",
+      "user-agent": APPLE_WEB_USER_AGENT,
+    },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) {
+    throw new Error(`ARTIST_STATIC_HTTP_${response.status}`);
+  }
+  const contentType = String(response.headers.get("content-type") ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLocaleLowerCase();
+  const extension = ARTIST_STATIC_MIME_TYPES[contentType];
+  if (!extension) throw new Error("INVALID_ARTIST_STATIC_CONTENT_TYPE");
+  const declaredSize = Number(response.headers.get("content-length") ?? 0);
+  if (declaredSize > ARTIST_STATIC_MAX_BYTES) {
+    throw new Error("ARTIST_STATIC_TOO_LARGE");
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw new Error("EMPTY_ARTIST_STATIC_FILE");
+  if (bytes.length > ARTIST_STATIC_MAX_BYTES) {
+    throw new Error("ARTIST_STATIC_TOO_LARGE");
+  }
+
+  await fs.mkdir(motionArtworkDirectory(), { recursive: true });
+  const sourceDigest = createHash("sha1")
+    .update(safeSource)
+    .digest("hex")
+    .slice(0, 10);
+  const fileName = `${safeId}-still-${sourceDigest}.${extension}`;
+  const filePath = path.join(motionArtworkDirectory(), fileName);
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, bytes, { mode: 0o600 });
+    await fs.rename(temporaryPath, filePath);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true });
+    throw error;
+  }
+  return { localUrl: `${MOTION_ARTWORK_ROUTE}/${fileName}` };
+}
+
 export async function handleMotionArtworkFileRequest(
   request,
   response,
@@ -1406,7 +1554,7 @@ export async function handleMotionArtworkFileRequest(
     const fileName = decodeURIComponent(
       url.pathname.slice(MOTION_ARTWORK_ROUTE.length + 1),
     );
-    if (!/^[a-zA-Z0-9._-]+\.(webp|mp4)$/.test(fileName)) {
+    if (!/^[a-zA-Z0-9._-]+\.(webp|mp4|jpe?g|png)$/.test(fileName)) {
       response.statusCode = 403;
       response.end();
       return true;
@@ -1415,10 +1563,16 @@ export async function handleMotionArtworkFileRequest(
     try {
       const details = await fs.stat(filePath);
       response.statusCode = 200;
-      response.setHeader(
-        "content-type",
-        fileName.toLowerCase().endsWith(".mp4") ? "video/mp4" : "image/webp",
-      );
+      const extension = path.extname(fileName).toLocaleLowerCase();
+      const contentType =
+        extension === ".mp4"
+          ? "video/mp4"
+          : extension === ".png"
+            ? "image/png"
+            : extension === ".jpg" || extension === ".jpeg"
+              ? "image/jpeg"
+              : "image/webp";
+      response.setHeader("content-type", contentType);
       response.setHeader("content-length", String(details.size));
       response.setHeader("cache-control", "private, max-age=31536000, immutable");
       if (request.method === "HEAD") response.end();
@@ -1511,12 +1665,15 @@ export const __test = {
   appleArtistIdentity,
   appleArtworkUrl,
   firstArtistArtworkUrl,
+  firstArtistIdentityArtworkUrl,
+  firstArtistEditorialArtworkUrl,
   appleAssetUrls,
   appleGuestToken,
   findArtistMotionVideo,
   motionCoverCropFilter,
   itunesScaledArtworkUrl,
   lookupAppleArtistMedia,
+  lookupAppleArtistSearchArtwork,
   looksLikeAppleMotionStill,
   lookupAppleCatalogMotionArtwork,
   lookupMotionArtwork,
@@ -1524,6 +1681,8 @@ export const __test = {
   persistMotionArtwork,
   playableAppleHlsUrl,
   safeArtistMotionId,
+  safeArtistStaticArtworkUrl,
   safeMotionUrl,
   cacheArtistMotionArtwork,
+  cacheArtistStaticArtwork,
 };

@@ -7,6 +7,7 @@ import {
   getArtistAliasIndex,
   resolveArtistCredit,
 } from "./artists.js";
+import { getArtistProfile } from "./artistProfiles.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
 import { LIBRARY_FILTER_STORAGE_KEY } from "./sharedStorageKeys.js";
 import { normalizeAlbumIntroduction } from "./appleMusicEditorial.js";
@@ -29,6 +30,8 @@ export const EMPTY_LIBRARY_FILTERS = {
   listeningGuideState: "ANY",
   motionArtworkState: "ANY",
   albumIntroductionState: "ANY",
+  artistCoverState: "ANY",
+  artistIntroductionState: "ANY",
   listenCount: "ANY",
   platforms: [],
   completeness: [],
@@ -74,6 +77,47 @@ const FACET_FIELD_CONFIG = {
   mediaFormats: { sourceFields: ["mediaFormatSource", "formatSource"] },
 };
 
+const artistAliasIndexCache = new WeakMap();
+const artistProfileResolutionCache = new WeakMap();
+
+function cachedArtistAliasIndex(artistIdentityState) {
+  if (!artistIdentityState || typeof artistIdentityState !== "object") {
+    return getArtistAliasIndex(artistIdentityState);
+  }
+  const cached = artistAliasIndexCache.get(artistIdentityState);
+  if (cached) return cached;
+  const index = getArtistAliasIndex(artistIdentityState);
+  artistAliasIndexCache.set(artistIdentityState, index);
+  return index;
+}
+
+function cachedArtistProfile(
+  artistProfileState,
+  identity,
+  credit,
+) {
+  if (!artistProfileState || typeof artistProfileState !== "object") {
+    return getArtistProfile(artistProfileState, identity.id, [
+      identity.canonicalName,
+      credit,
+      ...(identity.aliases ?? []).map((alias) => alias.name),
+    ]);
+  }
+  let stateCache = artistProfileResolutionCache.get(artistProfileState);
+  if (!stateCache) {
+    stateCache = new Map();
+    artistProfileResolutionCache.set(artistProfileState, stateCache);
+  }
+  if (stateCache.has(identity.id)) return stateCache.get(identity.id);
+  const profile = getArtistProfile(artistProfileState, identity.id, [
+    identity.canonicalName,
+    credit,
+    ...(identity.aliases ?? []).map((alias) => alias.name),
+  ]);
+  stateCache.set(identity.id, profile);
+  return profile;
+}
+
 function uniqueStrings(values = []) {
   return [
     ...new Map(
@@ -90,6 +134,8 @@ const TERNARY_FILTER_STATES = {
   listeningGuideState: ["ANY", "WITH_GUIDE", "WITHOUT_GUIDE"],
   motionArtworkState: ["ANY", "WITH_MOTION", "WITHOUT_MOTION"],
   albumIntroductionState: ["ANY", "WITH_INTRO", "WITHOUT_INTRO"],
+  artistCoverState: ["ANY", "WITH_COVER", "WITHOUT_COVER"],
+  artistIntroductionState: ["ANY", "WITH_INTRO", "WITHOUT_INTRO"],
 };
 
 export function sanitizeLibraryFilters(filters = {}) {
@@ -158,6 +204,8 @@ export function activeFilterCount(filters = {}) {
     value.listeningGuideState !== "ANY",
     value.motionArtworkState !== "ANY",
     value.albumIntroductionState !== "ANY",
+    value.artistCoverState !== "ANY",
+    value.artistIntroductionState !== "ANY",
     value.listenCount !== "ANY",
     value.platforms.length,
     value.completeness.length,
@@ -261,13 +309,62 @@ export function collectVisibleTrustedFacetOptions(
 }
 
 function releaseArtistIds(release, artistIdentityState) {
-  const aliasIndex = getArtistAliasIndex(artistIdentityState);
+  const aliasIndex = cachedArtistAliasIndex(artistIdentityState);
   return new Set(
     splitArtistCredits(release.artists).map(
       (credit) =>
         resolveArtistCredit(credit, artistIdentityState, aliasIndex).id,
     ),
   );
+}
+
+function releaseArtistProfiles(
+  release,
+  artistIdentityState,
+  artistProfileState,
+) {
+  const aliasIndex = cachedArtistAliasIndex(artistIdentityState);
+  const seen = new Set();
+  return splitArtistCredits(release?.artists ?? []).flatMap((credit) => {
+    const identity = resolveArtistCredit(
+      credit,
+      artistIdentityState,
+      aliasIndex,
+    );
+    if (!identity.id || seen.has(identity.id)) return [];
+    seen.add(identity.id);
+    return [cachedArtistProfile(artistProfileState, identity, credit)];
+  });
+}
+
+function releaseHasArtistCover(
+  release,
+  artistIdentityState,
+  artistProfileState,
+) {
+  return releaseArtistProfiles(
+    release,
+    artistIdentityState,
+    artistProfileState,
+  ).some((profile) =>
+    Boolean(
+      String(profile?.media?.localImageUrl ?? "").trim() ||
+      String(profile?.media?.imageUrl ?? "").trim() ||
+        String(profile?.media?.localMotionUrl ?? "").trim(),
+    ),
+  );
+}
+
+function releaseHasArtistIntroduction(
+  release,
+  artistIdentityState,
+  artistProfileState,
+) {
+  return releaseArtistProfiles(
+    release,
+    artistIdentityState,
+    artistProfileState,
+  ).some((profile) => Boolean(String(profile?.introduction ?? "").trim()));
 }
 
 function hasPlatform(release, provider) {
@@ -398,6 +495,7 @@ export function releaseMatchesLibraryFilters(
   rawFilters,
   artistIdentityState,
   listeningGuideStatuses = {},
+  artistProfileState,
 ) {
   const filters = sanitizeLibraryFilters(rawFilters);
   if (
@@ -507,6 +605,34 @@ export function releaseMatchesLibraryFilters(
   ) {
     return false;
   }
+  if (
+    !matchesTernaryState(
+      releaseHasArtistCover(
+        release,
+        artistIdentityState,
+        artistProfileState,
+      ),
+      filters.artistCoverState,
+      "WITH_COVER",
+      "WITHOUT_COVER",
+    )
+  ) {
+    return false;
+  }
+  if (
+    !matchesTernaryState(
+      releaseHasArtistIntroduction(
+        release,
+        artistIdentityState,
+        artistProfileState,
+      ),
+      filters.artistIntroductionState,
+      "WITH_INTRO",
+      "WITHOUT_INTRO",
+    )
+  ) {
+    return false;
+  }
   if (!matchesListenCount(release, filters.listenCount)) return false;
 
   if (
@@ -547,6 +673,7 @@ export function filterReleases(
   filters,
   artistIdentityState,
   listeningGuideStatuses = {},
+  artistProfileState,
 ) {
   return releases.filter((release) =>
     releaseMatchesLibraryFilters(
@@ -554,6 +681,7 @@ export function filterReleases(
       filters,
       artistIdentityState,
       listeningGuideStatuses,
+      artistProfileState,
     ),
   );
 }

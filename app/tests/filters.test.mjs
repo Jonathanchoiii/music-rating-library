@@ -329,3 +329,75 @@ test("motion artwork and album introduction filters use local persisted content"
     true,
   );
 });
+
+test("artist cover filters resolve persisted media through the stable artist identity", () => {
+  const artistProfileState = {
+    version: 4,
+    profiles: {
+      "mbid-3821e3ac-4d91-40b8-a669-f58d1fe2c0c4": {
+        media: {
+          status: "IMAGE_ONLY",
+          imageUrl: "",
+          localImageUrl: "/private-motion-artwork/artist-waa-still.jpg",
+          localMotionUrl: "",
+        },
+      },
+    },
+  };
+  const item = release({ artists: ["Waa Wei"] });
+
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      item,
+      { ...EMPTY_LIBRARY_FILTERS, artistCoverState: "WITH_COVER" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+      {},
+      artistProfileState,
+    ),
+    true,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      item,
+      { ...EMPTY_LIBRARY_FILTERS, artistCoverState: "WITHOUT_COVER" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+      {},
+      artistProfileState,
+    ),
+    false,
+  );
+});
+
+test("artist introduction filters use the persisted introduction prose", () => {
+  const withIntroduction = {
+    version: 4,
+    profiles: {
+      "mbid-3821e3ac-4d91-40b8-a669-f58d1fe2c0c4": {
+        introduction: "魏如萱是一位台湾创作歌手。",
+      },
+    },
+  };
+  const withoutIntroduction = { version: 4, profiles: {} };
+  const item = release({ artists: ["魏如萱 Waa"] });
+
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      item,
+      { ...EMPTY_LIBRARY_FILTERS, artistIntroductionState: "WITH_INTRO" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+      {},
+      withIntroduction,
+    ),
+    true,
+  );
+  assert.equal(
+    releaseMatchesLibraryFilters(
+      item,
+      { ...EMPTY_LIBRARY_FILTERS, artistIntroductionState: "WITHOUT_INTRO" },
+      DEFAULT_ARTIST_IDENTITY_STATE,
+      {},
+      withoutIntroduction,
+    ),
+    true,
+  );
+});

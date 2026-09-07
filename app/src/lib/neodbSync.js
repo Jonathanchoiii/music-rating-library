@@ -5,6 +5,7 @@ import {
   normalizeExternalReleaseType,
   normalizeSupportedReleaseUrl,
   normalizeText,
+  preserveUserConfirmedReleaseMetadata,
   sortListeningEntriesNewestFirst,
 } from "./music.js";
 import { notifySharedLocalStateChanged } from "./sharedLocalState.js";
@@ -43,6 +44,15 @@ const NEODB_SNAPSHOT_COLUMNS = [
 ];
 const METADATA_FIELDS = [
   "title",
+  "titleUserConfirmed",
+  "translatedTitleUserConfirmed",
+  "artistsUserConfirmed",
+  "releaseDateUserConfirmed",
+  "releaseDateSource",
+  "releaseDateMatchedFrom",
+  "releaseDateEvidence",
+  "releaseDateConflict",
+  "releaseDateMatchedAt",
   "translatedTitle",
   "titleAliases",
   "titleSource",
@@ -1376,7 +1386,7 @@ function metadataPatch(existing, incoming) {
   if (!existing.releaseDateCheckedAt && incoming.releaseDateCheckedAt) {
     patch.releaseDateCheckedAt = incoming.releaseDateCheckedAt;
   }
-  return patch;
+  return preserveUserConfirmedReleaseMetadata(existing, patch);
 }
 
 function metadataChanged(existing, patch) {
@@ -1496,7 +1506,7 @@ export function applyNeoDbSyncPlan(
     let candidate = update
       ? {
           ...release,
-          ...update.patch,
+          ...preserveUserConfirmedReleaseMetadata(release, update.patch),
           listeningEntries: dedupeEquivalentListeningEntries([
             ...release.listeningEntries,
             ...(update.entries ?? []),

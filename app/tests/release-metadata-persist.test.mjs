@@ -13,6 +13,67 @@ import {
 } from "../src/lib/releaseMetadataOverlay.js";
 import { getReleaseMetadataFields } from "../src/lib/neodbSync.js";
 import { appendManualTrack } from "../src/lib/tracklist.js";
+import { buildReleaseDetailsPatch } from "../src/lib/releaseDetails.js";
+import { applyNeoDbSyncPlan } from "../src/lib/neodbSync.js";
+import { applyCanonicalTitleEvidence, reconcileCanonicalTitleOverride } from "../src/lib/music.js";
+
+const editableRelease = {
+  id: "release-edit-test", title: "Original", translatedTitle: "旧译名",
+  titleAliases: ["旧译名"], artists: ["Incorrect label"],
+  releaseDate: "2019-11-13", releaseDatePrecision: "DAY",
+  listeningEntries: [{ id: "heard", rating10: 8, comment: "Keep this history" }],
+};
+const manualDraft = { title: "Correct title", translatedTitle: "", artists: "Correct artist\nGuest", releaseDate: "" };
+
+test("manual details validate real dates and only confirm fields that changed", () => {
+  for (const date of ["2023-02-29", "2024-02-30", "2019-13", "0000", "2024-2-03"]) {
+    assert.throws(() => buildReleaseDetailsPatch(editableRelease, { ...manualDraft, releaseDate: date }), /有效发行日期/);
+  }
+  for (const [date, precision] of [["2024", "YEAR"], ["2024-02", "MONTH"], ["2024-02-29", "DAY"], ["", "UNKNOWN"]]) {
+    const patch = buildReleaseDetailsPatch(editableRelease, { ...manualDraft, releaseDate: date });
+    assert.equal(patch.releaseDatePrecision, precision);
+    assert.equal(patch.releaseDateUserConfirmed, true);
+  }
+  assert.throws(() => buildReleaseDetailsPatch(editableRelease, { ...manualDraft, title: " " }), /专辑名/);
+  assert.throws(() => buildReleaseDetailsPatch(editableRelease, { ...manualDraft, artists: "\n" }), /艺人/);
+  const patch = buildReleaseDetailsPatch(editableRelease, { title: editableRelease.title, translatedTitle: editableRelease.translatedTitle, artists: "Correct artist", releaseDate: editableRelease.releaseDate });
+  assert.deepEqual(patch, { artists: ["Correct artist"], artistsUserConfirmed: true });
+});
+
+test("saved corrections and explicit clears survive disk roundtrip, title enrichment and stale sync plans", async () => {
+  await withSharedState(async (statePath) => {
+    const patch = buildReleaseDetailsPatch(editableRelease, manualDraft);
+    for (const key of Object.keys(patch)) assert.ok(getReleaseMetadataFields().includes(key), key);
+    await persistReleaseMetadataFields(editableRelease.id, patch);
+    const state = JSON.parse((await readSharedState(statePath)).storage[USER_STATE_KEY]);
+    const override = reconcileCanonicalTitleOverride({ ...editableRelease, titleSource: "APPLE_MUSIC_EXACT" }, state.releaseMetadataOverrides[editableRelease.id]);
+    const hydrated = { ...editableRelease, ...override };
+    assert.equal(hydrated.title, "Correct title");
+    assert.deepEqual(hydrated.artists, ["Correct artist", "Guest"]);
+    assert.equal(hydrated.translatedTitle, null);
+    assert.equal(hydrated.releaseDate, null);
+    assert.deepEqual(hydrated.titleAliases, []);
+    assert.deepEqual(applyCanonicalTitleEvidence(hydrated, { title: "Stale platform title" }), hydrated);
+    const [synced] = applyNeoDbSyncPlan([hydrated], {
+      updates: [{ releaseId: hydrated.id, patch: { title: "Stale title", artists: ["Label"], translatedTitle: "Stale translation", titleAliases: ["Stale"], releaseDate: "2020", releaseDatePrecision: "YEAR", markStatus: "complete" }, entries: [] }], additions: [], removals: [],
+    });
+    assert.equal(synced.title, hydrated.title);
+    assert.deepEqual(synced.artists, hydrated.artists);
+    assert.equal(synced.releaseDate, null);
+    assert.equal(synced.translatedTitle, null);
+    assert.deepEqual(synced.listeningEntries, editableRelease.listeningEntries);
+    assert.equal(synced.markStatus, "complete");
+  });
+});
+
+test("manual user releases persist cleared optional details without disturbing other records", () => {
+  const state = { userReleases: [editableRelease, { id: "other", title: "Other" }] };
+  const next = applyMetadataFieldsToUserState(state, editableRelease.id, buildReleaseDetailsPatch(editableRelease, manualDraft));
+  assert.equal(next.userReleases[0].releaseDate, null);
+  assert.equal(next.userReleases[0].translatedTitle, null);
+  assert.deepEqual(next.userReleases[0].listeningEntries, editableRelease.listeningEntries);
+  assert.deepEqual(next.userReleases[1], state.userReleases[1]);
+});
 
 const USER_STATE_KEY = "recordshelf-user-state-v2";
 

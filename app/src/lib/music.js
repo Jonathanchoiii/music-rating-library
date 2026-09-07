@@ -102,6 +102,7 @@ function cleanDisplayTitle(value = "") {
 }
 
 export function applyCanonicalTitleEvidence(release, evidence) {
+  if (release.titleUserConfirmed || release.translatedTitleUserConfirmed) return release;
   const canonicalTitle = cleanDisplayTitle(evidence?.title);
   if (!canonicalTitle) return release;
 
@@ -138,6 +139,7 @@ export function applyCanonicalTitleEvidence(release, evidence) {
 }
 
 export function reconcileCanonicalTitleOverride(baseRelease, override = {}) {
+  if (override.titleUserConfirmed || override.translatedTitleUserConfirmed) return { ...override };
   const mergedOverride = { ...override };
   if (
     (baseRelease?.titleAliases?.length ?? 0) ||
@@ -186,6 +188,23 @@ export function reconcileCanonicalTitleOverride(baseRelease, override = {}) {
     else delete reconciled.titleAliases;
   }
   return reconciled;
+}
+
+export function preserveUserConfirmedReleaseMetadata(release, patch) {
+  const next = { ...patch };
+  const groups = {
+    title: ["title", "titleSource", "titleMatchedFrom", "titleMatchedAt"],
+    translatedTitle: ["translatedTitle", "titleAliases"],
+    artists: ["artists"],
+    releaseDate: ["releaseDate", "releaseDatePrecision", "releaseDateSource", "releaseDateMatchedFrom", "releaseDateEvidence", "releaseDateConflict", "releaseDateCheckedAt", "releaseDateMatchedAt"],
+  };
+  for (const [field, fields] of Object.entries(groups)) {
+    if (!release[`${field}UserConfirmed`]) continue;
+    for (const key of [...fields, `${field}UserConfirmed`]) {
+      if (Object.hasOwn(next, key)) delete next[key];
+    }
+  }
+  return next;
 }
 
 export function reconcileCanonicalExternalLinkOverride(

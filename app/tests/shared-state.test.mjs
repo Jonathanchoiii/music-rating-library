@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   applySharedStateChanges,
+  getArtistMasterTablePaths,
   getNeoDbSnapshotDirectory,
   isAuthoritativeSharedStateRequest,
   persistNeoDbCsvSnapshot,
@@ -68,6 +69,152 @@ test("shared state persists only approved local keys", async (context) => {
   });
   const onDisk = await readSharedState(statePath);
   assert.deepEqual(onDisk, state);
+});
+
+test("artist writes maintain private JSON and CSV master tables", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const profileKey = "recordshelf-artist-profiles-v1";
+  const identityKey = "recordshelf-artist-identities-v1";
+  const appleMusic = "https://music.apple.com/hk/artist/example/123";
+  const spotify = "https://open.spotify.com/artist/example";
+  const youtubeMusic = "https://music.youtube.com/channel/example";
+
+  await applySharedStateChanges(
+    {
+      [identityKey]: JSON.stringify({
+        identities: [
+          {
+            id: "artist-example",
+            canonicalName: "示例艺人",
+            aliases: [{ name: "Example Artist" }],
+            musicBrainzMbid: "00000000-0000-0000-0000-000000000001",
+          },
+        ],
+      }),
+      [profileKey]: JSON.stringify({
+        version: 4,
+        profiles: {
+          "artist-example": {
+            platformLinks: { appleMusic, spotify, youtubeMusic },
+            publicFacts: { country: "香港" },
+            introduction: "已经保存的艺人介绍",
+            introductionStatus: "READY",
+            updatedAt: "2026-08-31T12:00:00.000Z",
+          },
+        },
+      }),
+    },
+    statePath,
+  );
+
+  const paths = getArtistMasterTablePaths(statePath);
+  const table = JSON.parse(await fs.readFile(paths.jsonPath, "utf8"));
+  const csv = await fs.readFile(paths.csvPath, "utf8");
+  const jsonDetails = await fs.stat(paths.jsonPath);
+  const csvDetails = await fs.stat(paths.csvPath);
+
+  assert.equal(table.artists.length, 1);
+  assert.equal(table.artists[0].canonicalName, "示例艺人");
+  assert.deepEqual(table.artists[0].aliases, ["Example Artist"]);
+  assert.equal(table.artists[0].profile.platformLinks.appleMusic, appleMusic);
+  assert.equal(table.artists[0].profile.platformLinks.spotify, spotify);
+  assert.equal(table.artists[0].profile.platformLinks.youtubeMusic, youtubeMusic);
+  assert.match(csv, /apple_music_artist_url/);
+  assert.match(csv, /示例艺人/);
+  assert.match(csv, /https:\/\/open\.spotify\.com\/artist\/example/);
+  assert.equal(jsonDetails.mode & 0o777, 0o600);
+  assert.equal(csvDetails.mode & 0o777, 0o600);
+
+  await applySharedStateChanges(
+    {
+      [profileKey]: JSON.stringify({
+        version: 4,
+        profiles: {
+          "artist-example": {
+            platformLinks: {
+              appleMusic,
+              spotify: "https://open.spotify.com/artist/updated",
+              youtubeMusic,
+            },
+            updatedAt: "2026-08-31T12:05:00.000Z",
+          },
+        },
+      }),
+    },
+    statePath,
+  );
+  const backups = await fs.readdir(paths.backupDirectory);
+  assert.equal(backups.length, 1);
+});
+
+test("artist master table restores lost links but respects a newer explicit clear", async (context) => {
+  const { directory, statePath } = await temporaryStatePath();
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const profileKey = "recordshelf-artist-profiles-v1";
+  const appleMusic = "https://music.apple.com/us/artist/example/123";
+  const spotify = "https://open.spotify.com/artist/example";
+
+  await applySharedStateChanges(
+    {
+      [profileKey]: JSON.stringify({
+        version: 4,
+        profiles: {
+          "artist-example": {
+            platformLinks: { appleMusic, spotify },
+            updatedAt: "2026-08-31T12:00:00.000Z",
+          },
+        },
+      }),
+    },
+    statePath,
+  );
+
+  const rawState = JSON.parse(await fs.readFile(statePath, "utf8"));
+  rawState.storage[profileKey] = JSON.stringify({
+    version: 4,
+    profiles: {
+      "artist-example": {
+        platformLinks: {},
+        updatedAt: "2026-08-30T12:00:00.000Z",
+      },
+    },
+  });
+  await fs.writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`);
+  const restored = JSON.parse((await readSharedState(statePath)).storage[profileKey]);
+  assert.equal(restored.profiles["artist-example"].platformLinks.appleMusic, appleMusic);
+  assert.equal(restored.profiles["artist-example"].platformLinks.spotify, spotify);
+
+  rawState.storage[profileKey] = JSON.stringify({
+    version: 4,
+    profiles: {
+      "artist-example": {
+        platformLinks: { appleMusic, spotify: "" },
+        updatedAt: "2026-09-01T12:00:00.000Z",
+      },
+    },
+  });
+  await fs.writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`);
+  const explicitlyCleared = JSON.parse(
+    (await readSharedState(statePath)).storage[profileKey],
+  );
+  assert.equal(
+    explicitlyCleared.profiles["artist-example"].platformLinks.spotify,
+    "",
+  );
+
+  delete rawState.storage[profileKey];
+  await fs.writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`);
+  const recoveredMissingProfileSection = JSON.parse(
+    (await readSharedState(statePath)).storage[profileKey],
+  );
+  assert.equal(
+    recoveredMissingProfileSection.profiles["artist-example"].platformLinks.spotify,
+    spotify,
+  );
+
+  await fs.writeFile(statePath, "{broken");
+  await assert.rejects(readSharedState(statePath), SyntaxError);
 });
 
 test("equivalent JSON with a different key order does not bump the shared revision", async (context) => {

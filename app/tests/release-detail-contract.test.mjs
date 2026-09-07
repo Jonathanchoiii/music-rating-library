@@ -49,3 +49,50 @@ test("release drawer close bar sticks overlay-style like artist detail", async (
   assert.match(iconButtonBlock, /width:\s*44px/);
   assert.match(iconButtonBlock, /height:\s*44px/);
 });
+
+test("release detail keeps a 40px top breathing space on desktop and mobile", async () => {
+  const css = await fs.readFile(cssPath, "utf8");
+  const drawerBlock = css.match(/\.release-drawer \{[^}]+\}/)?.[0] ?? "";
+  const mobileDrawerBlock =
+    css.match(
+      /@media \(max-width: 760px\)[\s\S]*?\.release-drawer \{[^}]+\}/,
+    )?.[0] ?? "";
+
+  assert.match(drawerBlock, /padding:\s*40px 30px 54px/);
+  assert.match(mobileDrawerBlock, /padding:\s*40px 16px 100px/);
+});
+
+test("mobile release cover and summary share one top edge", async () => {
+  const css = await fs.readFile(cssPath, "utf8");
+  const mobileStart = css.indexOf(
+    "@media (max-width: 760px) {\n  .library-main",
+  );
+  const mobileEnd = css.indexOf("\n@media", mobileStart + 1);
+  const mobileCss = css.slice(
+    mobileStart,
+    mobileEnd === -1 ? undefined : mobileEnd,
+  );
+
+  assert.notEqual(mobileStart, -1);
+
+  assert.match(
+    mobileCss,
+    /\.detail-hero \{[^}]*grid-template-columns:\s*136px minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    mobileCss,
+    /\.detail-summary \{[^}]*align-self:\s*start;[^}]*padding-top:\s*0/,
+  );
+  assert.match(
+    mobileCss,
+    /\.detail-summary h2 \{[^}]*font-size:\s*20px/,
+  );
+  assert.match(
+    mobileCss,
+    /\.detail-summary::before \{[^}]*float:\s*right;[^}]*width:\s*44px;[^}]*height:\s*44px/,
+  );
+  assert.match(
+    mobileCss,
+    /> \.drawer-topbar \{[^}]*padding-top:\s*0/,
+  );
+});

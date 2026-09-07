@@ -220,11 +220,42 @@ function sanitizeIdentity(identity) {
 }
 
 export function sanitizeArtistIdentityState(state) {
+  const identities = [];
+  const indexById = new Map();
+  for (const identity of (state?.identities ?? []).map(sanitizeIdentity).filter(Boolean)) {
+    const existingIndex = indexById.get(identity.id);
+    if (existingIndex == null) {
+      indexById.set(identity.id, identities.length);
+      identities.push(identity);
+      continue;
+    }
+    const existing = identities[existingIndex];
+    const existingCheckedAt = Date.parse(existing.musicBrainzCheckedAt) || 0;
+    const incomingCheckedAt = Date.parse(identity.musicBrainzCheckedAt) || 0;
+    const audit = incomingCheckedAt > existingCheckedAt ? identity : existing;
+    identities[existingIndex] = sanitizeIdentity({
+      ...existing,
+      musicBrainzMbid: existing.musicBrainzMbid || identity.musicBrainzMbid,
+      musicBrainzStatus: audit.musicBrainzStatus || existing.musicBrainzStatus,
+      musicBrainzCheckedAt: audit.musicBrainzCheckedAt || existing.musicBrainzCheckedAt,
+      musicBrainzAuditFingerprint:
+        audit.musicBrainzAuditFingerprint || existing.musicBrainzAuditFingerprint,
+      musicBrainzEvidence: audit.musicBrainzEvidence ?? existing.musicBrainzEvidence,
+      musicBrainzCandidates: audit.musicBrainzCandidates?.length
+        ? audit.musicBrainzCandidates
+        : existing.musicBrainzCandidates,
+      aliases: [
+        ...existing.aliases,
+        ...identity.aliases,
+        ...(normalizeText(identity.canonicalName) !== normalizeText(existing.canonicalName)
+          ? [{ name: identity.canonicalName, source: identity.source || "USER" }]
+          : []),
+      ],
+    });
+  }
   return {
     schemaVersion: 2,
-    identities: (state?.identities ?? [])
-      .map(sanitizeIdentity)
-      .filter(Boolean),
+    identities,
   };
 }
 
@@ -621,6 +652,106 @@ export function getRawArtistCreditCounts(releases = []) {
   );
 }
 
+export function searchArtistCreditAssignments(
+  releases = [],
+  identityState,
+  query = "",
+  selectedIdentityId = "",
+  limit = 24,
+) {
+  const normalizedQuery = normalizeText(query);
+  const safeIdentityState = sanitizeArtistIdentityState(identityState);
+  const rawCredits = getRawArtistCreditCounts(releases);
+  const rawCounts = new Map(
+    rawCredits.map((credit) => [normalizeText(credit.name), credit.count]),
+  );
+  const aliasIndex = getArtistAliasIndex(safeIdentityState);
+  const knownNames = new Set(
+    safeIdentityState.identities.flatMap((identity) => [
+      normalizeText(identity.canonicalName),
+      ...identity.aliases.map((alias) => normalizeText(alias.name)),
+    ]).filter(Boolean),
+  );
+  const results = [];
+
+  for (const credit of rawCredits) {
+    const normalizedName = normalizeText(credit.name);
+    if (
+      aliasIndex.has(normalizedName) ||
+      (normalizedQuery && knownNames.has(normalizedName))
+    ) continue;
+    if (normalizedQuery && !normalizedName.includes(normalizedQuery)) continue;
+    results.push({
+      key: `unmapped:${normalizedName}`,
+      name: credit.name,
+      count: credit.count,
+      kind: "UNMAPPED",
+      identityId: "",
+      ownerName: "",
+      nameType: "RAW_CREDIT",
+    });
+  }
+
+  // Preserve the compact unresolved list before a query is entered. Mapped
+  // identities join only active searches so large libraries stay lightweight.
+  if (normalizedQuery) {
+    for (const identity of safeIdentityState.identities) {
+      const names = [
+        { name: identity.canonicalName, nameType: "PRIMARY" },
+        ...(identity.aliases ?? []).map((alias) => ({
+          name: alias.name,
+          nameType: "ALIAS",
+        })),
+      ];
+      const matchingNames = [];
+      const seenNames = new Set();
+      for (const item of names) {
+        const normalizedName = normalizeText(item.name);
+        if (
+          !normalizedName ||
+          seenNames.has(normalizedName) ||
+          !normalizedName.includes(normalizedQuery)
+        ) {
+          continue;
+        }
+        seenNames.add(normalizedName);
+        matchingNames.push({ ...item, normalizedName });
+      }
+      const match = matchingNames.sort((left, right) => {
+        const leftExact = left.normalizedName === normalizedQuery ? 0 : 1;
+        const rightExact = right.normalizedName === normalizedQuery ? 0 : 1;
+        const leftPrimary = left.nameType === "PRIMARY" ? 0 : 1;
+        const rightPrimary = right.nameType === "PRIMARY" ? 0 : 1;
+        return leftExact - rightExact || leftPrimary - rightPrimary;
+      })[0];
+      if (!match) continue;
+      results.push({
+        key: `mapped:${identity.id}`,
+        name: match.name,
+        count: rawCounts.get(match.normalizedName) ?? 0,
+        kind: identity.id === selectedIdentityId ? "CURRENT" : "MAPPED",
+        identityId: identity.id,
+        ownerName: identity.canonicalName,
+        nameType: match.nameType,
+      });
+    }
+  }
+
+  const kindRank = { MAPPED: 0, UNMAPPED: 1, CURRENT: 2 };
+  return results
+    .sort((left, right) => {
+      const leftExact = normalizeText(left.name) === normalizedQuery ? 0 : 1;
+      const rightExact = normalizeText(right.name) === normalizedQuery ? 0 : 1;
+      return (
+        leftExact - rightExact ||
+        kindRank[left.kind] - kindRank[right.kind] ||
+        right.count - left.count ||
+        left.name.localeCompare(right.name, "zh-CN")
+      );
+    })
+    .slice(0, Math.max(1, limit));
+}
+
 function addAliasIfAvailable(identity, aliasName, source, aliasOwners) {
   const name = usableArtistAliasName(aliasName);
   const normalized = normalizeText(name);
@@ -804,6 +935,42 @@ export function mergePossibleDuplicateArtists(
     ...state,
     identities,
   });
+}
+
+export function mergeArtistIdentities(
+  rawState,
+  identityIds,
+  selectedIdentityId,
+) {
+  const state = sanitizeArtistIdentityState(rawState);
+  const wantedIds = new Set(
+    (Array.isArray(identityIds) ? identityIds : [identityIds]).filter(Boolean),
+  );
+  if (wantedIds.size < 2) {
+    throw new Error("请选择另一个艺人身份合并到当前艺人");
+  }
+  const members = state.identities
+    .filter((identity) => wantedIds.has(identity.id))
+    .map((identity) => ({
+      id: identity.id,
+      identityId: identity.id,
+      canonicalName: identity.canonicalName,
+      names: [
+        identity.canonicalName,
+        ...(identity.aliases ?? []).map((alias) => alias.name),
+      ],
+      musicBrainzMbid: identity.musicBrainzMbid,
+      mapped: true,
+      releaseCount: 0,
+    }));
+  if (members.length !== wantedIds.size) {
+    throw new Error("艺人身份已经变化，请重新搜索后再试");
+  }
+  return mergePossibleDuplicateArtists(
+    state,
+    { members },
+    selectedIdentityId,
+  );
 }
 
 export function removeResolvedDuplicateArtistCandidates(

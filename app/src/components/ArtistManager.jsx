@@ -29,8 +29,10 @@ import {
   getArtistAliasIndex,
   getRawArtistCreditCounts,
   groupReleasesByArtistIdentity,
+  mergeArtistIdentities,
   mergePossibleDuplicateArtists,
   removeResolvedDuplicateArtistCandidates,
+  searchArtistCreditAssignments,
 } from "../lib/artists.js";
 import { normalizeText } from "../lib/music.js";
 import { DISMISSED_ARTIST_DUPLICATES_STORAGE_KEY } from "../lib/sharedStorageKeys.js";
@@ -73,6 +75,7 @@ export function ArtistManager({
   releases,
   identityState,
   onChange,
+  onMergeProfiles,
   onBack,
   onClose,
   onToast,
@@ -131,11 +134,17 @@ export function ArtistManager({
   const selectedGroup = selectedIdentity
     ? groupById.get(selectedIdentity.id)
     : null;
-  const filteredCredits = unmappedCredits
-    .filter((credit) =>
-      normalizeText(credit.name).includes(normalizeText(creditSearch)),
-    )
-    .slice(0, 12);
+  const creditSearchResults = useMemo(
+    () =>
+      searchArtistCreditAssignments(
+        releases,
+        identityState,
+        creditSearch,
+        selectedIdentity?.id ?? "",
+        24,
+      ),
+    [creditSearch, identityState, releases, selectedIdentity?.id],
+  );
   const duplicateMbidGroups = useMemo(
     () => findDuplicateArtistMbidGroups(identityState),
     [identityState],
@@ -453,6 +462,26 @@ export function ArtistManager({
     );
   }
 
+  function preserveMergedArtistProfiles(
+    identityIds,
+    selectedIdentityId,
+    extraNames = [],
+  ) {
+    if (!onMergeProfiles) return;
+    const wantedIds = new Set(identityIds.filter(Boolean));
+    const identityNames = identityState.identities
+      .filter((identity) => wantedIds.has(identity.id))
+      .flatMap((identity) => [
+        identity.canonicalName,
+        ...identity.aliases.map((alias) => alias.name),
+      ]);
+    onMergeProfiles(
+      [...wantedIds],
+      selectedIdentityId,
+      [...new Set([...identityNames, ...extraNames].filter(Boolean))],
+    );
+  }
+
   function mergeDuplicateCandidate(candidate) {
     const selectedMemberId = duplicateSelections[candidate.key];
     const selectedMember = candidate.members.find(
@@ -466,17 +495,6 @@ export function ArtistManager({
       onToast?.("这组候选的 MusicBrainz ID 不同，请先人工核对");
       return;
     }
-    const otherNames = candidate.members
-      .filter((member) => member.id !== selectedMember.id)
-      .map((member) => member.canonicalName)
-      .join("、");
-    if (
-      !window.confirm(
-        `确认把「${otherNames}」关联到「${selectedMember.canonicalName}」？\n\n唱片仍保留原始艺人署名；搜索、艺人页和筛选会把它们归为同一个艺人。`,
-      )
-    ) {
-      return;
-    }
     try {
       const nextState = mergePossibleDuplicateArtists(
         identityState,
@@ -484,6 +502,15 @@ export function ArtistManager({
         selectedMemberId,
       );
       onChange(nextState);
+      preserveMergedArtistProfiles(
+        candidate.members
+          .flatMap((member) => [member.id, member.identityId])
+          .filter(Boolean),
+        selectedMemberId,
+        candidate.members.flatMap(
+          (member) => member.names ?? [member.canonicalName],
+        ),
+      );
       const remainingCandidates =
         removeResolvedDuplicateArtistCandidates(
           duplicateCandidates,
@@ -631,6 +658,47 @@ export function ArtistManager({
       onToast?.("这个名字已经在当前艺人下");
       return;
     }
+    const variants = await artistNameVariants(name);
+    const conflicts = findArtistNameConflicts(
+      identityState,
+      variants,
+      selectedIdentity.id,
+    );
+    const exactOwners = conflicts.filter((conflict) =>
+      conflict.matches.some((match) =>
+        ["PRIMARY", "ALIAS"].includes(match.source),
+      ),
+    );
+    if (exactOwners.length === 1) {
+      const existingIdentity = exactOwners[0].identity;
+      if (
+        window.confirm(
+          `“${name}”目前属于艺人「${existingIdentity.canonicalName}」。\n\n如果两者是同一艺人，点击“确定”会将其关联到「${selectedIdentity.canonicalName}」；唱片、评论、评分和收听记录都不会被删除。\n\n如果只是同名但不同艺人，请点击“取消”。`,
+        )
+        ) {
+        try {
+          const nextState = mergeArtistIdentities(
+            identityState,
+            [selectedIdentity.id, existingIdentity.id],
+            selectedIdentity.id,
+          );
+          onChange(nextState);
+          preserveMergedArtistProfiles(
+            [selectedIdentity.id, existingIdentity.id],
+            selectedIdentity.id,
+          );
+          setNewAlias("");
+          onToast?.(
+            `已把「${existingIdentity.canonicalName}」关联到「${selectedIdentity.canonicalName}」`,
+          );
+        } catch (error) {
+          onToast?.(error.message || "暂时无法关联这两个艺人");
+        }
+      } else {
+        onToast?.("已取消关联，原有艺人映射保持不变");
+      }
+      return;
+    }
     const canContinue = await confirmDifferentArtist(
       name,
       selectedIdentity.id,
@@ -640,7 +708,6 @@ export function ArtistManager({
       onToast?.("已取消添加，原有艺人映射保持不变");
       return;
     }
-    const variants = await artistNameVariants(name);
     const hasOtherOwner = findArtistNameConflicts(
       identityState,
       variants,
@@ -674,6 +741,48 @@ export function ArtistManager({
         ? `已确认「${name}」为同名不同艺人；相关署名暂不自动归类`
         : `已把「${name}」归入「${selectedIdentity.canonicalName}」`,
     );
+  }
+
+  function mergeMappedCredit(result) {
+    if (
+      !selectedIdentity ||
+      !result?.identityId ||
+      result.identityId === selectedIdentity.id
+    ) {
+      return;
+    }
+    const existingIdentity = identityState.identities.find(
+      (identity) => identity.id === result.identityId,
+    );
+    if (!existingIdentity) {
+      onToast?.("这个艺人身份已经变化，请重新搜索");
+      return;
+    }
+    if (
+      !window.confirm(
+        `署名“${result.name}”目前属于艺人「${existingIdentity.canonicalName}」。\n\n确认两者是同一个艺人，并合并到「${selectedIdentity.canonicalName}」？\n\n主显示名、全部别名、唱片、评分、评论和收听记录都会保留。`,
+      )
+    ) {
+      onToast?.("已取消合并，原有艺人资料保持不变");
+      return;
+    }
+    try {
+      const nextState = mergeArtistIdentities(
+        identityState,
+        [selectedIdentity.id, existingIdentity.id],
+        selectedIdentity.id,
+      );
+      onChange(nextState);
+      preserveMergedArtistProfiles(
+        [selectedIdentity.id, existingIdentity.id],
+        selectedIdentity.id,
+      );
+      onToast?.(
+        `已把「${existingIdentity.canonicalName}」合并到「${selectedIdentity.canonicalName}」`,
+      );
+    } catch (error) {
+      onToast?.(error.message || "暂时无法合并这两个艺人");
+    }
   }
 
   async function commitCanonicalName() {
@@ -845,7 +954,7 @@ export function ArtistManager({
             <span>
               <strong>重复艺人扫描</strong>
               <small>
-                按完整同名、简繁体、外部 ID 与共同作品证据生成候选
+                按完整同名、简繁体、多语言原始署名、外部 ID 与共同作品证据生成候选
               </small>
             </span>
           </div>
@@ -881,8 +990,8 @@ export function ArtistManager({
             ref={duplicateListRef}
           >
             <p>
-              发现 {duplicateCandidates.length} 组较强候选。字符片段相同但
-              没有身份或作品依据的艺人已被排除。
+              发现 {duplicateCandidates.length} 组候选。跨语言原始署名只作为
+              人工核对提示，不会自动合并；没有身份或作品依据的普通字符片段已被排除。
             </p>
             {duplicateCandidates.map((candidate) => (
               <article
@@ -1206,33 +1315,58 @@ export function ArtistManager({
               <section className="unmapped-credit-section">
                 <header>
                   <div>
-                    <h4>待整理的原始署名</h4>
-                    <p>点击“归入”即可把该名字映射到当前艺人。</p>
+                    <h4>查找相同艺人</h4>
+                    <p>
+                      搜索其他署名或艺人；确认是同一人后，合并到
+                      「{selectedIdentity.canonicalName}」。
+                    </p>
                   </div>
-                  <strong>{unmappedCredits.length}</strong>
+                  <strong>{unmappedCredits.length} 个未归类署名</strong>
                 </header>
                 <input
                   className="unmapped-credit-search"
                   value={creditSearch}
                   onChange={(event) => setCreditSearch(event.target.value)}
-                  placeholder="筛选原始署名"
-                  aria-label="筛选待整理的原始署名"
+                  placeholder="输入另一个艺人名称"
+                  aria-label="搜索原始署名与已归类署名"
                 />
                 <div className="unmapped-credit-list">
-                  {filteredCredits.map((credit) => (
-                    <div key={credit.name}>
+                  {creditSearchResults.map((credit) => (
+                    <div key={credit.key}>
                       <span>
                         <strong>{credit.name}</strong>
-                        <small>{credit.count} 张发行</small>
+                        <small>
+                          {credit.count ? `${credit.count} 张发行 · ` : ""}
+                          {credit.kind === "UNMAPPED"
+                            ? "未归类署名"
+                            : credit.kind === "CURRENT"
+                              ? "当前艺人的主名或别名"
+                              : `另一个艺人身份 · 主名称「${credit.ownerName}」`}
+                        </small>
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => assignAlias(credit.name)}
-                      >
-                        归入
-                      </button>
+                      {credit.kind === "CURRENT" ? (
+                        <em>当前艺人</em>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            credit.kind === "MAPPED"
+                              ? mergeMappedCredit(credit)
+                              : assignAlias(credit.name)
+                          }
+                        >
+                          {credit.kind === "MAPPED"
+                            ? "合并到当前艺人"
+                            : "归入当前艺人"}
+                        </button>
+                      )}
                     </div>
                   ))}
+                  {!creditSearchResults.length ? (
+                    <p className="unmapped-credit-empty">
+                      没有找到匹配的署名
+                    </p>
+                  ) : null}
                 </div>
               </section>
             </>

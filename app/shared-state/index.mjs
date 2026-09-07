@@ -4,11 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  ARTIST_IDENTITY_STORAGE_KEY,
   ARTIST_PROFILE_STORAGE_KEY,
   SHARED_LOCAL_STORAGE_KEYS,
   SHARED_LOCAL_STORAGE_KEY_SET,
 } from "../src/lib/sharedStorageKeys.js";
-import { sanitizeArtistProfileState } from "../src/lib/artistProfiles.js";
+import {
+  mergeArtistProfileStatesPreferPrimary,
+  sanitizeArtistProfileState,
+} from "../src/lib/artistProfiles.js";
 import { readJsonBody, sendJson } from "../scripts/http-json.mjs";
 
 const SCHEMA_VERSION = 1;
@@ -17,6 +21,8 @@ const MAX_BODY_BYTES = 24 * 1024 * 1024;
 const MAX_BACKUPS = 20;
 const MAX_NEODB_SNAPSHOTS = 20;
 const MAX_NEODB_SNAPSHOT_BYTES = 20 * 1024 * 1024;
+const ARTIST_MASTER_SCHEMA_VERSION = 1;
+const MAX_ARTIST_MASTER_BACKUPS = 20;
 const writeQueues = new Map();
 const MISSING = Symbol("missing");
 
@@ -37,6 +43,17 @@ export function getNeoDbSnapshotDirectory(
   statePath = getSharedStatePath(),
 ) {
   return path.join(path.dirname(statePath), "neodb-snapshots");
+}
+
+export function getArtistMasterTablePaths(
+  statePath = getSharedStatePath(),
+) {
+  const directory = path.dirname(statePath);
+  return {
+    jsonPath: path.join(directory, "artist-profiles-master.json"),
+    csvPath: path.join(directory, "artist-profiles-master.csv"),
+    backupDirectory: path.join(directory, "artist-profiles-master.backups"),
+  };
 }
 
 function emptyState() {
@@ -62,9 +79,10 @@ function sanitizeStorage(storage = {}) {
 export async function readSharedState(
   statePath = getSharedStatePath(),
 ) {
+  let state;
   try {
     const parsed = JSON.parse(await fs.readFile(statePath, "utf8"));
-    return {
+    state = {
       schemaVersion: SCHEMA_VERSION,
       revision:
         Number.isSafeInteger(parsed.revision) && parsed.revision >= 0
@@ -78,6 +96,7 @@ export async function readSharedState(
     if (error?.code === "ENOENT") return emptyState();
     throw error;
   }
+  return restoreArtistProfilesFromMaster(state, statePath);
 }
 
 async function atomicWriteTextFile(filePath, content, options = {}) {
@@ -101,6 +120,243 @@ async function atomicWrite(statePath, state) {
     statePath,
     `${JSON.stringify(state, null, 2)}\n`,
   );
+}
+
+function parseStoredObject(value, fallback = {}) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function cleanMasterText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function artistMasterHash(artists) {
+  return createHash("sha256")
+    .update(JSON.stringify(artists))
+    .digest("hex");
+}
+
+function csvCell(value) {
+  let text = String(value ?? "");
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function artistMasterCsv(table) {
+  const headers = [
+    "artist_id",
+    "canonical_name",
+    "aliases",
+    "musicbrainz_mbid",
+    "country_or_region",
+    "apple_music_artist_url",
+    "spotify_artist_url",
+    "youtube_music_artist_url",
+    "introduction_status",
+    "introduction",
+    "image_url",
+    "local_image_url",
+    "local_motion_url",
+    "profile_updated_at",
+  ];
+  const rows = table.artists.map((artist) => {
+    const profile = artist.profile ?? {};
+    return [
+      artist.artistId,
+      artist.canonicalName,
+      artist.aliases.join(" | "),
+      artist.musicBrainzMbid,
+      profile.publicFacts?.country,
+      profile.platformLinks?.appleMusic,
+      profile.platformLinks?.spotify,
+      profile.platformLinks?.youtubeMusic,
+      profile.introductionStatus,
+      profile.introduction,
+      profile.media?.imageUrl,
+      profile.media?.localImageUrl,
+      profile.media?.localMotionUrl,
+      profile.updatedAt,
+    ].map(csvCell).join(",");
+  });
+  return `${[headers.map(csvCell).join(","), ...rows].join("\n")}\n`;
+}
+
+export function createArtistMasterTable(state) {
+  const profileState = sanitizeArtistProfileState(
+    parseStoredObject(state?.storage?.[ARTIST_PROFILE_STORAGE_KEY]),
+  );
+  const identityState = parseStoredObject(
+    state?.storage?.[ARTIST_IDENTITY_STORAGE_KEY],
+    { identities: [] },
+  );
+  const identities = Array.isArray(identityState.identities)
+    ? identityState.identities
+    : [];
+  const identityById = new Map(
+    identities
+      .filter((identity) => cleanMasterText(identity?.id))
+      .map((identity) => [cleanMasterText(identity.id), identity]),
+  );
+  const artistIds = new Set([
+    ...identityById.keys(),
+    ...Object.keys(profileState.profiles),
+  ]);
+  const artists = [...artistIds]
+    .map((artistId) => {
+      const identity = identityById.get(artistId) ?? {};
+      const profile = profileState.profiles[artistId] ?? null;
+      const aliases = Array.isArray(identity.aliases)
+        ? [...new Set(identity.aliases.map((alias) => cleanMasterText(alias?.name)).filter(Boolean))]
+        : [];
+      return {
+        artistId,
+        canonicalName:
+          cleanMasterText(identity.canonicalName) ||
+          cleanMasterText(profile?.publicFacts?.resolvedName) ||
+          artistId.replace(/^raw-/, ""),
+        aliases,
+        musicBrainzMbid: cleanMasterText(identity.musicBrainzMbid),
+        profile,
+      };
+    })
+    .sort((left, right) =>
+      left.canonicalName.localeCompare(right.canonicalName, "zh-Hans-CN", {
+        sensitivity: "base",
+      }) || left.artistId.localeCompare(right.artistId),
+    );
+  return {
+    schemaVersion: ARTIST_MASTER_SCHEMA_VERSION,
+    sourceRevision: Number.isSafeInteger(state?.revision) ? state.revision : 0,
+    updatedAt: cleanMasterText(state?.updatedAt) || new Date().toISOString(),
+    artistDataHash: artistMasterHash(artists),
+    artists,
+  };
+}
+
+async function readArtistMasterTable(statePath) {
+  const { jsonPath } = getArtistMasterTablePaths(statePath);
+  try {
+    const table = JSON.parse(await fs.readFile(jsonPath, "utf8"));
+    return table?.schemaVersion === ARTIST_MASTER_SCHEMA_VERSION &&
+      Array.isArray(table.artists)
+      ? table
+      : null;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    return null;
+  }
+}
+
+function profileStateFromArtistMaster(table) {
+  return sanitizeArtistProfileState({
+    version: 4,
+    profiles: Object.fromEntries(
+      table.artists.flatMap((artist) =>
+        cleanMasterText(artist?.artistId) && artist?.profile
+          ? [[cleanMasterText(artist.artistId), artist.profile]]
+          : [],
+      ),
+    ),
+  });
+}
+
+function profileUpdatedAt(value) {
+  const timestamp = Date.parse(value?.updatedAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+async function restoreArtistProfilesFromMaster(state, statePath) {
+  const table = await readArtistMasterTable(statePath);
+  if (!table?.artists?.length) return state;
+  const rawCurrent = state.storage[ARTIST_PROFILE_STORAGE_KEY];
+  const parsedCurrent = parseStoredObject(rawCurrent, null);
+  const current = parsedCurrent
+    ? sanitizeArtistProfileState(parsedCurrent)
+    : sanitizeArtistProfileState({});
+  const backup = profileStateFromArtistMaster(table);
+  if (!Object.keys(backup.profiles).length) return state;
+
+  const eligibleFallback = { version: 4, profiles: {} };
+  for (const [artistId, profile] of Object.entries(backup.profiles)) {
+    const currentProfile = current.profiles[artistId];
+    if (
+      !currentProfile ||
+      profileUpdatedAt(profile) >= profileUpdatedAt(currentProfile)
+    ) {
+      eligibleFallback.profiles[artistId] = profile;
+    }
+  }
+  if (!Object.keys(eligibleFallback.profiles).length) return state;
+  const merged = mergeArtistProfileStatesPreferPrimary(
+    current,
+    eligibleFallback,
+  );
+  if (isDeepStrictEqual(merged, current)) return state;
+  return {
+    ...state,
+    storage: {
+      ...state.storage,
+      [ARTIST_PROFILE_STORAGE_KEY]: JSON.stringify(merged),
+    },
+  };
+}
+
+export async function persistArtistMasterTable(
+  state,
+  statePath = getSharedStatePath(),
+) {
+  const paths = getArtistMasterTablePaths(statePath);
+  const next = createArtistMasterTable(state);
+  const previous = await readArtistMasterTable(statePath);
+  await fs.mkdir(path.dirname(paths.jsonPath), { recursive: true });
+
+  if (
+    previous?.artistDataHash === next.artistDataHash &&
+    previous.artists.length === next.artists.length
+  ) {
+    try {
+      await fs.access(paths.csvPath);
+    } catch {
+      await atomicWriteTextFile(paths.csvPath, artistMasterCsv(previous));
+    }
+    return { ...paths, artistCount: previous.artists.length, reused: true };
+  }
+
+  if (previous?.artists?.length) {
+    await fs.mkdir(paths.backupDirectory, { recursive: true });
+    const backupName = `artist-master-${safeSnapshotTimestamp(
+      previous.updatedAt,
+    )}-${cleanMasterText(previous.artistDataHash).slice(0, 16)}.json`;
+    await fs.writeFile(
+      path.join(paths.backupDirectory, backupName),
+      `${JSON.stringify(previous, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600, flag: "wx" },
+    ).catch((error) => {
+      if (error?.code !== "EEXIST") throw error;
+    });
+    const backups = (await fs.readdir(paths.backupDirectory))
+      .filter((name) => /^artist-master-.+-[a-f0-9]{16}\.json$/.test(name))
+      .sort();
+    await pruneRetainedFiles(
+      paths.backupDirectory,
+      backups,
+      MAX_ARTIST_MASTER_BACKUPS,
+    );
+  }
+
+  await atomicWriteTextFile(paths.csvPath, artistMasterCsv(next));
+  await atomicWriteTextFile(
+    paths.jsonPath,
+    `${JSON.stringify(next, null, 2)}\n`,
+  );
+  return { ...paths, artistCount: next.artists.length, reused: false };
 }
 
 const NEODB_SNAPSHOT_NAME_RE = /^neodb-snapshot-.+-[a-f0-9]{16}\.csv$/;
@@ -646,6 +902,7 @@ export async function applySharedStateChanges(
       storage,
     };
     await backupSharedState(statePath, current);
+    await persistArtistMasterTable(next, statePath);
     await atomicWrite(statePath, next);
     return next;
   });
@@ -704,7 +961,9 @@ export async function handleSharedStateRequest(
       return true;
     }
     if (request.method === "GET") {
-      sendJson(response, 200, await readSharedState(statePath));
+      const state = await readSharedState(statePath);
+      await persistArtistMasterTable(state, statePath);
+      sendJson(response, 200, state);
       return true;
     }
     if (!["PATCH", "POST"].includes(request.method)) {

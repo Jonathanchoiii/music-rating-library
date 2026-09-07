@@ -440,12 +440,16 @@ async function fetchDoubanRating(fetcher, link) {
     const response = await fetchWithTimeout(fetcher, link.url);
     const html = await response.text();
     if (!response.ok || isBlockedRatingPage(html, response.status)) {
-      return { provider: "DOUBAN", blocked: true };
+      return {
+        provider: "DOUBAN",
+        blocked: isBlockedRatingPage(html, response.status),
+        unavailable: !isBlockedRatingPage(html, response.status),
+      };
     }
     const parsed = parseDoubanMusicRating(html, response.url || link.url);
     return parsed.score != null && parsed.url ? parsed : null;
   } catch {
-    return null;
+    return { provider: "DOUBAN", unavailable: true };
   }
 }
 
@@ -454,12 +458,16 @@ async function fetchMetacriticRating(fetcher, link) {
     const response = await fetchWithTimeout(fetcher, link.url);
     const html = await response.text();
     if (!response.ok || isBlockedRatingPage(html, response.status)) {
-      return { provider: "METACRITIC", blocked: true };
+      return {
+        provider: "METACRITIC",
+        blocked: isBlockedRatingPage(html, response.status),
+        unavailable: !isBlockedRatingPage(html, response.status),
+      };
     }
     const parsed = parseMetacriticMusicRating(html, response.url || link.url);
     return parsed.score != null && parsed.url ? parsed : null;
   } catch {
-    return null;
+    return { provider: "METACRITIC", unavailable: true };
   }
 }
 
@@ -468,12 +476,16 @@ async function fetchAotyRating(fetcher, link) {
     const response = await fetchWithTimeout(fetcher, link.url);
     const html = await response.text();
     if (!response.ok || isBlockedRatingPage(html, response.status)) {
-      return { provider: "AOTY", blocked: true };
+      return {
+        provider: "AOTY",
+        blocked: isBlockedRatingPage(html, response.status),
+        unavailable: !isBlockedRatingPage(html, response.status),
+      };
     }
     const parsed = parseAotyMusicRating(html, response.url || link.url);
     return parsed.score != null && parsed.url ? parsed : null;
   } catch {
-    return null;
+    return { provider: "AOTY", unavailable: true };
   }
 }
 
@@ -488,12 +500,13 @@ async function fetchRecordClubRating(fetcher, link) {
       return {
         provider: "RECORD_CLUB",
         blocked: [403, 429, 503].includes(response.status),
+        unavailable: ![403, 429, 503].includes(response.status),
       };
     }
     const parsed = parseRecordClubRating(await response.json(), link.url);
     return parsed.score != null && parsed.url ? parsed : null;
   } catch {
-    return null;
+    return { provider: "RECORD_CLUB", unavailable: true };
   }
 }
 
@@ -539,8 +552,21 @@ export async function refreshExternalRatings(release, options = {}) {
   const previousSources = Array.isArray(release?.externalRatings?.sources)
     ? release.externalRatings.sources
     : [];
+  const storedRatingLinks = [
+    ...(Array.isArray(release?.externalRatings?.links)
+      ? release.externalRatings.links
+      : []),
+    ...(Array.isArray(release?.ratingLinks) ? release.ratingLinks : []),
+  ];
   const links = normalizeExternalRatingLinks(
-    release?.ratingLinks ?? release?.externalRatings?.links ?? [],
+    [
+      ...previousSources.map((source) => ({
+        url: source?.url,
+        addedAt: source?.checkedAt,
+      })),
+      ...(Array.isArray(release?.externalLinks) ? release.externalLinks : []),
+      ...storedRatingLinks,
+    ],
   );
   if (!albumId && !links.length) {
     const error = new Error("NEODB_LINK_REQUIRED");
@@ -550,7 +576,8 @@ export async function refreshExternalRatings(release, options = {}) {
   }
   const fetcher = options.fetchImpl ?? fetch;
   let catalog = { external_resources: [] };
-  if (albumId) {
+  const hasDirectDouban = links.some((link) => link.provider === "DOUBAN");
+  if (albumId && !hasDirectDouban) {
     try {
       const catalogResponse = await fetchWithTimeout(
         fetcher,
@@ -577,8 +604,7 @@ export async function refreshExternalRatings(release, options = {}) {
       }
     }
   }
-  const hasManualDouban = links.some((link) => link.provider === "DOUBAN");
-  const doubanUrls = hasManualDouban
+  const doubanUrls = hasDirectDouban
     ? []
     : [
         ...new Set(
@@ -622,12 +648,24 @@ export async function refreshExternalRatings(release, options = {}) {
         .map((entry) => entry.provider),
     ),
   ];
+  const unavailableProviders = [
+    ...new Set(
+      linkedFetches
+        .filter((entry) => entry?.unavailable && entry.provider)
+        .map((entry) => entry.provider),
+    ),
+  ];
   const linkedSources = linkedFetches
     .filter((source) => source && !source.blocked && source.score != null && source.url)
     .map((source) => ({
       ...source,
       checkedAt,
-      matchedVia: "USER_CONFIRMED_LINK",
+      matchedVia:
+        previousSources.find(
+          (previous) =>
+            previous?.provider === source.provider &&
+            previous?.url === source.url,
+        )?.matchedVia ?? "USER_CONFIRMED_LINK",
     }));
   const freshSources = [
     ...(best
@@ -658,6 +696,7 @@ export async function refreshExternalRatings(release, options = {}) {
     status: sources.length ? "SUCCESS" : "NO_EXACT_RATING",
     checkedAt,
     blockedProviders,
+    unavailableProviders,
     links: links.map((link) => ({
       ...link,
       status: sources.some((source) => source.provider === link.provider)
@@ -670,6 +709,8 @@ export async function refreshExternalRatings(release, options = {}) {
           ? "LINK_SAVED"
           : blockedProviders.includes(link.provider)
             ? "SCORE_BLOCKED"
+            : unavailableProviders.includes(link.provider)
+              ? "SCORE_UNAVAILABLE"
             : "NO_SCORE_FOUND",
       checkedAt,
     })),

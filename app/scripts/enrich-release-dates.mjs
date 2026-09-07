@@ -280,7 +280,8 @@ const releases = JSON.parse(await fs.readFile(libraryPath, "utf8"));
 const targets = releases
   .filter(
     (release) =>
-      force || (!release.releaseDate && !release.releaseDateCheckedAt),
+      !release.releaseDateUserConfirmed &&
+      (force || (!release.releaseDate && !release.releaseDateCheckedAt)),
   )
   .slice(0, Number.isInteger(limit) ? limit : undefined);
 let matched = 0;
